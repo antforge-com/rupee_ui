@@ -4,7 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recha
 import StatusBadge from "../components/StatusBadge.tsx";
 import { advisors, bookingData, recentBookings, pendingQueries } from "../data/data.ts";
 import type { AdminSectionType, AdminNavItem, StatCard, PendingQuery, RecentBooking, Advisor } from "../types";
-import styles from "./AdminPage.module.css";
+import styles from "../css/AdminPage.module.css";
 
 export default function AdminPage() {
   const navigate = useNavigate();
