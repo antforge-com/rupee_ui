@@ -1,0 +1,464 @@
+/* ── Layout ── */
+.page {
+  min-height: 100vh;
+  background: #F8FAFC;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ── */
+.header {
+  background: #fff;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #F1F5F9;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.backBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #64748B;
+  transition: background 0.2s;
+}
+
+.backBtn:hover { background: #F1F5F9; }
+
+.logoSection { text-align: center; }
+
+.logoText {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  color: #2563EB;
+  letter-spacing: 1px;
+}
+
+.logoSub {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #94A3B8;
+  font-weight: 600;
+}
+
+/* ── Content ── */
+.content {
+  flex: 1;
+  padding: 20px 16px 40px;
+  max-width: 600px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ── Section ── */
+.section {
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 16px;
+}
+
+/* ── Fields ── */
+.label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  color: #64748B;
+  margin-bottom: 8px;
+}
+
+.required {
+  color: #DC2626;
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+.optional {
+  font-size: 10px;
+  color: #94A3B8;
+  font-weight: 500;
+  letter-spacing: 1px;
+  text-transform: none;
+}
+
+.input {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 10px;
+  border: 1.5px solid #E2E8F0;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.input:focus { border-color: #2563EB; }
+
+.inputError {
+  border-color: #DC2626 !important;
+  background: #FFF8F8;
+}
+
+/* ── Error Message ── */
+.errorMsg {
+  color: #DC2626;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: -12px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.errorMsg::before {
+  content: "⚠";
+  font-size: 11px;
+}
+
+/* ── Annual Income Amount ── */
+.amountWrapper {
+  display: flex;
+  align-items: center;
+  border: 1.5px solid #E2E8F0;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+}
+
+.amountWrapper:focus-within { border-color: #2563EB; }
+
+.currencySymbol {
+  padding: 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #64748B;
+  border-right: 1.5px solid #E2E8F0;
+  background: #F8FAFC;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.amountInput {
+  flex: 1;
+  padding: 13px 14px;
+  border: none;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  background: transparent;
+  width: 100%;
+}
+
+/* ── Item Row ── */
+.itemRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid #F1F5F9;
+}
+
+.itemInfo { flex: 1; }
+
+.itemLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.itemAmount {
+  font-size: 12px;
+  color: #64748B;
+  margin-top: 2px;
+}
+
+.itemActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inlineAmountInput {
+  width: 90px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1.5px solid #E2E8F0;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  text-align: right;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.inlineAmountInput:focus { border-color: #2563EB; }
+
+/* ── Summary Row ── */
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #F1F5F9;
+}
+
+.summaryLeft { flex: 1; }
+
+.summaryMeta {
+  font-size: 12px;
+  color: #94A3B8;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.summaryValueGreen {
+  font-size: 20px;
+  font-weight: 700;
+  color: #16A34A;
+}
+
+.summaryValueRed {
+  font-size: 20px;
+  font-weight: 700;
+  color: #DC2626;
+}
+
+/* ── Green + Button ── */
+.plusBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: none;
+  background: #16A34A;
+  color: #fff;
+  font-size: 26px;
+  font-weight: 300;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: background 0.2s;
+  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3);
+}
+
+.plusBtn:hover { background: #15803D; }
+
+/* ── Remove Button ── */
+.removeBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: #FEE2E2;
+  color: #DC2626;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.removeBtn:hover { background: #FECACA; }
+
+/* ── Popup Overlay ── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 20px;
+  backdrop-filter: blur(2px);
+}
+
+.popup {
+  background: #fff;
+  border-radius: 20px;
+  padding: 24px;
+  width: 100%;
+  max-width: 360px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: popupIn 0.2s ease;
+}
+
+@keyframes popupIn {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.popupHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.popupTitle {
+  font-size: 17px;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.popupClose {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #FEE2E2;
+  color: #DC2626;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.popupClose:hover { background: #FECACA; }
+
+.popupConfirmBtn {
+  width: 100%;
+  background: #16A34A;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 14px;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-top: 4px;
+  transition: background 0.2s;
+}
+
+.popupConfirmBtn:hover { background: #15803D; }
+
+/* ── Success Overlay ── */
+.successOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+
+.successBox {
+  background: #fff;
+  border-radius: 24px;
+  padding: 40px 32px;
+  text-align: center;
+  max-width: 300px;
+  width: 90%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.2);
+  animation: popupIn 0.3s ease;
+}
+
+.successIcon {
+  width: 72px;
+  height: 72px;
+  background: #DCFCE7;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  color: #16A34A;
+  margin: 0 auto 20px;
+  animation: scaleIn 0.4s ease 0.1s both;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.successTitle {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 8px;
+}
+
+.successSub {
+  font-size: 13px;
+  color: #94A3B8;
+  font-weight: 500;
+}
+
+/* ── Submit Button ── */
+.submitBtn {
+  width: 100%;
+  background: #2563EB;
+  color: #fff;
+  border: none;
+  border-radius: 14px;
+  padding: 16px;
+  font-weight: 700;
+  font-size: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-bottom: 16px;
+  transition: opacity 0.2s;
+}
+
+.submitBtn:hover { opacity: 0.9; }
+
+/* ── Login Link ── */
+.loginText {
+  text-align: center;
+  font-size: 14px;
+  color: #64748B;
+}
+
+.loginLink {
+  color: #2563EB;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
