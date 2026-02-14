@@ -1,6 +1,6 @@
 import { useState, ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import styles from "./LoginPage.module.css";
+import styles from "../css/LoginPage.module.css";
 
 export default function LoginPage() {
   const [cred, setCred] = useState<string>("");
@@ -22,22 +22,11 @@ export default function LoginPage() {
 
         {/* Email */}
         <label className={styles.label}>EMAIL OR MOBILE</label>
-        <input
-          value={cred}
-          onChange={handleCredChange}
-          placeholder="Enter your credentials"
-          className={styles.input}
-        />
+        <input value={cred} onChange={handleCredChange} placeholder="Enter your credentials" className={styles.input} />
 
         {/* Password */}
         <label className={styles.label}>PASSWORD</label>
-        <input
-          type="password"
-          value={pass}
-          onChange={handlePassChange}
-          placeholder="••••••••"
-          className={styles.input}
-        />
+        <input type="password" value={pass} onChange={handlePassChange} placeholder="••••••••" className={styles.input} />
 
         {/* Buttons */}
         <div className={styles.buttonGrid}>
@@ -48,7 +37,6 @@ export default function LoginPage() {
             </svg>
             User Login
           </button>
-
           <button onClick={() => navigate("/admin")} className={styles.adminBtn}>
             <svg width="24" height="24" fill="none" viewBox="0 0 24 24">
               <path d="M12 3l7 4v5c0 4-3 7.5-7 9-4-1.5-7-5-7-9V7l7-4z" stroke="#64748B" strokeWidth="2" strokeLinejoin="round"/>
@@ -57,6 +45,14 @@ export default function LoginPage() {
             Admin Panel
           </button>
         </div>
+
+        {/* Register Link */}
+        <p className={styles.registerText}>
+          Don't have an account?{" "}
+          <span className={styles.registerLink} onClick={() => navigate("/register")}>
+            Create Account
+          </span>
+        </p>
 
         <p className={styles.terms}>
           By logging in, you agree to our{" "}
