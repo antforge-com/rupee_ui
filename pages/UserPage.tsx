@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge.tsx";
 import { advisors, categories } from "../data/data.ts";
 import type { Advisor, TabType, UserBooking, UserQuery, NavItem } from "../types";
-import styles from "./UserPage.module.css";
+import styles from "../css/UserPage.module.css";
 
 export default function UserPage() {
   const navigate = useNavigate();
