@@ -1,66 +1,29 @@
+// src/types/index.ts
+
 export interface Advisor {
   id: number;
   name: string;
-  role: string;
-  tags: string[];
-  rating: number;
-  fee: number;
-  exp: number;
-  reviews: number;
-  avatar: string;
+  designation: string;
+  charges: number;
+  shiftTimings: string;
+  skills: string[];
 }
 
-export interface BookingData {
-  day: string;
-  bookings: number;
-}
-
-export interface RecentBooking {
-  user: string;
-  advisor: string;
-  time: string;
-  status: BookingStatus;
-  amount: number;
-}
-
-export interface PendingQuery {
+export interface Booking {
   id: number;
-  question: string;
-}
-
-export interface UserBooking extends Advisor {
-  time: string;
-  status: BookingStatus;
+  userName: string;
+  userAvatar?: string;
   date: string;
+  time: string;
+  status: 'CONFIRMED' | 'PENDING' | 'COMPLETED';
+  meetingLink: string;
 }
 
-export interface UserQuery {
-  text: string;
-  status: BookingStatus;
-}
-
-export type BookingStatus = "Upcoming" | "Completed" | "Pending";
-
-export type TabType = "advisors" | "bookings" | "queries" | "settings";
-
-export type AdminSectionType = "dashboard" | "advisors" | "bookings" | "queries" | "settings";
-
-export interface NavItem {
-  id: TabType;
-  label: string;
-  icon: JSX.Element;
-}
-
-export interface AdminNavItem {
-  id: AdminSectionType;
-  label: string;
-  icon: JSX.Element;
-}
-
-export interface StatCard {
-  label: string;
-  value: string;
-  change: string;
-  positive: boolean;
-  icon: JSX.Element;
+export interface Query {
+  id: number;
+  title: string;
+  question: string;
+  date: string;
+  status: 'Pending Review' | 'Replied';
+  user: string;
 }

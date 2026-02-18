@@ -1,251 +1,414 @@
-import { useState } from "react";
-import type { ChangeEvent } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge.tsx";
-import { advisors, categories } from "../data/data.ts";
-import type { Advisor, TabType, UserBooking, UserQuery, NavItem } from "../types";
-import styles from "../css/UserPage.module.css";
+import styles from "../styles/UserPage.module.css";
+import {
+  createBooking,
+  getAllConsultants,
+  getAvailableTimeslotsByConsultant,
+  getMyBookings,
+  logoutUser
+} from "../services/api";
+
+interface Consultant {
+  id: number;
+  name: string;
+  role: string;
+  fee: number;
+  tags: string[];
+  rating: number;
+  exp: number;
+  reviews: number;
+  avatar?: string;
+  shiftTimings?: string;
+}
+
+interface Timeslot {
+  id: number;
+  consultantId: number;
+  slotDate: string;
+  slotTime: string;
+  durationMinutes: number;
+}
+
+interface Booking {
+  id: number;
+  consultantId: number;
+  timeSlotId: number;
+  amount: number;
+  bookingStatus: string;
+  paymentStatus: string;
+  consultantName?: string;
+  slotDate?: string;
+  slotTime?: string;
+}
 
 export default function UserPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<TabType>("advisors");
-  const [search, setSearch] = useState<string>("");
-  const [category, setCategory] = useState<string>("All Advisors");
-  const [bookings, setBookings] = useState<UserBooking[]>([]);
-  const [queries, setQueries] = useState<UserQuery[]>([]);
-  const [queryText, setQueryText] = useState<string>("");
-  const [bookedAdvisor, setBookedAdvisor] = useState<string | null>(null);
 
-  const filtered = advisors.filter((a: Advisor) => {
-    const matchSearch =
-      a.name.toLowerCase().includes(search.toLowerCase()) ||
-      a.role.toLowerCase().includes(search.toLowerCase()) ||
-      a.tags.some((t: string) => t.toLowerCase().includes(search.toLowerCase()));
-    const matchCat =
-      category === "All Advisors" ||
-      a.tags.some((t: string) => t.toLowerCase().includes(category.toLowerCase().replace(" experts", ""))) ||
-      a.role.toLowerCase().includes(category.toLowerCase().replace(" experts", ""));
-    return matchSearch && matchCat;
+  const [tab, setTab] = useState<"consultants" | "bookings" | "queries" | "settings">("consultants");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All Consultants");
+  const [toast, setToast] = useState("");
+
+  const [consultants, setConsultants] = useState<Consultant[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState({ consultants: true, bookings: false, slots: false });
+
+  // Modal State
+  const [showSlotModal, setShowSlotModal] = useState(false);
+  const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null);
+  const [allTimeslots, setAllTimeslots] = useState<Timeslot[]>([]);
+  
+  // Date & Time Selection
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [filteredSlots, setFilteredSlots] = useState<Timeslot[]>([]);
+  const [selectedSlot, setSelectedSlot] = useState<Timeslot | null>(null);
+  
+  const [userNotes, setUserNotes] = useState("");
+
+  const categories = ["All Consultants", "Tax Experts", "Investment", "Wealth", "Retirement"];
+
+  const mapConsultant = (data: any): Consultant => ({
+    id: data.id,
+    name: data.name || "Expert Consultant",
+    role: data.designation || "Financial Consultant",
+    fee: Number(data.charges || 0),
+    tags: data.skills || [],
+    rating: 4.8, 
+    exp: 5,
+    reviews: 120,
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&background=random&color=fff`,
+    shiftTimings: data.shiftTimings,
   });
 
-  const handleBook = (advisor: Advisor) => {
-    setBookings(b => [...b, { ...advisor, time: "10:30 AM", status: "Upcoming", date: new Date().toLocaleDateString() }]);
-    setBookedAdvisor(advisor.name);
-    setTimeout(() => setBookedAdvisor(null), 3000);
-  };
-
-  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value);
-  const handleQueryTextChange = (e: ChangeEvent<HTMLTextAreaElement>) => setQueryText(e.target.value);
-
-  const handleSubmitQuery = () => {
-    if (queryText.trim()) {
-      setQueries(q => [...q, { text: queryText, status: "Pending" }]);
-      setQueryText("");
+  const fetchConsultants = async () => {
+    setLoading(prev => ({ ...prev, consultants: true }));
+    try {
+      const response = await getAllConsultants();
+      const list = Array.isArray(response) ? response : [];
+      setConsultants(list.map(mapConsultant));
+    } catch (err: any) {
+      console.error("Fetch Error:", err);
+      setToast("Could not load consultants.");
+    } finally {
+      setLoading(prev => ({ ...prev, consultants: false }));
     }
   };
 
-  const navItems: NavItem[] = [
-    { id: "advisors", label: "Advisors", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><circle cx="19" cy="8" r="3" stroke="currentColor" strokeWidth="2"/><path d="M22 20c0-2.8-1.8-5-4-5.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
-    { id: "bookings", label: "Bookings", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
-    { id: "queries", label: "Queries", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/></svg> },
-    { id: "settings", label: "Settings", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2"/></svg> },
-  ];
+  const fetchBookings = async () => {
+    setLoading(prev => ({ ...prev, bookings: true }));
+    try {
+      const response = await getMyBookings();
+      const mappedBookings = (response as any[]).map(b => ({
+        ...b,
+        consultantName: b.consultantName || b.advisorName || "Consultant"
+      }));
+      setBookings(mappedBookings);
+    } catch (err) {
+      setBookings([]);
+    } finally {
+      setLoading(prev => ({ ...prev, bookings: false }));
+    }
+  };
+
+  useEffect(() => {
+    fetchConsultants();
+  }, []);
+
+  useEffect(() => {
+    if (tab === "bookings") fetchBookings();
+  }, [tab]);
+
+  // Open Modal and Fetch Slots
+  const handleOpenModal = async (c: Consultant) => {
+    setSelectedConsultant(c);
+    setShowSlotModal(true);
+    setLoading(prev => ({ ...prev, slots: true }));
+    
+    // Reset states
+    setSelectedSlot(null);
+    setUserNotes("");
+    
+    try {
+      const response = await getAvailableTimeslotsByConsultant(c.id);
+      const slots = Array.isArray(response) ? response : [];
+      
+      setAllTimeslots(slots);
+
+      // Extract unique dates
+      const uniqueDates = Array.from(new Set(slots.map(s => s.slotDate))).sort();
+      setAvailableDates(uniqueDates);
+
+      // Auto-select first available date
+      if (uniqueDates.length > 0) {
+        setSelectedDate(uniqueDates[0]);
+      } else {
+        setSelectedDate("");
+      }
+
+    } catch {
+      setAllTimeslots([]);
+      setAvailableDates([]);
+    } finally {
+      setLoading(prev => ({ ...prev, slots: false }));
+    }
+  };
+
+  // Filter slots when selected date changes
+  useEffect(() => {
+    if (selectedDate) {
+      const slotsForDate = allTimeslots.filter(s => s.slotDate === selectedDate);
+      setFilteredSlots(slotsForDate);
+      setSelectedSlot(null); // Clear time selection when date changes
+    } else {
+      setFilteredSlots([]);
+    }
+  }, [selectedDate, allTimeslots]);
+
+  const handleBookingConfirm = async () => {
+    if (!selectedSlot || !selectedConsultant) return;
+    try {
+      await createBooking({
+        consultantId: selectedConsultant.id,
+        timeSlotId: selectedSlot.id,
+        amount: selectedConsultant.fee,
+        userNotes: userNotes || "User App Booking"
+      });
+      setShowSlotModal(false);
+      setToast("✓ Session Booked Successfully!");
+      if (tab === "bookings") fetchBookings();
+    } catch (err: any) {
+      setToast(`Booking Failed: ${err.message || "Unknown error"}`);
+    } finally {
+      setTimeout(() => setToast(""), 3000);
+    }
+  };
+
+  // ✅ Logout Handler Fix
+  const handleLogout = () => {
+    logoutUser();
+    navigate("/login", { replace: true });
+  };
+
+  const filteredList = consultants.filter(c => {
+    const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase()) || 
+                          c.role.toLowerCase().includes(search.toLowerCase());
+    const matchesCat = category === "All Consultants" || c.role.includes(category.replace(" Experts", ""));
+    return matchesSearch && matchesCat;
+  });
 
   return (
     <div className={styles.page}>
-
-      {/* ── Header ── */}
-      <div className={styles.header}>
-        <button onClick={() => navigate("/")} className={styles.backBtn}>
-          <svg width="22" height="22" fill="none" viewBox="0 0 24 24">
-            <path d="M19 12H5M5 12l7 7M5 12l7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-
+      <header className={styles.header}>
         <div className={styles.logoSection}>
           <div className={styles.logoText}>FINADVISE</div>
-          <div className={styles.logoSub}>EXPERT FINANCIAL GUIDANCE</div>
+          <div className={styles.logoSub}>CONSULTANT BOOKING</div>
         </div>
+        <button onClick={handleLogout} className={styles.backBtn}>Logout</button>
+      </header>
 
-        <div className={styles.headerRight}>
-          <div className={styles.bellWrapper}>
-            <svg width="22" height="22" fill="none" viewBox="0 0 24 24">
-              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            <div className={styles.bellDot} />
-          </div>
-          <img src="https://randomuser.me/api/portraits/men/85.jpg" alt="" className={styles.avatar} />
-        </div>
-      </div>
+      {toast && <div className={styles.toast}>{toast}</div>}
 
-      {/* ── Toast ── */}
-      {bookedAdvisor && (
-        <div className={styles.toast}>✓ Booked with {bookedAdvisor}!</div>
-      )}
-
-      {/* ── Content ── */}
-      <div className={styles.content}>
-
-        {/* ADVISORS TAB */}
-        {tab === "advisors" && (
+      <main className={styles.content}>
+        {/* ── CONSULTANTS TAB ── */}
+        {tab === "consultants" && (
           <div className={styles.tabPadding}>
             <div className={styles.searchWrapper}>
-              <svg className={styles.searchIcon} width="16" height="16" fill="none" viewBox="0 0 24 24">
-                <circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2"/>
-                <path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-              <input
-                value={search}
-                onChange={handleSearchChange}
-                placeholder="Search advisors, expertise..."
-                className={styles.searchInput}
+              <input 
+                className={styles.searchInput} 
+                placeholder="Search financial consultants..." 
+                value={search} 
+                onChange={e => setSearch(e.target.value)} 
               />
             </div>
 
             <div className={styles.categoryRow}>
               {categories.map(c => (
-                <button
-                  key={c}
-                  onClick={() => setCategory(c)}
+                <button 
+                  key={c} 
                   className={`${styles.categoryBtn} ${category === c ? styles.categoryBtnActive : ""}`}
+                  onClick={() => setCategory(c)}
                 >
                   {c}
                 </button>
               ))}
             </div>
 
-            <div className={styles.sectionLabel}>AVAILABLE ADVISORS</div>
+            {loading.consultants ? (
+              <div style={{textAlign: 'center', padding: 40, color: '#64748B'}}>Loading Consultants...</div>
+            ) : (
+              <div className={styles.consultantList}>
+                {filteredList.length > 0 ? (
+                  filteredList.map(c => (
+                    <div key={c.id} className={styles.consultantCard}>
+                      
+                      <div className={styles.ratingBadge}>★ {c.rating}</div>
 
-            {filtered.map((a: Advisor) => (
-              <div key={a.id} className={styles.advisorCard}>
-                <div className={styles.advisorCardTop}>
-                  <div className={styles.advisorImgWrapper}>
-                    <img src={a.avatar} alt={a.name} className={styles.advisorImg} />
-                    <div className={styles.ratingBadge}>★ {a.rating}</div>
-                  </div>
-                  <div>
-                    <div className={styles.advisorName}>{a.name}</div>
-                    <div className={styles.advisorRole}>{a.role}</div>
-                    <div className={styles.tagRow}>
-                      {a.tags.map(t => (
-                        <span key={t} className={styles.tag}>{t}</span>
-                      ))}
+                      {/* Left Side */}
+                      <div className={styles.cardLeft}>
+                        <img src={c.avatar} alt={c.name} className={styles.avatarImg} />
+                        <div className={styles.cardInfo}>
+                          <div className={styles.consultantName}>{c.name}</div>
+                          <div className={styles.consultantRole}>{c.role}</div>
+                        </div>
+                      </div>
+
+                      {/* Right Side */}
+                      <div className={styles.cardRight}>
+                        <div className={styles.feeValue}>₹{c.fee.toLocaleString()}</div>
+                        <button className={styles.bookBtn} onClick={() => handleOpenModal(c)}>Book Session</button>
+                      </div>
+
                     </div>
-                  </div>
-                </div>
-                <div className={styles.advisorCardBottom}>
-                  <div>
-                    <div className={styles.feeLabel}>Consultation Fee</div>
-                    <div className={styles.feeValue}>₹{a.fee.toLocaleString()}</div>
-                  </div>
-                  <button onClick={() => handleBook(a)} className={styles.bookBtn}>
-                    Book Now <span>›</span>
-                  </button>
-                </div>
-                <div className={styles.advisorMeta}>
-                  <span>📋 {a.exp} Yrs Exp.</span>
-                  <span>⭐ {a.reviews} Reviews</span>
-                </div>
+                  ))
+                ) : (
+                  <div style={{textAlign: 'center', padding: 40, color: '#94A3B8'}}>No consultants found.</div>
+                )}
               </div>
-            ))}
+            )}
           </div>
         )}
 
-        {/* BOOKINGS TAB */}
+        {/* ── BOOKINGS TAB ── */}
         {tab === "bookings" && (
           <div className={styles.tabPadding}>
-            <h2 className={styles.pageTitle}>My Bookings</h2>
-            {bookings.length === 0 ? (
-              <div className={styles.emptyState}>
-                <div className={styles.emptyIcon}>📅</div>
-                <div className={styles.emptyTitle}>No bookings yet</div>
-                <div className={styles.emptySubtitle}>Book a consultation from the Advisors tab</div>
-              </div>
-            ) : bookings.map((b, i) => (
-              <div key={i} className={styles.bookingCard}>
-                <div className={styles.bookingCardTop}>
-                  <div className={styles.bookingName}>{b.name}</div>
-                  <StatusBadge status={b.status} />
+            <h2 className={styles.sectionTitle}>Your Appointments</h2>
+            {bookings.length > 0 ? (
+              bookings.map(b => (
+                <div key={b.id} className={styles.bookingCard}>
+                  <div className={styles.bookingName}>{b.consultantName || "Consultation Session"}</div>
+                  <div className={styles.bookingMeta}>
+                    📅 {b.slotDate || "Date TBD"} | ⏰ {b.slotTime ? b.slotTime.substring(0, 5) : "Time TBD"}
+                  </div>
+                  <StatusBadge status={b.bookingStatus || "PENDING"} />
                 </div>
-                <div className={styles.bookingRole}>{b.role}</div>
-                <div className={styles.bookingCardBottom}>
-                  <span>🕐 {b.time}</span>
-                  <span className={styles.bookingAmount}>₹{b.fee.toLocaleString()}</span>
-                </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              <div className={styles.emptyState}>No bookings yet.</div>
+            )}
           </div>
         )}
 
-        {/* QUERIES TAB */}
+        {/* ── QUERIES TAB ── */}
         {tab === "queries" && (
           <div className={styles.tabPadding}>
-            <h2 className={styles.pageTitle}>My Queries</h2>
-            <div className={styles.queryBox}>
-              <textarea
-                value={queryText}
-                onChange={handleQueryTextChange}
-                placeholder="Ask your financial question..."
-                className={styles.queryTextarea}
-              />
-              <button onClick={handleSubmitQuery} className={styles.submitBtn}>
-                Submit Query
-              </button>
-            </div>
-            {queries.map((q, i) => (
-              <div key={i} className={styles.queryItem}>
-                <div className={styles.queryText}>{q.text}</div>
-                <StatusBadge status={q.status} />
-              </div>
-            ))}
+            <h2 className={styles.sectionTitle}>My Queries</h2>
+            <div className={styles.emptyState}>No active queries found.</div>
           </div>
         )}
 
-        {/* SETTINGS TAB */}
+        {/* ── SETTINGS TAB ── */}
         {tab === "settings" && (
           <div className={styles.tabPadding}>
-            <h2 className={styles.pageTitle}>Settings</h2>
-
+            <h2 className={styles.sectionTitle}>Settings</h2>
             <div className={styles.settingsCard}>
-              {[
-                { label: "Personal Information", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" stroke="#64748B" strokeWidth="2"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="#64748B" strokeWidth="2" strokeLinecap="round"/></svg> },
-                { label: "Notification Preferences", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke="#64748B" strokeWidth="2" strokeLinecap="round"/></svg> },
-                { label: "Payment Methods", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" stroke="#64748B" strokeWidth="2"/><path d="M2 10h20" stroke="#64748B" strokeWidth="2"/></svg> },
-                { label: "Security & Privacy", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><path d="M12 3l7 4v5c0 4-3 7.5-7 9-4-1.5-7-5-7-9V7l7-4z" stroke="#64748B" strokeWidth="2" strokeLinejoin="round"/></svg> },
-                { label: "Support Center", icon: <svg width="20" height="20" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="#64748B" strokeWidth="2"/><path d="M9 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01" stroke="#64748B" strokeWidth="2" strokeLinecap="round"/></svg> },
-              ].map((item, i, arr) => (
-                <div key={item.label} className={`${styles.settingsRow} ${i < arr.length - 1 ? styles.settingsRowBorder : ""}`}>
-                  <div className={styles.settingsRowLeft}>
-                    {item.icon}
-                    <span className={styles.settingsLabel}>{item.label}</span>
-                  </div>
-                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-                    <path d="M9 18l6-6-6-6" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-              ))}
-            </div>
-
-            <div className={styles.signOutBtn} onClick={() => navigate("/")}>
-              Sign Out
+              <div className={styles.settingsItem}><span>Account Profile</span> <span>›</span></div>
+              <div className={styles.settingsItem}><span>Notifications</span> <span>›</span></div>
+              <div className={styles.settingsItem}><span>Privacy & Security</span> <span>›</span></div>
+              <div className={styles.settingsItem} onClick={handleLogout} style={{color: '#DC2626'}}><span>Log Out</span></div>
             </div>
           </div>
         )}
-      </div>
+      </main>
+
+      {/* ── Modal ── */}
+      {showSlotModal && selectedConsultant && (
+        <div className={styles.modalOverlay} onClick={() => setShowSlotModal(false)}>
+          <div className={styles.modal} onClick={e => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <h3 className={styles.modalTitle}>Schedule with {selectedConsultant.name}</h3>
+              <button className={styles.modalClose} onClick={() => setShowSlotModal(false)}>×</button>
+            </div>
+            
+            {loading.slots ? <p style={{textAlign: 'center', color: '#64748B'}}>Loading available dates...</p> : (
+              <>
+                {/* ── Date Selection Row ── */}
+                {availableDates.length > 0 ? (
+                  <>
+                    <div style={{marginBottom: 8, fontSize: 12, fontWeight: 700, color: '#64748B'}}>SELECT DATE</div>
+                    <div className={styles.dateRow}>
+                      {availableDates.map(date => {
+                        // Format date to show Day and short date (e.g. Mon, 14)
+                        const d = new Date(date);
+                        const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+                        const dateNum = d.toLocaleDateString('en-US', { day: '2-digit' });
+
+                        return (
+                          <button 
+                            key={date}
+                            className={`${styles.dateBtn} ${selectedDate === date ? styles.dateBtnActive : ""}`}
+                            onClick={() => setSelectedDate(date)}
+                          >
+                            <span className={styles.dateBtnDay}>{dayName}</span>
+                            <span className={styles.dateBtnDate}>{dateNum}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{textAlign:'center', color:'#EF4444', fontSize:14, padding: 20}}>No dates available for this consultant.</div>
+                )}
+
+                {/* ── Time Selection Grid ── */}
+                {selectedDate && (
+                  <>
+                    <div style={{marginBottom: 8, fontSize: 12, fontWeight: 700, color: '#64748B'}}>SELECT TIME</div>
+                    <div className={styles.timeGrid}>
+                      {filteredSlots.length > 0 ? filteredSlots.map(s => (
+                        <button 
+                          key={s.id} 
+                          className={`${styles.timeBtn} ${selectedSlot?.id === s.id ? styles.timeBtnActive : ""}`}
+                          onClick={() => setSelectedSlot(s)}
+                        >
+                          {s.slotTime.substring(0, 5)}
+                        </button>
+                      )) : <div style={{gridColumn:'1/-1', textAlign:'center', color:'#94A3B8', fontSize:13}}>No slots for this date.</div>}
+                    </div>
+                  </>
+                )}
+                
+                {selectedSlot && (
+                  <div style={{marginBottom: 16}}>
+                    <textarea 
+                      placeholder="Add a note (optional)..." 
+                      className={styles.notesTextarea}
+                      value={userNotes}
+                      onChange={(e) => setUserNotes(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <button 
+                  className={styles.proceedBtn} 
+                  disabled={!selectedSlot}
+                  onClick={handleBookingConfirm}
+                >
+                  Confirm & Pay ₹{selectedConsultant.fee}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Bottom Nav ── */}
-      <div className={styles.bottomNav}>
-        {navItems.map(n => (
-          <button
-            key={n.id}
-            onClick={() => setTab(n.id)}
-            className={`${styles.navBtn} ${tab === n.id ? styles.navBtnActive : ""}`}
-          >
-            {n.icon}
-            <span className={styles.navLabel}>{n.label}</span>
-          </button>
-        ))}
-      </div>
+      <nav className={styles.bottomNav}>
+        <button onClick={() => setTab("consultants")} className={`${styles.navBtn} ${tab === "consultants" ? styles.navBtnActive : ""}`}>
+          <span>Consultants</span>
+        </button>
+        <button onClick={() => setTab("bookings")} className={`${styles.navBtn} ${tab === "bookings" ? styles.navBtnActive : ""}`}>
+          <span>Bookings</span>
+        </button>
+        <button onClick={() => setTab("queries")} className={`${styles.navBtn} ${tab === "queries" ? styles.navBtnActive : ""}`}>
+          <span>Queries</span>
+        </button>
+        <button onClick={() => setTab("settings")} className={`${styles.navBtn} ${tab === "settings" ? styles.navBtnActive : ""}`}>
+          <span>Settings</span>
+        </button>
+      </nav>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import styles from "../css/RegisterPage.module.css";
+import styles from "../styles/RegisterPage.module.css";
 
 interface IncomeItem { label: string; amount: string; }
 interface ExpenseItem { label: string; amount: string; }
