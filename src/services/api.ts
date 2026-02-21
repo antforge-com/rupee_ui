@@ -1,7 +1,6 @@
 import axios from 'axios';
 
 // ── Configuration ──
-// ✅ CRITICAL: Keep empty to allow Vite Proxy to handle the connection
 const BASE_URL_ROOT = ""; 
 const BASE_URL_API = `/api`;
 
@@ -109,20 +108,15 @@ export const changePassword = async (payload: any) => {
 };
 
 // ── CONSULTANTS ──
-
-// ✅ UPDATED: Export named 'getConsultants' as requested
 export const getConsultants = async () => {
   return await apiFetch("/consultants");
 };
-// Alias for backward compatibility
 export const getAllConsultants = getConsultants;
 export const getAdvisors = getConsultants;
 
-// ✅ UPDATED: Parameter is now explicitly 'consultantId'
 export const getConsultantById = async (consultantId: number) => {
   return await apiFetch(`/consultants/${consultantId}`);
 };
-// Alias for backward compatibility
 export const getAdvisorById = getConsultantById;
 export const getMyProfile = getConsultantById;
 
@@ -148,7 +142,6 @@ export const deleteConsultant = async (consultantId: number) => {
   });
 };
 export const deleteAdvisor = deleteConsultant;
-
 
 // ── User Management ──
 export const getAllUsers = async () => {
@@ -190,7 +183,6 @@ export const getTimeslotById = async (id: number) => {
   return await apiFetch(`/timeslots/${id}`);
 };
 
-// ✅ UPDATED: Uses 'consultantId'
 export const getTimeslotsByConsultant = async (consultantId: number) => {
   const data = await apiFetch(`/timeslots/consultant/${consultantId}`);
   if (Array.isArray(data)) return data;
@@ -253,6 +245,17 @@ export const getBookingById = async (id: number) => {
   return await apiFetch(`/bookings/${id}`);
 };
 
+// ✅ NEW: Fetch ALL Bookings (For Admin)
+export const getAllBookings = async () => {
+  try {
+    const data = await apiFetch("/bookings");
+    if (data && (!Array.isArray(data) || data.length === 0)) return [];
+    return data;
+  } catch (err) {
+    return [];
+  }
+};
+
 export const getMyBookings = async () => {
   try {
     const data = await apiFetch("/bookings/me");
@@ -263,7 +266,6 @@ export const getMyBookings = async () => {
   }
 };
 
-// ✅ UPDATED: Uses 'consultantId'
 export const getBookingsByConsultant = async (consultantId: number) => {
   return await apiFetch(`/bookings/consultant/${consultantId}`);
 };

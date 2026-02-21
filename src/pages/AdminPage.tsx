@@ -1,49 +1,88 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import AddAdvisor from "../components/AddAdvisor.tsx";
-import StatusBadge from "../components/StatusBadge.tsx";
+import AddAdvisor from "../components/AddAdvisor";
+import BookingsPage from "./BookingsPage"; 
+import StatusBadge from "../components/StatusBadge"; // ✅ Restored for Dashboard Bookings
 import styles from "../styles/AdminPage.module.css";
-import { bookingData, advisors as initialAdvisors, pendingQueries, recentBookings } from "../data/data.ts";
-import { deleteAdvisor, getAdvisors as getAllAdvisors } from "../services/api.ts";
-import type { AdminNavItem, Advisor, PendingQuery, RecentBooking, StatCard } from "../types";
+
+import { bookingData, pendingQueries } from "../data/data"; 
+import { deleteAdvisor, getAdvisors as getAllAdvisors, getAllBookings } from "../services/api"; // ✅ Re-added getAllBookings
+
+interface Advisor {
+  id: number;
+  name: string;
+  role: string;
+  tags: string[];
+  rating: number;
+  reviews: number;
+  fee: number;
+  exp: string | number;
+  avatar: string;
+}
 
 type AdminSectionType = "dashboard" | "advisors" | "bookings" | "queries" | "settings";
 
 export default function AdminPage() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState<AdminSectionType>("dashboard");
-  const [queries, setQueries] = useState<PendingQuery[]>(pendingQueries);
+  const [queries, setQueries] = useState(pendingQueries);
   const [showModal, setShowModal] = useState(false);
-  const [advisors, setAdvisors] = useState<Advisor[]>(initialAdvisors);
+  
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
+  
+  // ✅ States for Dashboard dynamic data
+  const [dashBookings, setDashBookings] = useState<any[]>([]); 
+  const [totalBookingsCount, setTotalBookingsCount] = useState(0);
+
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'error' | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  
-  // ✅ Mobile Menu State
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const fetchAdvisors = async () => {
+  // ── 100% Dynamic Backend Integration for Dashboard ──
+  const fetchDashboardData = async () => {
     setLoading(true);
     try {
-      const data = await getAllAdvisors();
-      if (data && Array.isArray(data)) {
-        const mappedAdvisors: Advisor[] = data.map((advisor: any) => ({
+      // 1. Fetch Consultants
+      const advData = await getAllAdvisors();
+      if (advData && Array.isArray(advData)) {
+        const mappedAdvisors: Advisor[] = advData.map((advisor: any) => ({
           id: advisor.id,
           name: advisor.name,
           role: advisor.designation || "Financial Consultant",
           tags: advisor.skills || [],
           rating: 4.5,
           reviews: 0,
-          fee: advisor.charges || 0,
+          fee: Number(advisor.charges || 0),
           exp: advisor.experience || "5+ Years", 
           avatar: advisor.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(advisor.name)}&background=random&color=fff`, 
         }));
         setAdvisors(mappedAdvisors);
-        setBackendStatus('online');
       }
+
+      // 2. Fetch Recent Bookings for Dashboard Widget
+      const bookData = await getAllBookings();
+      if (bookData && Array.isArray(bookData)) {
+        const mappedBookings = bookData.map((b: any) => ({
+          id: b.id,
+          user: b.user?.name || b.userName || `User #${b.userId || b.id || "Unknown"}`,
+          advisor: b.consultant?.name || b.consultantName || b.advisorName || "Consultant",
+          time: `${b.slotDate || b.bookingDate || "N/A"} • ${b.slotTime || b.bookingTime?.substring(0, 5) || "N/A"}`,
+          status: b.status || b.bookingStatus || "PENDING",
+          amount: Number(b.amount || b.charges || 0),
+        }));
+        
+        setTotalBookingsCount(mappedBookings.length);
+        // Only keep the most recent 5 bookings for the dashboard view
+        setDashBookings(mappedBookings.slice(0, 5));
+      }
+
+      setBackendStatus('online');
     } catch (error: any) {
-      setAdvisors(initialAdvisors);
+      console.error("Backend Error:", error);
+      setAdvisors([]);
+      setDashBookings([]);
       if (error.response?.status === 403) setBackendStatus('error');
       else setBackendStatus('offline');
     } finally {
@@ -52,15 +91,15 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    fetchAdvisors();
+    fetchDashboardData();
   }, []);
 
   const handleQuery = (id: number) => {
-    setQueries(q => q.filter((item: PendingQuery) => item.id !== id));
+    setQueries(q => q.filter((item: any) => item.id !== id));
   };
 
   const handleSaveAdvisor = () => {
-    fetchAdvisors();
+    fetchDashboardData();
     setShowModal(false);
   };
 
@@ -69,7 +108,7 @@ export default function AdminPage() {
     setDeletingId(id);
     try {
         await deleteAdvisor(id);
-        fetchAdvisors();
+        fetchDashboardData();
     } catch (err) {
         alert("Failed to delete consultant");
     } finally {
@@ -77,26 +116,23 @@ export default function AdminPage() {
     }
   }
 
-  // Close menu when navigating
   const handleNavClick = (id: AdminSectionType) => {
     setActiveSection(id);
     setIsMobileMenuOpen(false);
   };
 
-  // ✅ ORIGINAL ICONS PRESERVED
-  const navItems: AdminNavItem[] = [
+  const navItems = [
     { id: "dashboard", label: "Dashboard", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2"/></svg> },
     { id: "advisors", label: "Consultants", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
     { id: "bookings", label: "Bookings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
     { id: "queries", label: "Queries", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/></svg> },
-    { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2"/></svg> },
+    { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06-.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2"/></svg> },
   ];
 
-  // ✅ ORIGINAL STAT ICONS PRESERVED
-  const stats: StatCard[] = [
-    { label: "TOTAL BOOKINGS", value: "1,284", change: "+12.5%", positive: true, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="#2563EB" strokeWidth="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="#2563EB" strokeWidth="2" strokeLinecap="round"/></svg> },
+  const stats = [
+    { label: "TOTAL BOOKINGS", value: String(totalBookingsCount), change: "+12.5%", positive: true, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="#2563EB" strokeWidth="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="#2563EB" strokeWidth="2" strokeLinecap="round"/></svg> },
     { label: "ACTIVE CONSULTANTS", value: String(advisors.length), change: "+2", positive: true, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="#7C3AED" strokeWidth="2"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round"/></svg> },
-    { label: "TOTAL REVENUE", value: "₹4.2L", change: "+8.2%", positive: true, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> },
+    { label: "TOTAL REVENUE", value: "₹...", change: "+8.2%", positive: true, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> },
     { label: "PENDING QUERIES", value: String(queries.length), change: queries.length < 3 ? `-${3 - queries.length}` : "0", positive: false, icon: <svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="#F59E0B" strokeWidth="2" strokeLinejoin="round"/></svg> },
   ];
 
@@ -104,20 +140,17 @@ export default function AdminPage() {
     <div className={styles.page}>
       {showModal && <AddAdvisor onClose={() => setShowModal(false)} onSave={handleSaveAdvisor} />}
 
-      {/* ✅ Mobile Overlay */}
       {isMobileMenuOpen && (
-        <div 
-          className={styles.mobileOverlay} 
-          onClick={() => setIsMobileMenuOpen(false)} 
-        />
+        <div className={styles.mobileOverlay} onClick={() => setIsMobileMenuOpen(false)} />
       )}
 
-      {/* Sidebar - Dynamically uses open class */}
+      {/* Sidebar */}
       <div className={`${styles.sidebar} ${isMobileMenuOpen ? styles.sidebarOpen : ""}`}>
         <div className={styles.sidebarLogo}>
-          <span className={styles.logoText}>FINADVISE</span>
-          <span className={styles.adminBadge}>ADMIN</span>
-          {/* Close button for mobile */}
+          <div style={{display:'flex', alignItems:'center'}}>
+            <span className={styles.logoText}>FINADVISE</span>
+            <span className={styles.adminBadge}>ADMIN</span>
+          </div>
           <button className={styles.closeMenuBtn} onClick={() => setIsMobileMenuOpen(false)}>×</button>
         </div>
 
@@ -140,19 +173,12 @@ export default function AdminPage() {
             </svg>
             Back to Login
           </button>
-          <button onClick={() => navigate("/")} className={styles.sidebarActionBtn}>
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            Log Out
-          </button>
         </div>
       </div>
 
       {/* Main Content */}
       <div className={styles.main}>
         <div className={styles.topBar}>
-          {/* ✅ Hamburger Button (SVG from Heroicons) */}
           <button className={styles.hamburgerBtn} onClick={() => setIsMobileMenuOpen(true)}>
             <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#0F172A" strokeWidth="2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
@@ -173,14 +199,14 @@ export default function AdminPage() {
         </div>
 
         {backendStatus === 'offline' && (
-          <div className={styles.alertWarning}>⚠️ Backend offline. Showing demo data.</div>
+          <div className={styles.alertWarning}>⚠️ Backend offline. Showing zero data. Please start server.</div>
         )}
 
-        {/* ... Rest of your sections (Dashboard, Advisors, etc.) ... */}
+        {/* DASHBOARD SECTION */}
         {activeSection === "dashboard" && (
           <>
             <div className={styles.statsGrid}>
-              {stats.map((s: StatCard, i: number) => (
+              {stats.map((s: any, i: number) => (
                 <div key={i} className={styles.statCard}>
                   <div className={styles.statLabel}>{s.label}</div>
                   <div className={styles.statRow}>
@@ -211,7 +237,7 @@ export default function AdminPage() {
 
               <div className={styles.card}>
                 <h3 className={styles.cardTitle}>Top Consultants</h3>
-                {advisors.slice(0, 3).map((a: Advisor, i: number) => (
+                {advisors.length > 0 ? advisors.slice(0, 3).map((a: Advisor) => (
                   <div key={a.id} className={styles.advisorRow}>
                     <img src={a.avatar} alt={a.name} className={styles.advisorAvatar} />
                     <div>
@@ -219,32 +245,42 @@ export default function AdminPage() {
                       <div className={styles.advisorRating}>★ {a.rating}</div>
                     </div>
                   </div>
-                ))}
+                )) : <p style={{color: '#64748B', fontSize: 13}}>No consultants found.</p>}
               </div>
             </div>
 
+            {/* ✅ RESTORED: Recent Bookings Component inside Dashboard */}
             <div className={`${styles.card} ${styles.mt16}`}>
               <h3 className={styles.cardTitle}>Recent Bookings</h3>
               <div className={styles.tableResponsive}>
                 <table className={styles.table}>
                   <thead>
                     <tr className={styles.tableHead}>
-                      {["USER", "CONSULTANT", "TIME", "STATUS", "AMOUNT", ""].map(h => (
-                        <td key={h} className={styles.th}>{h}</td>
-                      ))}
+                      <td className={styles.th}>USER</td>
+                      <td className={styles.th}>CONSULTANT</td>
+                      <td className={styles.th}>TIME</td>
+                      <td className={styles.th}>STATUS</td>
+                      <td className={styles.th}>AMOUNT</td>
+                      <td className={styles.th}></td>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentBookings.map((b: RecentBooking, i: number) => (
+                    {dashBookings.length > 0 ? dashBookings.map((b, i) => (
                       <tr key={i} className={styles.tableRow}>
                         <td className={styles.tdUser}>{b.user}</td>
                         <td className={styles.tdAdvisor}>{b.advisor}</td>
-                        <td className={styles.tdTime}>🕗 {b.time}</td>
+                        <td className={styles.tdTime}>{b.time}</td>
                         <td><StatusBadge status={b.status} /></td>
                         <td className={styles.tdAmount}>₹{b.amount.toLocaleString()}</td>
                         <td className={styles.tdMore}>⋮</td>
                       </tr>
-                    ))}
+                    )) : (
+                      <tr>
+                        <td colSpan={6} style={{padding: 20, textAlign: 'center', color: '#94A3B8'}}>
+                          No recent bookings found.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -257,7 +293,7 @@ export default function AdminPage() {
           <div>
             <h2 className={styles.pageTitle}>Consultants {loading && "..."}</h2>
             <div className={styles.advisorsGrid}>
-              {advisors.map((a: Advisor) => (
+              {advisors.length > 0 ? advisors.map((a: Advisor) => (
                 <div key={a.id} className={styles.card}>
                   <div className={styles.advisorCardRow}>
                     <img src={a.avatar} alt={a.name} className={styles.advisorAvatarLg} />
@@ -281,47 +317,25 @@ export default function AdminPage() {
                     {deletingId === a.id ? "Deleting..." : "Delete Consultant"}
                   </button>
                 </div>
-              ))}
+              )) : (
+                <div style={{gridColumn: '1/-1', textAlign: 'center', color: '#94A3B8', padding: 40}}>
+                  No consultants found in the database.
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* BOOKINGS SECTION */}
         {activeSection === "bookings" && (
-          <div>
-            <h2 className={styles.pageTitle}>All Bookings</h2>
-            <div className={styles.card}>
-              <div className={styles.tableResponsive}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr className={styles.tableHead}>
-                      {["USER", "CONSULTANT", "TIME", "STATUS", "AMOUNT"].map(h => (
-                         <td key={h} className={styles.th}>{h}</td>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentBookings.map((b, i) => (
-                      <tr key={i} className={styles.tableRow}>
-                        <td className={styles.tdUser}>{b.user}</td>
-                        <td className={styles.tdAdvisor}>{b.advisor}</td>
-                        <td className={styles.tdTime}>{b.time}</td>
-                        <td><StatusBadge status={b.status} /></td>
-                        <td className={styles.tdAmount}>₹{b.amount.toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          <BookingsPage />
         )}
 
         {/* QUERIES SECTION */}
         {activeSection === "queries" && (
           <div>
             <h2 className={styles.pageTitle}>Pending Queries</h2>
-            {queries.map((q) => (
+            {queries.map((q: any) => (
               <div key={q.id} className={styles.queryCard}>
                 <div>
                   <div className={styles.queryQuestion}>{q.question}</div>
