@@ -10,7 +10,7 @@ import {
 } from "../services/api";
 import styles from "../styles/UserPage.module.css";
 
-// ── Master timeslots direct fetch (no wrapper dependency) ─────────────────────
+// ── API Helpers ─────────────────────────────────────────────────────────────
 const BASE_URL = "/api";
 const getToken = () => localStorage.getItem("fin_token");
 
@@ -31,7 +31,6 @@ const fetchMasterTimeslots = async (): Promise<MasterSlot[]> => {
   try {
     const data = await apiFetch(`${BASE_URL}/master-timeslots`);
     const arr  = Array.isArray(data) ? data : data?.content || [];
-    console.log("⏰ Master timeslots:", arr);
     return arr;
   } catch (e) {
     console.error("Master timeslots fetch failed:", e);
@@ -44,16 +43,20 @@ interface Consultant {
   id: number; name: string; role: string; fee: number;
   tags: string[]; rating: number; exp: number; reviews: number;
   avatar?: string; shiftTimings?: string;
+  // ✅ Added new backend time fields
+  shiftStartTime?: string; 
+  shiftEndTime?: string;
 }
-// Added isActive to handle deleted/disabled status
+
 interface MasterSlot { id: number; timeRange: string; isActive?: boolean; }
+
 interface Booking {
   id: number; consultantId: number; timeSlotId: number; amount: number;
   BookingStatus: string; paymentStatus: string;
   consultantName?: string; slotDate?: string; slotTime?: string; timeRange?: string;
 }
 
-// ── Time helpers ──────────────────────────────────────────────────────────────
+// ── Time helpers (Synced with Advisor Dashboard) ─────────────────────────────
 const toAmPm = (time: string): string => {
   if (!time) return "";
   const parts = time.split(":");
@@ -61,6 +64,31 @@ const toAmPm = (time: string): string => {
   const m = parseInt(parts[1] || "0", 10);
   if (isNaN(h)) return time;
   return `${h % 12 || 12}:${String(m).padStart(2,"0")} ${h >= 12 ? "PM" : "AM"}`;
+};
+
+const fmt24to12 = (t: string): string => {
+  if (!t) return '';
+  const [h, m] = t.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hr   = h % 12 || 12;
+  return `${hr}:${String(m).padStart(2,'0')} ${ampm}`;
+};
+
+// ✅ Generates exact 1-hour boundaries matching the consultant dashboard
+const generateHourlySlots = (shiftStart: string, shiftEnd: string): string[] => {
+  if (!shiftStart || !shiftEnd) return [];
+  try {
+    const [sh, sm] = shiftStart.split(':').map(Number);
+    const [eh, em] = shiftEnd.split(':').map(Number);
+    const startMins = sh * 60 + (isNaN(sm) ? 0 : sm);
+    const endMins   = eh * 60 + (isNaN(em) ? 0 : em);
+    const result: string[] = [];
+    
+    for (let m = startMins; m + 60 <= endMins; m += 60) {
+      result.push(`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`);
+    }
+    return result;
+  } catch { return []; }
 };
 
 // ── Date carousel ─────────────────────────────────────────────────────────────
@@ -104,10 +132,16 @@ export default function UserPage() {
   // ── Modal state ──
   const [showModal, setShowModal]                   = useState(false);
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null);
+  
   const [masterSlots, setMasterSlots]               = useState<MasterSlot[]>([]);
+  const [bookedSlotSet, setBookedSlotSet]           = useState<Set<string>>(new Set());
+
   const [dayOffset, setDayOffset]                   = useState(0);
   const [selectedDay, setSelectedDay]               = useState<DayItem>(ALL_DAYS[0]);
-  const [selectedMaster, setSelectedMaster]         = useState<MasterSlot | null>(null);
+  
+  // ✅ Track dynamically generated slots instead of rigid DB entities
+  const [selectedSlot, setSelectedSlot]             = useState<{start24h: string, label: string, masterId: number} | null>(null);
+  
   const [meetingMode, setMeetingMode]               = useState<"ONLINE"|"OFFLINE">("ONLINE");
   const [userNotes, setUserNotes]                   = useState("");
   const [confirming, setConfirming]                 = useState(false);
@@ -117,17 +151,18 @@ export default function UserPage() {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); };
 
-  // ── Map consultant ──
   const mapConsultant = (d: any): Consultant => ({
     id: d.id, name: d.name || "Expert Consultant",
     role: d.designation || "Financial Consultant",
     fee: Number(d.charges || 0), tags: d.skills || [],
-    rating: 4.8, exp: 5, reviews: 120,
+    rating: d.rating || 4.8, exp: 5, reviews: 120,
     avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name||"C")}&background=2563EB&color=fff&bold=true`,
     shiftTimings: d.shiftTimings,
+    // ✅ Extract proper backend fields
+    shiftStartTime: d.shiftStartTime || "",
+    shiftEndTime: d.shiftEndTime || "",
   });
 
-  // ── Fetch consultants ──
   const fetchConsultants = async () => {
     setLoading(p => ({ ...p, consultants: true }));
     try {
@@ -137,47 +172,21 @@ export default function UserPage() {
     finally { setLoading(p => ({ ...p, consultants: false })); }
   };
 
-  // ── Fetch bookings ──
   const fetchBookings = async () => {
     setLoading(p => ({ ...p, bookings: true }));
     try {
-      const [raw, masters] = await Promise.all([
-        getMyBookings(),
-        fetchMasterTimeslots(),
-      ]);
-
+      const raw = await getMyBookings();
       if (!Array.isArray(raw)) { setBookings([]); return; }
-
-      const masterMap: Record<string, string> = {};
-      masters.forEach((ms: MasterSlot) => {
-        masterMap[String(ms.id)] = ms.timeRange;
-      });
 
       const mapped = raw.map((b: any) => {
         const date = b.bookingDate || b.slotDate || b.date || b.booking_date || b.sessionDate || b.appointmentDate || "";
-
-        const masterIdCandidates = [
-          b.masterTimeslotId, b.masterSlotId, b.master_timeslot_id,
-          b.timeSlotId, b.timeslot_id, b.slotId, b.slot_id,
-        ].filter(v => v !== undefined && v !== null);
-
-        let masterTimeRange = "";
-        for (const candidate of masterIdCandidates) {
-          const key = String(candidate);
-          if (masterMap[key]) { masterTimeRange = masterMap[key]; break; }
-        }
-
-        if (!masterTimeRange) {
-          masterTimeRange = b.timeRange || b.time_range || b.slotTimeRange || (b.slotTime ? toAmPm(b.slotTime) : "") || (b.startTime ? toAmPm(b.startTime) : "") || "";
-        }
-
         const consultantName = b.consultantName || b.consultant?.name || b.advisorName || b.advisor?.name || "";
 
         return {
           ...b,
           consultantName: consultantName || "Loading…",
           slotDate:       date,
-          timeRange:      masterTimeRange,
+          timeRange:      b.timeRange || b.timeSlot?.masterTimeSlot?.timeRange || b.masterTimeSlot?.timeRange || (b.slotTime ? toAmPm(b.slotTime) : ""),
           slotTime:       b.slotTime || "",
           meetingMode:    b.meetingMode || b.meeting_mode || b.mode || "",
           BookingStatus:  (b.BookingStatus || b.status || b.bookingStatus || "PENDING").toUpperCase(),
@@ -211,40 +220,85 @@ export default function UserPage() {
   useEffect(() => { fetchConsultants(); }, []);
   useEffect(() => { if (tab === "bookings") fetchBookings(); }, [tab]);
 
+  // ✅ PERFECT SYNC: Pull global master map + specific consultant bookings
   const handleOpenModal = async (c: Consultant) => {
     setSelectedConsultant(c);
     setMasterSlots([]);
+    setBookedSlotSet(new Set());
     setDayOffset(0);
     setSelectedDay(ALL_DAYS[0]);
-    setSelectedMaster(null);
+    setSelectedSlot(null);
     setMeetingMode("ONLINE");
     setUserNotes("");
     setShowModal(true);
     setLoading(p => ({ ...p, slots: true }));
+    
     try {
-      const slots = await fetchMasterTimeslots();
-      setMasterSlots(slots);
+      const [globalMasters, bookingsData] = await Promise.all([
+        fetchMasterTimeslots(), // Fetch global masters to map IDs
+        apiFetch(`${BASE_URL}/bookings/consultant/${c.id}`) // Fetch actual bookings to block out UI
+      ]);
+
+      setMasterSlots(Array.isArray(globalMasters) ? globalMasters : []);
+
+      // Build booked set exactly like AdvisorDashboard
+      const bSet = new Set<string>();
+      const bArr = Array.isArray(bookingsData) ? bookingsData : (bookingsData?.content || []);
+      
+      bArr.forEach((b: any) => {
+        const st = (b.status || '').toUpperCase();
+        if (st !== 'CONFIRMED' && st !== 'PENDING' && st !== 'COMPLETED') return;
+        
+        const date = b.slotDate || b.bookingDate || b.date || '';
+        let timeKey = '';
+        
+        // Grab the 24h start time string to perfectly block dynamically generated slots
+        if (b.slotTime) {
+            timeKey = b.slotTime.substring(0, 5);
+        } else {
+            const tr = b.timeSlot?.masterTimeSlot?.timeRange || b.masterTimeSlot?.timeRange || b.timeRange || '';
+            const match = tr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+            if (match) {
+                let hh = parseInt(match[1]);
+                if (match[3].toUpperCase() === 'PM' && hh !== 12) hh += 12;
+                if (match[3].toUpperCase() === 'AM' && hh === 12) hh = 0;
+                timeKey = `${String(hh).padStart(2,'0')}:${match[2]}`;
+            }
+        }
+
+        if (date && timeKey) {
+            bSet.add(`${date}|${timeKey}`);
+        }
+      });
+      
+      setBookedSlotSet(bSet);
+
+    } catch (e) {
+      console.error("Failed loading modal data", e);
     } finally {
       setLoading(p => ({ ...p, slots: false }));
     }
   };
 
   const handleConfirm = async () => {
-    if (!selectedMaster || !selectedConsultant) return;
+    if (!selectedSlot || !selectedConsultant) return;
     setConfirming(true);
     try {
       await createBooking({
         consultantId:      selectedConsultant.id,
-        timeSlotId:        selectedMaster.id,
+        timeSlotId:        selectedSlot.masterId, // Send resolved DB ID
+        masterTimeslotId:  selectedSlot.masterId, 
+        slotTime:          selectedSlot.start24h, // Send literal time for safety
+        timeRange:         selectedSlot.label,
         amount:            selectedConsultant.fee,
         userNotes:         userNotes || "Booked via app",
         meetingMode:       meetingMode,
         bookingDate:       selectedDay.iso,
         slotDate:          selectedDay.iso,
-        masterTimeslotId:  selectedMaster.id,
       } as any);
+      
       setShowModal(false);
-      showToast(`✓ Session booked for ${selectedDay.date} ${selectedDay.month} · ${selectedMaster.timeRange}`);
+      showToast(`✓ Session booked for ${selectedDay.date} ${selectedDay.month} · ${selectedSlot.label}`);
       setTab("bookings");
       fetchBookings();
     } catch (err: any) {
@@ -266,6 +320,13 @@ export default function UserPage() {
     borderTopColor:"#2563EB", borderRadius:"50%",
     animation:"spin 0.7s linear infinite", margin:"0 auto 12px",
   };
+
+  // ✅ Generate slots for the currently viewed consultant
+  const hourlySlotTimes = generateHourlySlots(
+    (selectedConsultant?.shiftStartTime || '').substring(0, 5),
+    (selectedConsultant?.shiftEndTime || '').substring(0, 5)
+  );
+  const hasShift = !!(selectedConsultant?.shiftStartTime && selectedConsultant?.shiftEndTime && hourlySlotTimes.length > 0);
 
   return (
     <div className={styles.page}>
@@ -395,6 +456,7 @@ export default function UserPage() {
         )}
       </main>
 
+      {/* ── BOOKING MODAL ── */}
       {showModal && selectedConsultant && (
         <div onClick={() => setShowModal(false)} style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.6)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:"16px" }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"#fff", borderRadius:20, width:"100%", maxWidth:520, boxShadow:"0 32px 80px rgba(15,23,42,0.3)", overflow:"hidden", maxHeight:"92vh", display:"flex", flexDirection:"column" }}>
@@ -417,7 +479,7 @@ export default function UserPage() {
                       {visibleDays.map(d => {
                         const isSel = selectedDay.iso === d.iso;
                         return (
-                          <button key={d.iso} onClick={() => { setSelectedDay(d); setSelectedMaster(null); }} style={{ flex:1, padding:"8px 0", borderRadius:10, cursor:"pointer", border:`1.5px solid ${isSel?"#2563EB":"#E2E8F0"}`, background: isSel?"#2563EB":"#fff", display:"flex", flexDirection:"column", alignItems:"center", gap:1, outline:"none" }}>
+                          <button key={d.iso} onClick={() => { setSelectedDay(d); setSelectedSlot(null); }} style={{ flex:1, padding:"8px 0", borderRadius:10, cursor:"pointer", border:`1.5px solid ${isSel?"#2563EB":"#E2E8F0"}`, background: isSel?"#2563EB":"#fff", display:"flex", flexDirection:"column", alignItems:"center", gap:1, outline:"none" }}>
                             <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.1em", color:isSel?"#BFDBFE":"#94A3B8" }}>{d.day}</span>
                             <span style={{ fontSize:17, fontWeight:700, color:isSel?"#fff":"#0F172A", lineHeight:1 }}>{d.date}</span>
                             <span style={{ fontSize:9, color:isSel?"#BFDBFE":"#94A3B8" }}>{d.month}</span>
@@ -430,34 +492,53 @@ export default function UserPage() {
 
                   <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:"#64748B", margin:"0 0 10px" }}>Step 2 — Select Time</p>
                   
-                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:20 }}>
-                    {masterSlots.map(ms => {
-                      const isSel = selectedMaster?.id === ms.id;
-                      const isDeleted = ms.isActive === false; // Define deleted slots
-                      
-                      return (
-                        <button
-                          key={ms.id}
-                          disabled={isDeleted}
-                          onClick={() => setSelectedMaster(isSel ? null : ms)}
-                          style={{
-                            padding:"10px 6px", borderRadius:10, fontSize:11, fontWeight:600, 
-                            textAlign:"center", whiteSpace:"normal", wordBreak:"break-word", 
-                            lineHeight:1.3, cursor: isDeleted ? "not-allowed" : "pointer",
-                            transition:"all 0.15s", outline:"none",
-                            // Style for selected vs unselected vs deleted
-                            border: isSel ? "1.5px solid #2563EB" : "1.5px solid #E2E8F0",
-                            color: isDeleted ? "#94A3B8" : (isSel ? "#fff" : "#374151"),
-                            background: isDeleted 
-                              ? "linear-gradient(to top right, transparent 48%, #94A3B8 48%, #94A3B8 52%, transparent 52%), #F1F5F9" 
-                              : (isSel ? "#2563EB" : "#fff")
-                          }}
-                        >
-                          {ms.timeRange}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {/* ✅ DYNAMIC RENDER: Matches exact logic of Advisor Dashboard */}
+                  {!hasShift ? (
+                    <div style={{ padding:"12px", background:"#F8FAFC", borderRadius:8, fontSize:13, color:"#64748B", textAlign:"center", marginBottom:20 }}>
+                      This consultant has not set their shift timings yet.
+                    </div>
+                  ) : (
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:20 }}>
+                      {hourlySlotTimes.map(slotStart => {
+                        // Check if this specific date + time combination is booked
+                        const isBooked = bookedSlotSet.has(`${selectedDay.iso}|${slotStart}`); 
+                        
+                        // Generate identical label: e.g., "11:00 AM - 12:00 PM"
+                        const [h, m] = slotStart.split(':').map(Number);
+                        const endSlotStr = `${String(h + 1).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                        const label = `${fmt24to12(slotStart)} - ${fmt24to12(endSlotStr)}`;
+
+                        // Resolve Master ID if available in DB, fallback to 1
+                        const matchedMaster = masterSlots.find(m => m.timeRange === label || m.timeRange.replace(/\s/g,'').toLowerCase() === label.replace(/\s/g,'').toLowerCase());
+                        const resolvedMasterId = matchedMaster ? matchedMaster.id : 1;
+
+                        const isSel = selectedSlot?.start24h === slotStart;
+
+                        return (
+                          <button
+                            key={slotStart}
+                            disabled={isBooked}
+                            title={isBooked ? "This slot is already booked" : "Available"}
+                            onClick={() => setSelectedSlot(isSel ? null : { start24h: slotStart, label, masterId: resolvedMasterId })}
+                            style={{
+                              padding:"10px 6px", borderRadius:10, fontSize:11, fontWeight:600, 
+                              textAlign:"center", whiteSpace:"normal", wordBreak:"break-word", 
+                              lineHeight:1.3, cursor: isBooked ? "not-allowed" : "pointer",
+                              transition:"all 0.15s", outline:"none",
+                              
+                              border: isSel ? "1.5px solid #2563EB" : (isBooked ? "1.5px solid #E2E8F0" : "1.5px solid #CBD5E1"),
+                              color: isBooked ? "#94A3B8" : (isSel ? "#fff" : "#1E293B"),
+                              background: isBooked ? "#F1F5F9" : (isSel ? "#2563EB" : "#ffffff"),
+                              textDecoration: isBooked ? "line-through" : "none",
+                              opacity: isBooked ? 0.75 : 1
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:"#64748B", margin:"0 0 8px" }}>Meeting Mode</p>
                   <div style={{ display:"flex", gap:10, marginBottom:20 }}>
@@ -471,14 +552,14 @@ export default function UserPage() {
                   <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:"#64748B", margin:"0 0 8px" }}>Notes (optional)</p>
                   <textarea value={userNotes} onChange={e => setUserNotes(e.target.value)} placeholder="What would you like to discuss?" rows={2} style={{ width:"100%", padding:"10px 14px", border:"1.5px solid #E2E8F0", borderRadius:10, fontSize:13, color:"#0F172A", resize:"none", outline:"none", marginBottom:16, boxSizing:"border-box" }} />
 
-                  {selectedMaster && (
+                  {selectedSlot && (
                     <div style={{ background:"#EFF6FF", border:"1.5px solid #BFDBFE", borderRadius:10, padding:"12px 16px", fontSize:13, color:"#1E40AF", fontWeight:600, marginBottom:14, textAlign:"center" }}>
-                      📅 {selectedDay.date} {selectedDay.month} &nbsp;·&nbsp; 🕐 {selectedMaster.timeRange} &nbsp;·&nbsp; {meetingMode === "ONLINE" ? "💻 Online" : "🏢 Offline"} &nbsp;·&nbsp; ₹{selectedConsultant.fee.toLocaleString()}
+                      📅 {selectedDay.date} {selectedDay.month} &nbsp;·&nbsp; 🕐 {selectedSlot.label} &nbsp;·&nbsp; {meetingMode === "ONLINE" ? "💻 Online" : "🏢 Offline"} &nbsp;·&nbsp; ₹{selectedConsultant.fee.toLocaleString()}
                     </div>
                   )}
 
-                  <button disabled={!selectedMaster || confirming} onClick={handleConfirm} style={{ width:"100%", padding:"14px", borderRadius:12, border:"none", background:(!selectedMaster||confirming)?"#E2E8F0":"linear-gradient(135deg,#2563EB,#1D4ED8)", color:(!selectedMaster||confirming)?"#94A3B8":"#fff", fontSize:14, fontWeight:700, cursor:(!selectedMaster||confirming)?"not-allowed":"pointer" }}>
-                    {confirming ? "Booking…" : selectedMaster ? `Confirm & Pay ₹${selectedConsultant.fee.toLocaleString()}` : "Select a Date and Time to Continue"}
+                  <button disabled={!selectedSlot || confirming} onClick={handleConfirm} style={{ width:"100%", padding:"14px", borderRadius:12, border:"none", background:(!selectedSlot||confirming)?"#E2E8F0":"linear-gradient(135deg,#2563EB,#1D4ED8)", color:(!selectedSlot||confirming)?"#94A3B8":"#fff", fontSize:14, fontWeight:700, cursor:(!selectedSlot||confirming)?"not-allowed":"pointer" }}>
+                    {confirming ? "Booking…" : selectedSlot ? `Confirm & Pay ₹${selectedConsultant.fee.toLocaleString()}` : "Select a Date and Time to Continue"}
                   </button>
                 </>
               )}

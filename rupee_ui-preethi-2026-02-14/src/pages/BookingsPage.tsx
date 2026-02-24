@@ -132,19 +132,45 @@ export default function MySlotsPage() {
     return stored ? Number(stored) : 0;
   };
 
-  const mapSlot = (s: any): Slot => ({
-    id: s.id,
-    slotDate: s.slotDate || s.date || "",
-    slotTime: (s.slotTime || s.time || "").substring(0, 5),
-    slotEndTime: s.slotEndTime
-      ? s.slotEndTime.substring(0, 5)
-      : s.endTime
-      ? s.endTime.substring(0, 5)
-      : undefined,
-    durationMinutes: Number(s.durationMinutes || s.duration || 60),
-    isBooked: s.isBooked ?? s.booked ?? false,
-    consultantId: s.consultantId || s.consultant?.id || 0,
-  });
+  const mapSlot = (s: any): Slot => {
+    // --- NEW ADDITIONS START: Sync Java MasterTimeSlot format smoothly ---
+    // Extract properties cleanly so we do not break any original logic below
+    if (!s.slotTime && s.masterTimeSlot?.timeRange) {
+      const parts = s.masterTimeSlot.timeRange.split("-");
+      if (parts.length === 2) {
+        const convertTo24 = (t: string) => {
+          const m = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (m) {
+            let h = Number(m[1]);
+            if (m[3].toUpperCase() === "PM" && h !== 12) h += 12;
+            if (m[3].toUpperCase() === "AM" && h === 12) h = 0;
+            return `${String(h).padStart(2, "0")}:${m[2]}`;
+          }
+          return t;
+        };
+        s.slotTime = convertTo24(parts[0].trim());
+        s.slotEndTime = convertTo24(parts[1].trim());
+      }
+    }
+    if (s.status === 'BOOKED' || s.status === 'UNAVAILABLE') {
+      s.isBooked = true;
+    }
+    // --- NEW ADDITIONS END ---
+
+    return {
+      id: s.id,
+      slotDate: s.slotDate || s.date || "",
+      slotTime: (s.slotTime || s.time || "").substring(0, 5),
+      slotEndTime: s.slotEndTime
+        ? s.slotEndTime.substring(0, 5)
+        : s.endTime
+        ? s.endTime.substring(0, 5)
+        : undefined,
+      durationMinutes: Number(s.durationMinutes || s.duration || 60),
+      isBooked: s.isBooked ?? s.booked ?? false,
+      consultantId: s.consultantId || s.consultant?.id || 0,
+    };
+  };
 
   const loadShiftTimings = async (consultantId: number) => {
     try {

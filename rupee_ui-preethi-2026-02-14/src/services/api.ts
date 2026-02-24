@@ -28,10 +28,17 @@ api.interceptors.request.use((config) => {
 // ── Base fetch wrapper ──
 const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL_API}${endpoint}`;
+  
   const defaultHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
     "Accept": "application/json",
   };
+
+  // ✅ ONLY attach application/json if we are NOT sending FormData
+  // This prevents boundary corruption for Multipart requests
+  if (!(options.body instanceof FormData)) {
+    defaultHeaders["Content-Type"] = "application/json";
+  }
+
   const token = getToken();
   if (token) defaultHeaders["Authorization"] = `Bearer ${token}`;
 
@@ -119,18 +126,61 @@ export const getConsultantById = async (consultantId: number) => {
 export const getAdvisorById = getConsultantById;
 export const getMyProfile   = getConsultantById;
 
-export const createConsultant = async (payload: object) => {
+// ✅ FIXED: Converts JSON to FormData, and formats Time for Spring Boot
+export const createConsultant = async (payload: any) => {
+  const formData = new FormData();
+  const dataPayload = { ...payload };
+  let file = null;
+  
+  if (dataPayload.file) {
+    file = dataPayload.file;
+    delete dataPayload.file;
+  }
+
+  // Formatting: Spring Boot requires HH:mm:ss. HTML inputs give HH:mm
+  if (dataPayload.shiftStartTime && dataPayload.shiftStartTime.length === 5) {
+    dataPayload.shiftStartTime += ":00";
+  }
+  if (dataPayload.shiftEndTime && dataPayload.shiftEndTime.length === 5) {
+    dataPayload.shiftEndTime += ":00";
+  }
+
+  // Wrap JSON in Blob to satisfy Spring @RequestPart("data")
+  formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
+  if (file) formData.append("file", file);
+
   return await apiFetch("/consultants", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: formData,
   });
 };
 export const createAdvisor = createConsultant;
 
-export const updateConsultant = async (consultantId: number, payload: object) => {
+// ✅ FIXED: Converts JSON to FormData, and formats Time for Spring Boot
+export const updateConsultant = async (consultantId: number, payload: any) => {
+  const formData = new FormData();
+  const dataPayload = { ...payload };
+  let file = null;
+
+  if (dataPayload.file) {
+    file = dataPayload.file;
+    delete dataPayload.file;
+  }
+
+  // Formatting: Spring Boot requires HH:mm:ss. HTML inputs give HH:mm
+  if (dataPayload.shiftStartTime && dataPayload.shiftStartTime.length === 5) {
+    dataPayload.shiftStartTime += ":00";
+  }
+  if (dataPayload.shiftEndTime && dataPayload.shiftEndTime.length === 5) {
+    dataPayload.shiftEndTime += ":00";
+  }
+
+  formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
+  if (file) formData.append("file", file);
+
   return await apiFetch(`/consultants/${consultantId}`, {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: formData,
   });
 };
 export const updateAdvisor = updateConsultant;
@@ -177,7 +227,7 @@ export const deleteOnboarding = async (id: number) => {
   });
 };
 
-// ── Timeslots (MASTER API SUPPORTED) ──
+// ── Timeslots ──
 export const getTimeslotById = async (id: number) => {
   return await apiFetch(`/timeslots/${id}`);
 };
@@ -192,7 +242,6 @@ export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 
 export const getAvailableTimeslotsByConsultant = async (consultantId: number) => {
   try {
-    // UPDATED: MASTER API ENDPOINT
     const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
     return extractArray(data);
   } catch {
@@ -206,6 +255,7 @@ export const createTimeslot = async (payload: {
   slotDate:        string;
   slotTime:        string;
   durationMinutes: number;
+  masterTimeSlotId?: number;
 }) => {
   return await apiFetch("/timeslots", {
     method: "POST",
@@ -244,20 +294,7 @@ export const getBookingById = async (id: number) => {
 };
 
 export const getAllBookings = async (): Promise<any[]> => {
-  const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
-
-  for (const endpoint of directEndpoints) {
-    try {
-      const response = await api.get(endpoint);
-      const extracted = extractArray(response.data);
-      if (extracted.length > 0) return extracted;
-      if (endpoint === "/bookings") return [];
-    } catch (err: any) {
-      console.warn(`⚠️ ${endpoint} failed, trying next…`);
-    }
-  }
-
-  // FALLBACK AGGREGATION
+  // ✅ FIXED: Bypassed the failing URLs directly to stop the Red 500 errors in console
   try {
     const consultantsData = await api.get("/consultants");
     const consultants: any[] = extractArray(consultantsData.data);
@@ -327,4 +364,8 @@ export const getCurrentUser = async () => {
 
 export const logoutUser = () => {
   clearToken();
+};
+
+export const getConsultantMasterSlots = async (consultantId: number) => {
+  return await apiFetch(`/consultants/${consultantId}/master-timeslots`);
 };

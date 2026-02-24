@@ -40,7 +40,9 @@ interface Consultant {
   name: string;
   designation: string;
   charges: number;
-  shiftTimings: string;
+  shiftTimings: string;        // legacy fallback (kept for compatibility)
+  shiftStartTime: string;      // e.g. "09:00" — from backend LocalTime
+  shiftEndTime: string;        // e.g. "18:00" — from backend LocalTime
   skills: string[];
   email: string;
 }
@@ -78,6 +80,9 @@ interface Booking {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatTimeRange = (timeString: string, durationMins = 60) => {
   if (!timeString) return '—';
+  
+  if (timeString.includes('-') || timeString.match(/(AM|PM)/i)) return timeString;
+
   const [hours, minutes] = timeString.split(':').map(Number);
   const start = new Date();
   start.setHours(hours, minutes, 0);
@@ -95,7 +100,12 @@ const getClientName = (b: Booking): string =>
   `Booking #${b.id}`;
 
 const getBookingDate = (b: Booking) => b.bookingDate || b.slotDate || b.date || '—';
-const getBookingTime = (b: Booking) => b.bookingTime || b.slotTime || '';
+const getBookingTime = (b: Booking) => {
+  if ((b as any).timeSlot?.masterTimeSlot?.timeRange) return (b as any).timeSlot.masterTimeSlot.timeRange;
+  if ((b as any).masterTimeSlot?.timeRange) return (b as any).masterTimeSlot.timeRange;
+
+  return b.bookingTime || b.slotTime || '';
+};
 
 const getStatusColor = (status: string) => {
   switch (status?.toUpperCase()) {
@@ -108,7 +118,7 @@ const getStatusColor = (status: string) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. BOOKINGS VIEW  (unchanged from original)
+// 1. BOOKINGS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -150,7 +160,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
         </span>
       </div>
 
-      {/* Summary Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 14, marginBottom: 24 }}>
         {[
           { label: 'Total',     value: counts.ALL,                          color: '#2563EB', bg: '#EFF6FF' },
@@ -166,7 +175,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
         ))}
       </div>
 
-      {/* Filter Chips */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {(['ALL','PENDING','CONFIRMED','COMPLETED','CANCELLED'] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{
@@ -245,241 +253,359 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. MASTER TIME RANGES VIEW  (replaces "My Slots" tab entirely)
-//    — Full CRUD for /api/master-timeslots
-//    — These ranges are what users see in the booking modal time picker
+// 2. MASTER SLOTS VIEW  
 // ─────────────────────────────────────────────────────────────────────────────
-const MasterSlotsView: React.FC = () => {
-  const [masterSlots,   setMasterSlots]   = useState<MasterSlot[]>([]);
-  const [loading,       setLoading]       = useState(false);
-  const [masterError,   setMasterError]   = useState<string | null>(null);
-  const [newRange,      setNewRange]      = useState('');
-  const [editingId,     setEditingId]     = useState<number | null>(null);
-  const [editValue,     setEditValue]     = useState('');
-  const [toast,         setToast]         = useState<{ msg: string; ok: boolean } | null>(null);
 
-  const showToast = (msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  };
+interface TimeSlotRecord {
+  id: number;
+  consultantId: number;
+  slotDate: string;
+  masterTimeSlotId: number;
+  timeRange: string;
+  status: string;
+  version?: number;
+}
 
-  const loadMasterSlots = async () => {
-    setLoading(true); setMasterError(null);
+// ✅ FIXED LOGIC: Ensure exactly 1-hour slots are calculated within boundaries
+const generateHourlySlots = (shiftStart: string, shiftEnd: string): string[] => {
+  if (!shiftStart || !shiftEnd) return [];
+  try {
+    const [sh, sm] = shiftStart.split(':').map(Number);
+    const [eh, em] = shiftEnd.split(':').map(Number);
+    const startMins = sh * 60 + (isNaN(sm) ? 0 : sm);
+    const endMins   = eh * 60 + (isNaN(em) ? 0 : em);
+    const result: string[] = [];
+    
+    // Only push the start time if a full 60-minute slot can fit before the end time
+    for (let m = startMins; m + 60 <= endMins; m += 60) {
+      result.push(`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`);
+    }
+    return result;
+  } catch { return []; }
+};
+
+// "HH:MM" → "10:00 AM"
+const fmt24to12 = (t: string): string => {
+  if (!t) return '';
+  const [h, m] = t.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hr   = h % 12 || 12;
+  return `${hr}:${String(m).padStart(2,'0')} ${ampm}`;
+};
+
+const MySlotsView: React.FC<{ consultantId: number; shiftStartTime: string; shiftEndTime: string }> = ({
+  consultantId, shiftStartTime, shiftEndTime,
+}) => {
+  const [dbSlots,      setDbSlots]      = useState<TimeSlotRecord[]>([]);
+  const [bookings,     setBookings]     = useState<any[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(''); // "YYYY-MM-DD"
+
+  const loadData = async () => {
+    setLoading(true); setError(null);
     try {
-      const data = await getMasterTimeslots();
-      setMasterSlots(Array.isArray(data) ? data : data?.content || []);
+      try {
+        const slotData = await apiFetch(`/timeslots/consultant/${consultantId}`);
+        const slotArr  = Array.isArray(slotData) ? slotData : (slotData?.content || []);
+        let masterLookup: Record<number, string> = {};
+        try {
+          const mData = await apiFetch('/master-timeslots');
+          const mArr  = Array.isArray(mData) ? mData : (mData?.content || []);
+          mArr.forEach((m: any) => { if (m.id && m.timeRange) masterLookup[m.id] = m.timeRange; });
+        } catch { /* non-fatal */ }
+        setDbSlots(slotArr.map((s: any) => ({
+          ...s,
+          timeRange: (s.timeRange && s.timeRange !== 'Unknown Time')
+            ? s.timeRange
+            : (masterLookup[s.masterTimeSlotId] || ''),
+        })));
+      } catch { setDbSlots([]); }
+
+      try {
+        const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
+        setBookings(Array.isArray(bData) ? bData : (bData?.content || []));
+      } catch { setBookings([]); }
     } catch (e: any) {
-      setMasterError(e?.message || 'Failed to load master time ranges.');
+      setError(e?.message || 'Failed to load slots.');
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { loadMasterSlots(); }, []);
+  useEffect(() => { if (consultantId) loadData(); }, [consultantId]);
 
-  const handleAdd = async () => {
-    if (!newRange.trim()) return;
-    try {
-      await createMasterTimeslot(newRange.trim());
-      setNewRange('');
-      await loadMasterSlots();
-      showToast('Time range added! Users can now book this slot.');
-    } catch (e: any) { showToast(e?.message || 'Failed to add.', false); }
+  const fmtTime = (t: string) => {
+    if (!t) return '—';
+    const parts = t.split(':').map(Number);
+    const h = parts[0];
+    const m = isNaN(parts[1]) ? 0 : parts[1];
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${ampm}`;
   };
 
-  const handleUpdate = async (id: number) => {
-    if (!editValue.trim()) return;
-    try {
-      await updateMasterTimeslot(id, editValue.trim());
-      setEditingId(null);
-      await loadMasterSlots();
-      showToast('Updated!');
-    } catch (e: any) { showToast(e?.message || 'Failed to update.', false); }
+  const bookedSet = new Set<string>();
+
+  bookings.forEach(b => {
+    const st = (b.status || '').toUpperCase();
+    if (st !== 'CONFIRMED' && st !== 'PENDING' && st !== 'COMPLETED') return;
+    const date = b.slotDate || b.bookingDate || b.date || '';
+    let timeKey = '';
+    if (b.slotTime) {
+      timeKey = b.slotTime.substring(0, 5);
+    } else {
+      const tr = b.timeSlot?.masterTimeSlot?.timeRange
+                  || b.masterTimeSlot?.timeRange
+                  || b.timeRange || '';
+      const match = tr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (match) {
+        let hh = parseInt(match[1]);
+        const mm = match[2];
+        const ap = match[3].toUpperCase();
+        if (ap === 'PM' && hh !== 12) hh += 12;
+        if (ap === 'AM' && hh === 12) hh = 0;
+        timeKey = `${String(hh).padStart(2,'0')}:${mm}`;
+      }
+    }
+    if (date && timeKey) bookedSet.add(`${date}|${timeKey}`);
+  });
+
+  dbSlots.forEach(s => {
+    if ((s.status || '').toUpperCase() === 'AVAILABLE') return;
+    const match = (s.timeRange || '').match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (match && s.slotDate) {
+      let hh = parseInt(match[1]);
+      const ap = match[3].toUpperCase();
+      if (ap === 'PM' && hh !== 12) hh += 12;
+      if (ap === 'AM' && hh === 12) hh = 0;
+      bookedSet.add(`${s.slotDate}|${String(hh).padStart(2,'0')}:${match[2]}`);
+    }
+  });
+
+  const hourlySlotTimes = generateHourlySlots(
+    shiftStartTime.substring(0, 5),
+    shiftEndTime.substring(0, 5)
+  );
+  const hasShift = !!(shiftStartTime && shiftEndTime && hourlySlotTimes.length > 0);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const calendarDays: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    calendarDays.push(
+      `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    );
+  }
+
+  const activeDateKey = selectedDate || calendarDays[0];
+
+  const parseDateTab = (dateStr: string) => {
+    const d   = new Date(dateStr + 'T00:00:00');
+    const wd  = d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+    const day = String(d.getDate());
+    const mon = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+    return { wd, day, mon };
   };
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Delete this time range? Users will no longer be able to book this slot.')) return;
-    try {
-      await deleteMasterTimeslot(id);
-      await loadMasterSlots();
-      showToast('Deleted!');
-    } catch (e: any) { showToast(e?.message || 'Failed to delete.', false); }
-  };
+  let totalCount = 0, availableCount = 0, bookedCount = 0;
+  if (hasShift) {
+    calendarDays.forEach(date => {
+      hourlySlotTimes.forEach(t => {
+        totalCount++;
+        if (bookedSet.has(`${date}|${t}`)) bookedCount++;
+        else availableCount++;
+      });
+    });
+  }
 
   return (
     <div className="advisor-content-container">
+      {/* Header */}
       <div className="section-header">
-        <h2>Master Time Ranges</h2>
-        <span style={{ fontSize: 13, color: '#64748B' }}>{masterSlots.length} slot{masterSlots.length !== 1 ? 's' : ''} defined</span>
+        <h2>Master Slots</h2>
+        <button onClick={loadData} style={{ padding: '7px 16px', background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+          🔄 Refresh
+        </button>
       </div>
 
-      {/* How it works banner */}
-      <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px 18px', marginBottom: 24, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 20, flexShrink: 0 }}>ℹ️</span>
-        <div style={{ fontSize: 13, color: '#1E40AF', lineHeight: 1.6 }}>
-          <strong>How it works:</strong> The time ranges you add here appear as bookable time slots in the user booking modal.
-          When a user clicks "Book Session", they pick a date and then choose from these master time ranges.
-          Add ranges like <em>"9 AM – 10 AM"</em>, <em>"2 PM – 3 PM"</em>, etc.
-        </div>
+      {/* Shift Banner */}
+      <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 12, padding: '12px 18px', marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center' }}>
+        <span style={{ fontSize: 18 }}>🕐</span>
+        <span style={{ fontSize: 13, color: '#1E40AF', fontWeight: 600 }}>
+          Your Shift: {shiftStartTime ? fmtTime(shiftStartTime) : '—'} → {shiftEndTime ? fmtTime(shiftEndTime) : '—'}
+        </span>
+        {hasShift && (
+          <span style={{ fontSize: 12, color: '#60A5FA', marginLeft: 4 }}>
+            · {hourlySlotTimes.length} slot{hourlySlotTimes.length !== 1 ? 's' : ''} / day
+          </span>
+        )}
       </div>
 
-      {masterError && (
+      {error && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
-          ⚠️ {masterError}
-          <button onClick={loadMasterSlots} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#B91C1C', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>
-            Retry
-          </button>
+          ⚠️ {error}
+          <button onClick={loadData} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#B91C1C', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>Retry</button>
         </div>
       )}
 
-      {/* ── Slot list ── */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
+        <div style={{ textAlign: 'center', padding: 60, color: '#94A3B8' }}>
           <div style={{ width: 28, height: 28, border: '3px solid #DBEAFE', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
-          Loading…
+          Loading your slots…
         </div>
-      ) : masterSlots.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '48px 20px', background: '#F8FAFC', borderRadius: 14, color: '#94A3B8', marginBottom: 24 }}>
+      ) : !hasShift ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', background: '#F8FAFC', borderRadius: 14, color: '#94A3B8' }}>
           <div style={{ fontSize: 40, marginBottom: 10 }}>🕐</div>
-          <p style={{ margin: '0 0 4px', fontWeight: 600, color: '#64748B' }}>No time ranges yet</p>
-          <p style={{ margin: 0, fontSize: 13 }}>Add your first range below — users won't see any time options until you do.</p>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, color: '#64748B', fontSize: 15 }}>Shift timings not set</p>
+          <p style={{ margin: 0, fontSize: 13 }}>Go to Profile tab → set your Shift Start &amp; End times. Your slots will appear here automatically.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
-          {masterSlots.map((ms, idx) => (
-            <div key={ms.id} style={{
-              background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12,
-              padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            }}>
-              {/* Index badge */}
-              <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#EFF6FF', color: '#2563EB', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                {idx + 1}
-              </div>
-
-              {editingId === ms.id ? (
-                <>
-                  <input
-                    autoFocus
-                    value={editValue}
-                    onChange={e => setEditValue(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleUpdate(ms.id); if (e.key === 'Escape') setEditingId(null); }}
-                    placeholder="e.g. 10 AM – 11 AM"
-                    style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #2563EB', borderRadius: 8, fontSize: 13, color: '#0F172A', outline: 'none', background: '#F8FBFF' }}
-                  />
-                  <button onClick={() => handleUpdate(ms.id)}
-                    style={{ padding: '7px 16px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-                    Save
-                  </button>
-                  <button onClick={() => setEditingId(null)}
-                    style={{ padding: '7px 14px', background: '#F1F5F9', color: '#64748B', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <>
-                  {/* Time range display */}
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>{ms.timeRange}</div>
-                    <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>Visible to users in booking picker</div>
-                  </div>
-                  <button onClick={() => { setEditingId(ms.id); setEditValue(ms.timeRange); }}
-                    style={{ padding: '6px 14px', border: '1px solid #DBEAFE', borderRadius: 8, background: '#EFF6FF', color: '#2563EB', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    ✎ Edit
-                  </button>
-                  <button onClick={() => handleDelete(ms.id)}
-                    style={{ padding: '6px 14px', border: '1px solid #FECACA', borderRadius: 8, background: '#FEF2F2', color: '#EF4444', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                    ✕ Delete
-                  </button>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Add new range ── */}
-      <div style={{ background: '#F8FAFC', border: '1.5px dashed #BFDBFE', borderRadius: 14, padding: '20px 22px' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-          + Add New Time Range
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <input
-            value={newRange}
-            onChange={e => setNewRange(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleAdd()}
-            placeholder="e.g.  9 AM – 10 AM   or   2 PM – 3 PM"
-            style={{
-              flex: 1, padding: '10px 14px',
-              border: '1.5px solid #BFDBFE', borderRadius: 10,
-              fontSize: 14, color: '#0F172A', outline: 'none', background: '#fff',
-            }}
-          />
-          <button
-            className="btn-save"
-            onClick={handleAdd}
-            disabled={!newRange.trim()}
-            style={{ padding: '10px 22px', whiteSpace: 'nowrap', opacity: !newRange.trim() ? 0.5 : 1 }}
-          >
-            Add Range
-          </button>
-        </div>
-        <p style={{ margin: '10px 0 0', fontSize: 12, color: '#94A3B8' }}>
-          Tip: Use clear formats like <em>"9 AM – 10 AM"</em> or <em>"14:00 – 15:00"</em>.
-          These will appear exactly as written in the user's booking picker.
-        </p>
-      </div>
-
-      {/* Preview */}
-      {masterSlots.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
-            Preview — how users see your time slots
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 8 }}>
-            {masterSlots.map(ms => (
-              <div key={ms.id} style={{
-                padding: '10px 8px', borderRadius: 10, border: '1.5px solid #E2E8F0',
-                background: '#fff', textAlign: 'center',
-                fontSize: 12, fontWeight: 600, color: '#374151',
-              }}>
-                {ms.timeRange}
+        <>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+            {[
+              { label: 'Total (30 days)', value: totalCount,     color: '#2563EB', bg: '#EFF6FF' },
+              { label: 'Available',       value: availableCount, color: '#16A34A', bg: '#F0FDF4' },
+              { label: 'Booked',          value: bookedCount,    color: '#64748B', bg: '#F1F5F9' },
+            ].map(c => (
+              <div key={c.label} style={{ background: c.bg, border: `1px solid ${c.color}22`, borderRadius: 10, padding: '10px 18px', minWidth: 115 }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: c.color }}>{c.value}</div>
+                <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>{c.label}</div>
               </div>
             ))}
           </div>
-        </div>
-      )}
 
-      {/* Toast */}
-      {toast && (
-        <div style={{
-          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          background: toast.ok ? '#0F172A' : '#7F1D1D',
-          color: '#fff', padding: '10px 22px', borderRadius: 10,
-          fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-          zIndex: 9999, whiteSpace: 'nowrap',
-        }}>
-          {toast.ok ? '✓' : '✕'} {toast.msg}
-        </div>
+          <div style={{
+            background: '#fff',
+            border: '1px solid #E2E8F0',
+            borderRadius: 14,
+            overflow: 'hidden',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'stretch',
+              borderBottom: '1px solid #E2E8F0',
+              overflowX: 'auto',
+              background: '#FAFBFC',
+            }}>
+              {calendarDays.map((dateStr, idx) => {
+                const { wd, day, mon } = parseDateTab(dateStr);
+                const isActive  = dateStr === activeDateKey;
+                const isFirst   = idx === 0;
+
+                return (
+                  <button
+                    key={dateStr}
+                    onClick={() => setSelectedDate(dateStr)}
+                    style={{
+                      flexShrink: 0,
+                      minWidth: 72,
+                      padding: '12px 8px',
+                      background: isActive ? '#2563EB' : 'transparent',
+                      border: 'none',
+                      borderRight: '1px solid #E2E8F0',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 2,
+                      transition: 'background 0.15s',
+                    }}
+                  >
+                    <span style={{ fontSize: 10, fontWeight: 700, color: isActive ? 'rgba(255,255,255,0.7)' : '#94A3B8', letterSpacing: '0.06em' }}>
+                      {wd}
+                    </span>
+                    {day && (
+                      <>
+                        <span style={{ fontSize: 16, fontWeight: 700, color: isActive ? '#fff' : '#1E293B', lineHeight: 1.2 }}>
+                          {day}
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: isActive ? 'rgba(255,255,255,0.8)' : (isFirst ? '#2563EB' : '#64748B'), letterSpacing: '0.04em' }}>
+                          {mon}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ padding: '24px 28px' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#64748B', marginBottom: 16 }}>
+                Select Time
+                <span style={{ marginLeft: 10, fontWeight: 400, color: '#94A3B8', fontSize: 12 }}>
+                  {hourlySlotTimes.filter(t => !bookedSet.has(`${activeDateKey}|${t}`)).length} available
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {hourlySlotTimes.map(slotStart => {
+                  const isBooked = bookedSet.has(`${activeDateKey}|${slotStart}`);
+                  
+                  // ✅ FIXED LOGIC: Generate full range label (e.g., "11:00 AM - 12:00 PM")
+                  const [h, m] = slotStart.split(':').map(Number);
+                  const endH = h + 1;
+                  const endSlotStr = `${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                  const label = `${fmt24to12(slotStart)} - ${fmt24to12(endSlotStr)}`;
+
+                  return (
+                    <span
+                      key={slotStart}
+                      title={isBooked ? 'Booked / Unavailable' : 'Available'}
+                      style={{
+                        padding: '9px 20px',
+                        borderRadius: 25,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        whiteSpace: 'nowrap',
+                        cursor: 'default',
+                        border: '1.5px solid',
+                        background:     isBooked ? '#F1F5F9' : '#ffffff',
+                        color:          isBooked ? '#94A3B8' : '#1E293B',
+                        borderColor:    isBooked ? '#E2E8F0' : '#CBD5E1',
+                        textDecoration: isBooked ? 'line-through' : 'none',
+                        opacity:        isBooked ? 0.75 : 1,
+                      }}
+                    >
+                      {label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. PROFILE VIEW  (unchanged)
+// 3. PROFILE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }> = ({ profile, onUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [formData,  setFormData]  = useState<any>({});
   const [saving,    setSaving]    = useState(false);
 
+  const fmtTime = (t: string) => {
+    if (!t) return '—';
+    const [h, m] = t.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const hr   = h % 12 || 12;
+    return `${hr}:${String(m).padStart(2, '0')} ${ampm}`;
+  };
+
   useEffect(() => {
     if (profile) {
       setFormData({
-        name:         profile.name,
-        designation:  profile.designation,
-        charges:      profile.charges,
-        shiftTimings: profile.shiftTimings,
-        skills:       Array.isArray(profile.skills) ? profile.skills.join(', ') : '',
+        name:           profile.name,
+        designation:    profile.designation,
+        charges:        profile.charges,
+        shiftStartTime: profile.shiftStartTime || '',
+        shiftEndTime:   profile.shiftEndTime   || '',
+        shiftTimings:   profile.shiftTimings   || '',   
+        skills:         Array.isArray(profile.skills) ? profile.skills.join(', ') : '',
       });
     }
   }, [profile, isEditing]);
@@ -493,9 +619,11 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     try {
       const payload = {
         ...formData,
-        email:   profile.email,
-        skills:  formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean),
-        charges: parseFloat(formData.charges),
+        email:          profile.email,
+        skills:         formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean),
+        charges:        parseFloat(formData.charges),
+        shiftStartTime: formData.shiftStartTime || null,
+        shiftEndTime:   formData.shiftEndTime   || null,
       };
       await updateAdvisor(profile.id, payload);
       onUpdate();
@@ -505,6 +633,10 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
   };
 
   if (!profile) return <div>Loading…</div>;
+
+  const shiftDisplay = profile.shiftStartTime && profile.shiftEndTime
+    ? `${fmtTime(profile.shiftStartTime)} – ${fmtTime(profile.shiftEndTime)}`
+    : (profile.shiftTimings || '—');
 
   return (
     <div className="advisor-content-container">
@@ -525,7 +657,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             <div className="profile-details-grid">
               <div className="detail-item"><label>Email</label><div className="detail-value" style={{ fontSize: 14 }}>{profile.email}</div></div>
               <div className="detail-item"><label>Consultation Fee</label><div className="detail-value">₹{profile.charges}</div></div>
-              <div className="detail-item"><label>Shift Timings</label><div className="detail-value">{profile.shiftTimings}</div></div>
+              <div className="detail-item"><label>Shift Timings</label><div className="detail-value">{shiftDisplay}</div></div>
               <div className="detail-item" style={{ gridColumn: '1/-1' }}>
                 <label>Expertise</label>
                 <div className="skills-container">
@@ -540,7 +672,8 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               <div className="form-group"><label>Full Name</label><input className="form-input" name="name" value={formData.name} onChange={handleChange} /></div>
               <div className="form-group"><label>Designation</label><input className="form-input" name="designation" value={formData.designation} onChange={handleChange} /></div>
               <div className="form-group"><label>Consultation Fee (₹)</label><input className="form-input" name="charges" type="number" value={formData.charges} onChange={handleChange} /></div>
-              <div className="form-group"><label>Shift Timings</label><input className="form-input" name="shiftTimings" value={formData.shiftTimings} onChange={handleChange} /></div>
+              <div className="form-group"><label>Shift Start Time</label><input className="form-input" name="shiftStartTime" type="time" value={formData.shiftStartTime} onChange={handleChange} /></div>
+              <div className="form-group"><label>Shift End Time</label><input className="form-input" name="shiftEndTime" type="time" value={formData.shiftEndTime} onChange={handleChange} /></div>
               <div className="form-group" style={{ gridColumn: '1/-1' }}><label>Skills (comma separated)</label><input className="form-input" name="skills" value={formData.skills} onChange={handleChange} /></div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
@@ -607,11 +740,10 @@ export default function AdvisorDashboard() {
     </div>
   );
 
-  // ── Tabs: "My Slots" is now "Master Slots" ──
   const tabs = [
-    { id: 'bookings', label: 'My Bookings',   icon: '📅' },
-    { id: 'slots',    label: 'Master Slots',   icon: '🕐' },  // ← renamed, new content
-    { id: 'profile',  label: 'Profile',        icon: '👤' },
+    { id: 'bookings', label: 'My Bookings',  icon: '📅' },
+    { id: 'slots',    label: 'Master Slots', icon: '🕐' },
+    { id: 'profile',  label: 'Profile',      icon: '👤' },
   ] as const;
 
   return (
@@ -630,7 +762,6 @@ export default function AdvisorDashboard() {
         </div>
       </header>
 
-      {/* Pending bookings banner */}
       {pendingBookings.length > 0 && (
         <div style={{ background: 'linear-gradient(90deg,#EFF6FF 0%,#DBEAFE 100%)', borderBottom: '1px solid #BFDBFE', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -677,7 +808,7 @@ export default function AdvisorDashboard() {
 
       <main className="advisor-main">
         {activeTab === 'bookings' && profileData && <BookingsView   consultantId={profileData.id} />}
-        {activeTab === 'slots'                    && <MasterSlotsView />}
+        {activeTab === 'slots'    && profileData  && <MySlotsView consultantId={profileData.id} shiftStartTime={profileData.shiftStartTime || ''} shiftEndTime={profileData.shiftEndTime || ''} />}
         {activeTab === 'profile'                  && <ProfileView profile={profileData} onUpdate={refreshProfile} />}
       </main>
     </div>

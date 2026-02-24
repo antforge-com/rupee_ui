@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import '../styles/AddAdvisor.css';
-import { createAdvisor } from '../services/Addadvisor';
+// ✅ FIXED: Now importing strictly from the main api.ts file
+import { createAdvisor } from '../services/api';
 
 interface AddAdvisorProps {
   onClose: () => void;
@@ -10,10 +11,11 @@ interface AddAdvisorProps {
 const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
   const [formData, setFormData] = useState({
     name: '',
-    email: '', // ✅ New Field: Required for Login
+    email: '', 
     designation: '',
     skills: '',
-    shiftTimings: '',
+    shiftStartTime: '',
+    shiftEndTime: '',
     charges: ''
   });
 
@@ -52,10 +54,11 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
 
       const consultantData = {
         name: formData.name,
-        email: formData.email, // ✅ Sending Email to Backend
+        email: formData.email, 
         designation: formData.designation,
         charges: parseFloat(formData.charges),
-        shiftTimings: formData.shiftTimings,
+        shiftStartTime: formData.shiftStartTime || null,
+        shiftEndTime: formData.shiftEndTime || null,
         skills: skillsArray
       };
 
@@ -94,7 +97,6 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
       <div className="advisor-card">
         <div className="advisor-header">
           <h1 className="brand-title">FINADVISE</h1>
-          {/* ✅ Renamed Title */}
           <p className="brand-subtitle">ADD NEW CONSULTANT</p>
         </div>
 
@@ -110,7 +112,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             />
           </div>
 
-          {/* ✅ Email Field (Crucial for Login) */}
+          {/* Email Field */}
           <div className="form-group">
             <label>EMAIL (LOGIN ID) <span className="required">*</span></label>
             <input 
@@ -137,13 +139,22 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             />
           </div>
 
-          {/* Timings */}
-          <div className="form-group">
-            <label>SHIFT TIMINGS</label>
-            <input 
-              type="text" name="shiftTimings" placeholder="e.g. 9:00 AM - 6:00 PM" 
-              value={formData.shiftTimings} onChange={handleChange} disabled={loading}
-            />
+          {/* Shift Timings */}
+          <div className="form-row">
+            <div className="form-group half-width">
+              <label>SHIFT START TIME</label>
+              <input 
+                type="time" name="shiftStartTime" 
+                value={formData.shiftStartTime} onChange={handleChange} disabled={loading}
+              />
+            </div>
+            <div className="form-group half-width">
+              <label>SHIFT END TIME</label>
+              <input 
+                type="time" name="shiftEndTime" 
+                value={formData.shiftEndTime} onChange={handleChange} disabled={loading}
+              />
+            </div>
           </div>
 
           {/* Charges */}
@@ -159,7 +170,6 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
           <div className="form-actions">
             <button type="button" className="btn-cancel" onClick={onClose} disabled={loading}>Cancel</button>
             <button type="submit" className="btn-save" disabled={loading}>
-              {/* ✅ Renamed Button */}
               {loading ? 'Adding...' : 'Add Consultant'}
             </button>
           </div>
