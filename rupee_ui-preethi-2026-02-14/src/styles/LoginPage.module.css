@@ -17,7 +17,7 @@
   border-radius: 24px;
   padding: 48px 48px 36px;
   width: 100%;
-  max-width: 500px; /* Slightly wider to fit 3 buttons nicely */
+  max-width: 440px; /* Narrowed for a cleaner single-column look */
   box-shadow: 0 32px 80px rgba(0, 0, 0, 0.18);
   box-sizing: border-box;
 }
@@ -60,24 +60,59 @@
 .input {
   width: 100%;
   padding: 14px 16px;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1.5px solid #E2E8F0;
   font-size: 15px;
   box-sizing: border-box;
   outline: none;
   margin-bottom: 20px;
   font-family: inherit;
-  transition: border-color 0.2s, background 0.2s;
+  transition: all 0.2s ease;
   background: #fff;
   color: #0F172A;
-  -webkit-appearance: none;
 }
 
-.input:focus { border-color: #2563EB; }
+.input:focus { 
+  border-color: #2563EB; 
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+}
 
 .inputError {
   border-color: #DC2626 !important;
   background: #FFF8F8 !important;
+}
+
+/* ── Unified Login Button ── */
+.loginSubmitBtn {
+  width: 100%;
+  background: #0F172A; /* Dark professional finish */
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 16px;
+  font-weight: 700;
+  font-size: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-top: 10px;
+  margin-bottom: 24px;
+  transition: transform 0.1s, background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loginSubmitBtn:hover {
+  background: #1e293b;
+}
+
+.loginSubmitBtn:active {
+  transform: scale(0.98);
+}
+
+.loginSubmitBtn:disabled {
+  background: #94A3B8;
+  cursor: not-allowed;
 }
 
 /* ── API Error ── */
@@ -85,87 +120,13 @@
   background: #FEE2E2;
   color: #DC2626;
   border-radius: 10px;
-  padding: 10px 14px;
+  padding: 12px;
   font-size: 13px;
   font-weight: 500;
   margin-bottom: 16px;
   text-align: center;
+  border: 1px solid #FECACA;
 }
-
-/* ── Button Grid (UPDATED for 3 items) ── */
-.buttonGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr; /* Changed to 3 columns */
-  gap: 10px; /* Slightly smaller gap to fit */
-  margin-bottom: 24px;
-  margin-top: 4px;
-}
-
-/* ── User Button ── */
-.userBtn {
-  background: #0F172A;
-  color: #fff;
-  border: none;
-  border-radius: 16px;
-  padding: 16px 4px; /* Reduced side padding */
-  cursor: pointer;
-  font-family: inherit;
-  font-weight: 700;
-  font-size: 13px; /* Slightly smaller font */
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  transition: opacity 0.2s;
-  touch-action: manipulation;
-}
-
-.userBtn:hover    { opacity: 0.9; }
-.userBtn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-/* ── Admin Button ── */
-.adminBtn {
-  background: #fff;
-  color: #1E293B;
-  border: 1.5px solid #E2E8F0;
-  border-radius: 16px;
-  padding: 16px 4px;
-  cursor: pointer;
-  font-family: inherit;
-  font-weight: 700;
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  transition: background 0.2s;
-  touch-action: manipulation;
-}
-
-.adminBtn:hover    { background: #F8FAFC; }
-.adminBtn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-/* ── Advisor Button (NEW) ── */
-.advisorBtn {
-  background: #fff;
-  color: #2563EB; /* Blue text */
-  border: 1.5px solid #E2E8F0;
-  border-radius: 16px;
-  padding: 16px 4px;
-  cursor: pointer;
-  font-family: inherit;
-  font-weight: 700;
-  font-size: 13px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  transition: background 0.2s;
-  touch-action: manipulation;
-}
-
-.advisorBtn:hover    { background: #EFF6FF; border-color: #BFDBFE; }
-.advisorBtn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ── Register Text ── */
 .registerText {
@@ -179,141 +140,37 @@
   color: #2563EB;
   font-weight: 700;
   cursor: pointer;
+  margin-left: 4px;
+}
+
+.registerLink:hover {
   text-decoration: underline;
 }
 
 /* ── Terms ── */
 .terms {
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   color: #94A3B8;
   margin: 0;
+  line-height: 1.5;
 }
 
 .termsLink {
-  color: #2563EB;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-/* ── Back Button ── */
-.backBtn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: none;
   color: #64748B;
-  font-size: 14px;
   font-weight: 600;
-  font-family: inherit;
   cursor: pointer;
-  padding: 4px 0;
-  margin-bottom: 20px;
-  transition: color 0.2s;
-  touch-action: manipulation;
-}
-
-.backBtn:hover { color: #0F172A; }
-
-/* ── Change Password Screen ── */
-.changePwdTitle {
-  font-size: 20px;
-  font-weight: 700;
-  color: #0F172A;
-  margin-bottom: 8px;
-  text-align: center;
-}
-
-.changePwdSub {
-  font-size: 13px;
-  color: #64748B;
-  text-align: center;
-  margin-bottom: 28px;
-  line-height: 1.6;
-}
-
-.changePwdBtn {
-  width: 100%;
-  background: #0F172A;
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  padding: 15px;
-  font-weight: 700;
-  font-size: 15px;
-  cursor: pointer;
-  font-family: inherit;
-  margin-top: 4px;
-  margin-bottom: 16px;
-  transition: opacity 0.2s;
-  touch-action: manipulation;
-}
-
-.changePwdBtn:hover    { opacity: 0.9; }
-.changePwdBtn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-/* ── Skip Link ── */
-.skipLink {
-  text-align: center;
-  font-size: 13px;
-  color: #2563EB;
-  cursor: pointer;
-  font-weight: 600;
   text-decoration: underline;
-  display: block;
 }
 
-/* ── Password Success ── */
-.pwdSuccess {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 24px;
-  background: #F0FDF4;
-  border-radius: 14px;
-  color: #16A34A;
-  font-weight: 600;
-  font-size: 15px;
-  text-align: center;
-}
-
-.pwdSuccessIcon {
-  width: 56px;
-  height: 56px;
-  background: #DCFCE7;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26px;
-  color: #16A34A;
-  font-weight: 700;
-}
-
-/* ════════════ RESPONSIVE ════════════ */
+/* ── Responsive ── */
 @media (max-width: 480px) {
   .card {
-    width: 100%;
-    min-height: 100dvh;
     border-radius: 0;
-    padding: 48px 24px 36px;
-    box-shadow: none;
+    min-height: 100vh;
+    padding: 60px 24px;
   }
-  .page { align-items: flex-start; }
-  
-  /* Stack buttons on mobile */
-  .buttonGrid {
-    grid-template-columns: 1fr; 
+  .page {
+    padding: 0;
   }
-}
-
-@media (min-width: 481px) and (max-width: 600px) {
-  .card { padding: 36px 32px 28px; }
-}
-
-@media (max-height: 640px) and (min-width: 481px) {
-  .logoSection { margin-bottom: 20px; }
-  .input        { margin-bottom: 14px; }
 }

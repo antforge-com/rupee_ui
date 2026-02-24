@@ -1,28 +1,34 @@
-import { BookingStatus } from "../types";
 
 interface StatusBadgeProps {
-  status: BookingStatus;
+  status: string; // Using string to allow backend values like 'AVAILABLE'
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  // Map the colors to the actual values defined in your types
-  const colors: Record<BookingStatus, string> = {
-    CONFIRMED: "#2563EB", // Blue
-    COMPLETED: "#16A34A", // Green
-    PENDING: "#DC2626",   // Red
+  const normalized = (status || "PENDING").toString().toUpperCase();
+
+  const colors: Record<string, string> = {
+    CONFIRMED: "#2563EB", 
+    COMPLETED: "#16A34A", 
+    PENDING: "#DC2626",
+    AVAILABLE: "#16A34A", // Added based on Swagger docs
   };
+
+  const badgeColor = colors[normalized] || "#64748B";
 
   return (
     <span style={{
-      color: colors[status],
+      color: badgeColor,
       fontWeight: 600,
-      fontSize: 13,
-      background: colors[status] + "18", // Adds 10% opacity (approx)
+      fontSize: 12,
+      background: badgeColor + "18", // 10% opacity
       padding: "4px 12px",
       borderRadius: 20,
-      textTransform: 'capitalize' // Optional: Makes it look pretty
+      textTransform: 'uppercase',
+      display: 'inline-block',
+      textAlign: 'center',
+      minWidth: '85px'
     }}>
-      {status.toLowerCase()}
+      {normalized.toLowerCase()}
     </span>
   );
 }

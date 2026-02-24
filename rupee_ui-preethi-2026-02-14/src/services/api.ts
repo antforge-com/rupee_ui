@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // ── Configuration ──
-const BASE_URL_API = `/api`;
+const BASE_URL_API = `/api`; // Or your IP: http://52.55.178.31:8081/api
 
 // ── Token helpers ──
 export const setToken   = (token: string) => localStorage.setItem("fin_token", token);
@@ -177,7 +177,7 @@ export const deleteOnboarding = async (id: number) => {
   });
 };
 
-// ── Timeslots ──
+// ── Timeslots (MASTER API SUPPORTED) ──
 export const getTimeslotById = async (id: number) => {
   return await apiFetch(`/timeslots/${id}`);
 };
@@ -192,10 +192,9 @@ export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 
 export const getAvailableTimeslotsByConsultant = async (consultantId: number) => {
   try {
+    // UPDATED: MASTER API ENDPOINT
     const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
-    if (Array.isArray(data)) return data;
-    if (data?.content) return data.content;
-    return [];
+    return extractArray(data);
   } catch {
     return getTimeslotsByConsultant(consultantId);
   }
@@ -244,46 +243,26 @@ export const getBookingById = async (id: number) => {
   return await apiFetch(`/bookings/${id}`);
 };
 
-// ── getAllBookings ──
-// Strategy:
-//   1. Try /bookings (admin endpoint) — may return 500 on some backends
-//   2. Try /bookings/all, /bookings/admin as alternatives
-//   3. FALLBACK: fetch all consultants, then fetch /bookings/consultant/{id} for each
-//      and merge — this always works because the per-consultant endpoint works fine
 export const getAllBookings = async (): Promise<any[]> => {
-  // Step 1: Try direct admin endpoints first
   const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
 
   for (const endpoint of directEndpoints) {
     try {
       const response = await api.get(endpoint);
       const extracted = extractArray(response.data);
-      console.log(`✅ Bookings from ${endpoint}:`, extracted.length);
-      if (extracted.length > 0) {
-        console.log("📋 Sample:", extracted[0]);
-        return extracted;
-      }
-      // Endpoint succeeded but returned empty — could be genuinely empty
-      // Only trust empty result from /bookings (primary), not fallbacks
+      if (extracted.length > 0) return extracted;
       if (endpoint === "/bookings") return [];
     } catch (err: any) {
-      console.warn(`⚠️ ${endpoint} → ${err?.response?.status || "error"}, trying next…`);
+      console.warn(`⚠️ ${endpoint} failed, trying next…`);
     }
   }
 
-  // Step 2: FALLBACK — aggregate per-consultant bookings
-  // This works because /bookings/consultant/{id} endpoint works fine
-  console.log("🔄 Falling back to per-consultant aggregation…");
+  // FALLBACK AGGREGATION
   try {
     const consultantsData = await api.get("/consultants");
     const consultants: any[] = extractArray(consultantsData.data);
+    if (consultants.length === 0) return [];
 
-    if (consultants.length === 0) {
-      console.warn("No consultants found for aggregation.");
-      return [];
-    }
-
-    // Fetch bookings for all consultants in parallel
     const results = await Promise.allSettled(
       consultants.map((c: any) =>
         api.get(`/bookings/consultant/${c.id}`)
@@ -292,26 +271,16 @@ export const getAllBookings = async (): Promise<any[]> => {
       )
     );
 
-    const allBookings: any[] = results.flatMap(r =>
-      r.status === "fulfilled" ? r.value : []
-    );
-
-    // Deduplicate by booking id
+    const allBookings: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
     const seen = new Set<number>();
-    const unique = allBookings.filter(b => {
+    return allBookings.filter(b => {
       if (seen.has(b.id)) return false;
       seen.add(b.id);
       return true;
     });
-
-    console.log(`✅ Aggregated ${unique.length} bookings from ${consultants.length} consultants`);
-    if (unique.length > 0) console.log("📋 Sample:", unique[0]);
-    return unique;
   } catch (err) {
-    console.error("❌ Fallback aggregation also failed:", err);
+    console.error("❌ Fallback aggregation failed:", err);
   }
-
-  console.error("❌ All booking strategies failed.");
   return [];
 };
 

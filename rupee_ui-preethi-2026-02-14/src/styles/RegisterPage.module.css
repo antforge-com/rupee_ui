@@ -71,13 +71,6 @@
   box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
 }
 
-.sectionHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
 .sectionTitle {
   font-size: 16px;
   font-weight: 700;
@@ -461,4 +454,110 @@
   font-weight: 700;
   cursor: pointer;
   text-decoration: underline;
+}
+
+/* --- NEW: PLAN SELECTION INTEGRATION --- */
+.planGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.planCard {
+  border: 1.5px solid #E2E8F0;
+  border-radius: 14px;
+  padding: 16px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.2s ease;
+  background: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.selectedPlan {
+  border-color: #2563EB;
+  background: #EFF6FF;
+  box-shadow: 0 4px 15px rgba(37, 99, 235, 0.1);
+}
+
+.planNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.planName {
+  font-weight: 700;
+  color: #0F172A;
+  font-size: 16px;
+}
+
+.planTag {
+  background: #2563EB;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.planFeatures {
+  font-size: 12px;
+  color: #64748B;
+  margin-top: 4px;
+}
+
+.planPriceInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.priceColumn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* THE CROSS BUTTON (Strikethrough) EFFECT */
+.originalPrice {
+  text-decoration: line-through;
+  color: #94A3B8;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.discountPrice {
+  font-weight: 800;
+  color: #0F172A;
+  font-size: 18px;
+}
+
+.selectedPlan .discountPrice {
+  color: #2563EB;
+}
+
+.radioCircle {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #CBD5E1;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.selectedPlan .radioCircle {
+  border-color: #2563EB;
+}
+
+.radioInner {
+  width: 10px;
+  height: 10px;
+  background: #2563EB;
+  border-radius: 50%;
 }

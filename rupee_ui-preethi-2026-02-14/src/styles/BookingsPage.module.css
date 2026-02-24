@@ -324,4 +324,76 @@
   color: #94A3B8;
   border-top: 1px solid #F1F5F9;
   text-align: right;
+}/* ── 30-Day Month View Enhancements ── */
+.monthViewContainer {
+  margin-top: 32px;
+  border-top: 1px solid #E2E8F0;
+  padding-top: 24px;
+}
+.monthViewTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0 0 8px;
+}
+.monthViewDesc {
+  font-size: 13px;
+  color: #64748B;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+.monthGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dayRow {
+  background: #fff;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+}
+.dayDate {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1E293B;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #F1F5F9;
+  padding-bottom: 8px;
+}
+.daySlots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.slotBtn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1.5px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+/* Available: Blue */
+.slotBtnAvailable {
+  background: #2563EB;
+  color: #fff;
+  border-color: #2563EB;
+}
+.slotBtnAvailable:hover {
+  background: #1D4ED8;
+  border-color: #1D4ED8;
+}
+/* Unavailable / Booked: Gray with strike */
+.slotBtnUnavailable {
+  background: #F8FAFC;
+  color: #94A3B8;
+  border-color: #E2E8F0;
+  text-decoration: line-through;
+}
+.slotBtnUnavailable:hover {
+  background: #F1F5F9;
 }
