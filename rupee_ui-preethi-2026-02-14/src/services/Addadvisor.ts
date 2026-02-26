@@ -1,60 +1,38 @@
 import axios from "axios";
 
-/* ===============================
-   AXIOS INSTANCE
-================================ */
-const api = axios.create({
-  baseURL: "http://52.55.178.31:8081/api",
-  headers: {
+// ⚠️ IMPORTANT: Must match the key used in api.ts → localStorage.setItem("fin_token", token)
+const TOKEN_KEY = "fin_token";
+
+const BASE_URL = "http://52.55.178.31:8081/api";
+
+// ── Auth headers ──────────────────────────────────────────────────────────────
+const getAuthHeaders = () => {
+  const token = localStorage.getItem(TOKEN_KEY) || "";
+  if (!token) {
+    console.warn("⚠️ [Addadvisor] No token found under key:", TOKEN_KEY);
+  }
+  return {
     "Content-Type": "application/json",
-  },
-});
-
-/* ===============================
-   ATTACH JWT TOKEN AUTOMATICALLY
-================================ */
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem("token");
-
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
-
-/* ===============================
-   CONSULTANT APIs
-================================ */
-
-const CONSULTANT_PATH = "/consultants";
-
-export const createAdvisor = async (advisorData: any) => {
-  const response = await api.post(CONSULTANT_PATH, advisorData);
-  return response.data;
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
 };
 
-export const getAllAdvisors = async () => {
-  const response = await api.get(CONSULTANT_PATH);
-  return response.data;
-};
+// ── Create a new consultant (Admin only) ──────────────────────────────────────
+export const createAdvisor = async (consultantData: {
+  name: string;
+  email: string;
+  designation: string;
+  charges: number;
+  shiftTimings: string;
+  skills: string[];
+}) => {
+  console.log("🔐 [createAdvisor] Token key used:", TOKEN_KEY);
+  console.log("🔐 [createAdvisor] Token present:", !!localStorage.getItem(TOKEN_KEY));
 
-export const getAdvisorById = async (id: number) => {
-  const response = await api.get(`${CONSULTANT_PATH}/${id}`);
+  const response = await axios.post(
+    `${BASE_URL}/consultants`,
+    consultantData,
+    { headers: getAuthHeaders() }
+  );
   return response.data;
-};
-
-export const updateAdvisor = async (id: number, advisorData: any) => {
-  const response = await api.put(`${CONSULTANT_PATH}/${id}`, advisorData);
-  return response.data;
-};
-
-export const deleteAdvisor = async (id: number) => {
-  const response = await api.delete(`${CONSULTANT_PATH}/${id}`);
-  return response.data;
-};
-
-export default api;
+}

@@ -1,143 +1,264 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import styles from "../styles/RegisterPage.module.css";
 
-interface IncomeItem { label: string; amount: string; }
-interface ExpenseItem { label: string; amount: string; }
+// ── API helpers ───────────────────────────────────────────────────────────────
+const BASE = "/api";
 
-// Subscription Plan Data
-const PLANS = [
-  { 
-    id: "elite", 
-    name: "Elite", 
-    originalPrice: "2999", 
-    discountPrice: "999", 
-    features: "Tax Optimization + Pro + Live Support",
-    tag: "BEST VALUE"
-  },
-  { 
-    id: "pro", 
-    name: "Pro", 
-    originalPrice: "1499", 
-    discountPrice: "499", 
-    features: "Expert consultations & Portfolio" 
-  },
-  { 
-    id: "free", 
-    name: "Free", 
-    originalPrice: "0", 
-    discountPrice: "0", 
-    features: "Basic portfolio tracking" 
-  },
-];
+const publicFetch = async (endpoint: string) => {
+  const res = await fetch(`${BASE}${endpoint}`, {
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+  });
+  const ct = res.headers.get("content-type");
+  const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
+  if (!res.ok) throw new Error(data?.message || `Error ${res.status}`);
+  return data;
+};
+
+const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
+  const token = localStorage.getItem("fin_token");
+  const res = await fetch(`${BASE}${endpoint}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...((options.headers as Record<string, string>) || {}),
+    },
+  });
+  const ct = res.headers.get("content-type");
+  const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
+  if (!res.ok) {
+    console.error("❌ API Error body:", JSON.stringify(data, null, 2));
+    const fieldErrors = data?.fieldErrors
+      ? Object.entries(data.fieldErrors).map(([k, v]) => `${k}: ${v}`).join(", ")
+      : null;
+    throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
+  }
+  return data;
+};
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface Plan {
+  id: number;
+  name: string;
+  originalPrice: number;
+  discountPrice: number;
+  features: string;
+  tag?: string;
+}
+
+// ✅ Field names corrected to match Swagger schema:
+//    incomeType / incomeAmount  (NOT label / amount)
+interface IncomeItem  { incomeType: string;  incomeAmount: string; }
+// ✅ expenseType / expenseAmount  (NOT label / amount)
+interface ExpenseItem { expenseType: string; expenseAmount: string; }
+
+const isFree = (plan: Plan) => plan.discountPrice === 0;
+
+// ── Email sanitizer — strips invisible/non-ASCII chars that break @Email ──────
+const sanitizeEmail = (raw: string): string =>
+  raw.trim().toLowerCase().replace(/[^\x21-\x7E]/g, "").replace(/\s/g, "");
+
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 
 export default function RegisterPage() {
   const navigate = useNavigate();
 
-  // Core Form State
-  const [name, setName] = useState("");
-  const [dob, setDob] = useState("");
-  const [identifier, setIdentifier] = useState(""); // Combined PAN/Aadhar
-  const [annualIncome, setAnnualIncome] = useState("");
+  const [name,       setName]       = useState("");
+  const [dob,        setDob]        = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [email,      setEmail]      = useState("");
+  const [location,   setLocation]   = useState("");
 
-  // --- NEW: Subscription State (Defaulting to Elite) ---
-  const [selectedPlan, setSelectedPlan] = useState("elite");
+  const [plans,        setPlans]        = useState<Plan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
 
-  // Lists State
-  const [incomeItems, setIncomeItems] = useState<IncomeItem[]>([{ label: "Rent Amount", amount: "" }]);
-  const [expenseItems, setExpenseItems] = useState<ExpenseItem[]>([{ label: "Shop", amount: "1000" }]);
-
-  // Popup Management
-  const [showIncomePopup, setShowIncomePopup] = useState(false);
+  // ✅ Corrected field names to match Swagger
+  const [incomeItems,      setIncomeItems]      = useState<IncomeItem[]>([{ incomeType: "Salary", incomeAmount: "" }]);
+  const [expenseItems,     setExpenseItems]     = useState<ExpenseItem[]>([{ expenseType: "Rent", expenseAmount: "" }]);
+  const [showIncomePopup,  setShowIncomePopup]  = useState(false);
   const [showExpensePopup, setShowExpensePopup] = useState(false);
-  const [popupLabel, setPopupLabel] = useState("");
-  const [popupAmount, setPopupAmount] = useState("");
+  const [popupLabel,       setPopupLabel]       = useState("");
+  const [popupAmount,      setPopupAmount]      = useState("");
 
-  // Status State
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [success, setSuccess] = useState(false);
+  const [errors,     setErrors]     = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [success,    setSuccess]    = useState(false);
+  const [apiError,   setApiError]   = useState("");
 
-  // --- Handlers ---
-  const openIncomePopup = () => { setPopupLabel(""); setPopupAmount(""); setShowIncomePopup(true); };
+  // ── Fetch subscription plans ──────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      setPlansLoading(true);
+
+      const extractPlans = (data: any): Plan[] => {
+        if (!data) return [];
+        if (Array.isArray(data)) return data;
+        if (Array.isArray(data.content)) return data.content;
+        for (const key of ["plans", "subscriptionPlans", "data", "items", "results", "list"]) {
+          if (Array.isArray(data[key])) return data[key];
+        }
+        if (typeof data === "object" && data.id) return [data];
+        return [];
+      };
+
+      const ENDPOINTS = ["/subscription-plans", "/subscription-plans/all", "/subscriptionplans", "/plans"];
+      let fetched: Plan[] = [];
+
+      for (const endpoint of ENDPOINTS) {
+        try {
+          let data: any = null;
+          try { data = await publicFetch(endpoint); }
+          catch { data = await apiFetch(endpoint); }
+          console.log(`📋 [${endpoint}] raw:`, JSON.stringify(data, null, 2));
+          fetched = extractPlans(data);
+          if (fetched.length > 0) { console.log(`✅ Got ${fetched.length} plans`); break; }
+        } catch (err) {
+          console.warn(`⚠️ ${endpoint} failed:`, err);
+        }
+      }
+
+      if (fetched.length > 0) {
+        setPlans(fetched);
+        setSelectedPlan(fetched.find(p => !isFree(p)) || fetched[0]);
+      } else {
+        setPlans([]);
+        setSelectedPlan(null);
+      }
+      setPlansLoading(false);
+    })();
+  }, []);
+
+  // ── Income / Expense popup helpers ────────────────────────────────────────
+  const openIncomePopup  = () => { setPopupLabel(""); setPopupAmount(""); setShowIncomePopup(true); };
   const openExpensePopup = () => { setPopupLabel(""); setPopupAmount(""); setShowExpensePopup(true); };
 
   const confirmIncome = () => {
-    if (popupLabel.trim() || popupAmount.trim()) {
-      setIncomeItems(i => [...i, { label: popupLabel, amount: popupAmount }]);
-    }
+    if (popupLabel.trim() || popupAmount.trim())
+      setIncomeItems(i => [...i, { incomeType: popupLabel, incomeAmount: popupAmount }]);
     setShowIncomePopup(false);
   };
-
   const confirmExpense = () => {
-    if (popupLabel.trim() || popupAmount.trim()) {
-      setExpenseItems(e => [...e, { label: popupLabel, amount: popupAmount }]);
-    }
+    if (popupLabel.trim() || popupAmount.trim())
+      setExpenseItems(e => [...e, { expenseType: popupLabel, expenseAmount: popupAmount }]);
     setShowExpensePopup(false);
   };
 
-  const updateIncome = (index: number, field: keyof IncomeItem, value: string) =>
-    setIncomeItems(items => items.map((item, i) => i === index ? { ...item, [field]: value } : item));
-  
-  const updateExpense = (index: number, field: keyof ExpenseItem, value: string) =>
-    setExpenseItems(items => items.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  const updateIncome  = (i: number, f: keyof IncomeItem,  v: string) =>
+    setIncomeItems(items => items.map((item, idx) => idx === i ? { ...item, [f]: v } : item));
+  const updateExpense = (i: number, f: keyof ExpenseItem, v: string) =>
+    setExpenseItems(items => items.map((item, idx) => idx === i ? { ...item, [f]: v } : item));
 
-  const removeIncome = (index: number) => setIncomeItems(i => i.filter((_, idx) => idx !== index));
-  const removeExpense = (index: number) => setExpenseItems(e => e.filter((_, idx) => idx !== index));
+  const totalIncome   = incomeItems.reduce((s, i) => s + (parseFloat(i.incomeAmount)  || 0), 0);
+  const totalExpenses = expenseItems.reduce((s, i) => s + (parseFloat(i.expenseAmount) || 0), 0);
 
-  const totalIncome = incomeItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-  const totalExpenses = expenseItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
-
-  // --- Validation Logic ---
+  // ── Validation ────────────────────────────────────────────────────────────
   const validate = () => {
-    const newErrors: Record<string, string> = {};
+    const e: Record<string, string> = {};
 
-    if (!name.trim()) newErrors.name = "Full name is required";
-    if (!dob) newErrors.dob = "Date of birth is required";
+    if (!name.trim()) e.name = "Full name is required";
 
-    const cleanId = identifier.replace(/\s/g, "").toUpperCase();
-    const isPan = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanId);
-    const isAadhar = /^\d{12}$/.test(cleanId);
-
-    if (!identifier.trim()) {
-      newErrors.identifier = "PAN or Aadhar number is required";
-    } else if (!isPan && !isAadhar) {
-      newErrors.identifier = "Invalid format. Enter 10-char PAN or 12-digit Aadhar";
+    const cleanedEmail = sanitizeEmail(email);
+    if (!cleanedEmail) {
+      e.email = "Email is required";
+    } else if (!EMAIL_REGEX.test(cleanedEmail)) {
+      e.email = "Enter a valid email address (e.g. user@example.com)";
     }
 
-    if (incomeItems.every(item => !item.amount)) newErrors.income = "Add at least one income amount";
-    if (expenseItems.every(item => !item.amount)) newErrors.expenses = "Add at least one expense amount";
+    if (!dob) e.dob = "Date of birth is required";
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const cleanId = identifier.replace(/\s/g, "").toUpperCase();
+    if (!identifier.trim()) {
+      e.identifier = "PAN or Aadhar is required";
+    } else if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanId) && !/^\d{12}$/.test(cleanId)) {
+      e.identifier = "Invalid format. Enter 10-char PAN or 12-digit Aadhar";
+    }
+
+    if (!selectedPlan) e.plan = "Please select a subscription plan";
+
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = () => {
+  // ── Submit ────────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
     if (!validate()) return;
-    setSuccess(true);
-    
-    // Optional: Save subscription info to localStorage
-    localStorage.setItem("user_plan", selectedPlan);
+    setSubmitting(true);
+    setApiError("");
 
-    setTimeout(() => {
-      setSuccess(false);
-      navigate("/");
-    }, 2500);
+    try {
+      const planId          = selectedPlan && !isFree(selectedPlan) ? selectedPlan.id : null;
+      const cleanIdentifier = identifier.replace(/\s/g, "").toUpperCase();
+      const cleanEmail      = sanitizeEmail(email);
+
+      // ✅ Payload matches Swagger schema exactly:
+      //    - email: string ✓
+      //    - incomes[].incomeType + incomeAmount  (was label/amount — WRONG)
+      //    - expenses[].expenseType + expenseAmount (was label/amount — WRONG)
+      const registerPayload = {
+        name:               name.trim(),
+        email:              cleanEmail,
+        dob:                dob,
+        location:           location.trim() || "",
+        identifier:         cleanIdentifier,
+        subscriptionPlanId: planId,
+        subscribed:         !isFree(selectedPlan!),
+        incomes: incomeItems
+          .filter(i => i.incomeAmount !== "")
+          .map(i => ({
+            incomeType:   i.incomeType   || "Income",
+            incomeAmount: parseFloat(i.incomeAmount) || 0,
+          })),
+        expenses: expenseItems
+          .filter(e => e.expenseAmount !== "")
+          .map(e => ({
+            expenseType:   e.expenseType   || "Expense",
+            expenseAmount: parseFloat(e.expenseAmount) || 0,
+          })),
+      };
+
+      console.log("📤 Sending Payload:", JSON.stringify(registerPayload, null, 2));
+
+      const data = await apiFetch("/onboarding", {
+        method: "POST",
+        body: JSON.stringify(registerPayload),
+      });
+
+      if (data?.token) {
+        localStorage.setItem("fin_token", data.token);
+        localStorage.setItem("fin_role",  data.role || "USER");
+      }
+
+      setSuccess(true);
+      setTimeout(() => navigate("/login"), 2500);
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      setApiError(err?.message || "Registration failed. Check your inputs.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={styles.page}>
-      {/* Success Notification */}
+
       {success && (
         <div className={styles.successOverlay}>
           <div className={styles.successBox}>
             <div className={styles.successIcon}>✓</div>
-            <div className={styles.successTitle}>Registration Successful!</div>
-            <div className={styles.successSub}>Redirecting to login...</div>
+            <div className={styles.successTitle}>
+              {selectedPlan && !isFree(selectedPlan)
+                ? `Subscribed to ${selectedPlan.name}!`
+                : "Account Created!"}
+            </div>
+            <div className={styles.successSub}>Redirecting to login…</div>
           </div>
         </div>
       )}
 
-      {/* Header */}
       <div className={styles.header}>
         <button onClick={() => navigate("/")} className={styles.backBtn}>
           <svg width="22" height="22" fill="none" viewBox="0 0 24 24">
@@ -151,7 +272,6 @@ export default function RegisterPage() {
         <div style={{ width: 36 }} />
       </div>
 
-      {/* Shared Popup Component Logic */}
       {(showIncomePopup || showExpensePopup) && (
         <div className={styles.overlay} onClick={() => { setShowIncomePopup(false); setShowExpensePopup(false); }}>
           <div className={styles.popup} onClick={e => e.stopPropagation()}>
@@ -160,23 +280,13 @@ export default function RegisterPage() {
               <button className={styles.popupClose} onClick={() => { setShowIncomePopup(false); setShowExpensePopup(false); }}>✕</button>
             </div>
             <label className={styles.label}>LABEL</label>
-            <input
-              value={popupLabel}
-              onChange={(e) => setPopupLabel(e.target.value)}
-              placeholder="e.g. Salary, Rent, Grocery"
-              className={styles.input}
-              autoFocus
-            />
+            <input value={popupLabel} onChange={e => setPopupLabel(e.target.value)}
+              placeholder="e.g. Salary, Rent, Grocery" className={styles.input} autoFocus />
             <label className={styles.label}>AMOUNT</label>
             <div className={styles.amountWrapper}>
               <span className={styles.currencySymbol}>₹</span>
-              <input
-                value={popupAmount}
-                onChange={(e) => setPopupAmount(e.target.value)}
-                placeholder="0"
-                type="number"
-                className={styles.amountInput}
-              />
+              <input value={popupAmount} onChange={e => setPopupAmount(e.target.value)}
+                placeholder="0" type="number" className={styles.amountInput} />
             </div>
             <button onClick={showIncomePopup ? confirmIncome : confirmExpense} className={styles.popupConfirmBtn}>
               + Add {showIncomePopup ? "Income" : "Expense"}
@@ -186,70 +296,71 @@ export default function RegisterPage() {
       )}
 
       <div className={styles.content}>
-        {/* PERSONAL DETAILS SECTION */}
+
+        {/* ── Personal Details ── */}
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Personal Details</div>
 
           <label className={styles.label}>FULL NAME <span className={styles.required}>*</span></label>
-          <input
-            value={name}
-            onChange={(e) => { setName(e.target.value); setErrors(err => ({ ...err, name: "" })); }}
+          <input value={name} onChange={e => { setName(e.target.value); setErrors(x => ({ ...x, name: "" })); }}
             placeholder="Enter your full name"
-            className={`${styles.input} ${errors.name ? styles.inputError : ""}`}
-          />
+            className={`${styles.input} ${errors.name ? styles.inputError : ""}`} />
           {errors.name && <div className={styles.errorMsg}>{errors.name}</div>}
 
-          <label className={styles.label}>DATE OF BIRTH <span className={styles.required}>*</span></label>
+          <label className={styles.label}>EMAIL <span className={styles.required}>*</span></label>
           <input
-            type="date"
-            value={dob}
-            onChange={(e) => { setDob(e.target.value); setErrors(err => ({ ...err, dob: "" })); }}
-            className={`${styles.input} ${errors.dob ? styles.inputError : ""}`}
+            value={email}
+            onChange={e => { setEmail(e.target.value); setErrors(x => ({ ...x, email: "" })); }}
+            onBlur={e => {
+              const s = sanitizeEmail(e.target.value);
+              setEmail(s);
+              if (s && !EMAIL_REGEX.test(s))
+                setErrors(x => ({ ...x, email: "Enter a valid email address (e.g. user@example.com)" }));
+            }}
+            placeholder="you@example.com"
+            type="email"
+            autoComplete="email"
+            className={`${styles.input} ${errors.email ? styles.inputError : ""}`}
           />
+          {errors.email && <div className={styles.errorMsg}>{errors.email}</div>}
+
+          <label className={styles.label}>DATE OF BIRTH <span className={styles.required}>*</span></label>
+          <input type="date" value={dob}
+            onChange={e => { setDob(e.target.value); setErrors(x => ({ ...x, dob: "" })); }}
+            className={`${styles.input} ${errors.dob ? styles.inputError : ""}`} />
           {errors.dob && <div className={styles.errorMsg}>{errors.dob}</div>}
 
           <label className={styles.label}>IDENTIFIER (PAN OR AADHAR) <span className={styles.required}>*</span></label>
-          <input
-            value={identifier}
-            onChange={(e) => { setIdentifier(e.target.value); setErrors(err => ({ ...err, identifier: "" })); }}
+          <input value={identifier}
+            onChange={e => { setIdentifier(e.target.value); setErrors(x => ({ ...x, identifier: "" })); }}
             placeholder="PAN (ABCDE1234F) or 12-digit Aadhar"
-            className={`${styles.input} ${errors.identifier ? styles.inputError : ""}`}
-          />
+            className={`${styles.input} ${errors.identifier ? styles.inputError : ""}`} />
           {errors.identifier && <div className={styles.errorMsg}>{errors.identifier}</div>}
 
-          <label className={styles.label}>ANNUAL INCOME <span className={styles.optional}>(Optional)</span></label>
-          <div className={styles.amountWrapper}>
-            <span className={styles.currencySymbol}>₹</span>
-            <input
-              value={annualIncome}
-              onChange={(e) => setAnnualIncome(e.target.value)}
-              placeholder="0"
-              type="number"
-              className={styles.amountInput}
-            />
-          </div>
+          <label className={styles.label}>LOCATION <span className={styles.optional}>(Optional)</span></label>
+          <input value={location} onChange={e => setLocation(e.target.value)}
+            placeholder="City, State" className={styles.input} />
         </div>
 
-        {/* INCOME SECTION */}
+        {/* ── Income ── */}
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>Income <span className={styles.required}>*</span></div>
+          <div className={styles.sectionTitle}>Income</div>
           {incomeItems.map((item, i) => (
             <div key={i} className={styles.itemRow}>
               <div className={styles.itemInfo}>
-                <div className={styles.itemLabel}>{item.label || "Income"}</div>
-                <div className={styles.itemAmount}>₹{parseFloat(item.amount || "0").toLocaleString()}</div>
+                <div className={styles.itemLabel}>{item.incomeType || "Income"}</div>
+                <div className={styles.itemAmount}>₹{parseFloat(item.incomeAmount || "0").toLocaleString()}</div>
               </div>
               <div className={styles.itemActions}>
                 <input
-                  value={item.amount}
-                  onChange={(e) => { updateIncome(i, "amount", e.target.value); setErrors(err => ({ ...err, income: "" })); }}
+                  value={item.incomeAmount}
+                  onChange={e => updateIncome(i, "incomeAmount", e.target.value)}
                   placeholder="0" type="number" className={styles.inlineAmountInput}
                 />
-                <button onClick={() => removeIncome(i)} className={styles.removeBtn}>✕</button>
+                <button onClick={() => setIncomeItems(x => x.filter((_, idx) => idx !== i))} className={styles.removeBtn}>✕</button>
               </div>
             </div>
           ))}
-          {errors.income && <div className={styles.errorMsg}>{errors.income}</div>}
           <div className={styles.summaryRow}>
             <div className={styles.summaryLeft}>
               <div className={styles.summaryMeta}>Total Income</div>
@@ -259,26 +370,25 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {/* EXPENSES SECTION */}
+        {/* ── Expenses ── */}
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>Expenses <span className={styles.required}>*</span></div>
+          <div className={styles.sectionTitle}>Expenses</div>
           {expenseItems.map((item, i) => (
             <div key={i} className={styles.itemRow}>
               <div className={styles.itemInfo}>
-                <div className={styles.itemLabel}>{item.label || "Expense"}</div>
-                <div className={styles.itemAmount}>₹{parseFloat(item.amount || "0").toLocaleString()}</div>
+                <div className={styles.itemLabel}>{item.expenseType || "Expense"}</div>
+                <div className={styles.itemAmount}>₹{parseFloat(item.expenseAmount || "0").toLocaleString()}</div>
               </div>
               <div className={styles.itemActions}>
                 <input
-                  value={item.amount}
-                  onChange={(e) => { updateExpense(i, "amount", e.target.value); setErrors(err => ({ ...err, expenses: "" })); }}
+                  value={item.expenseAmount}
+                  onChange={e => updateExpense(i, "expenseAmount", e.target.value)}
                   placeholder="0" type="number" className={styles.inlineAmountInput}
                 />
-                <button onClick={() => removeExpense(i)} className={styles.removeBtn}>✕</button>
+                <button onClick={() => setExpenseItems(x => x.filter((_, idx) => idx !== i))} className={styles.removeBtn}>✕</button>
               </div>
             </div>
           ))}
-          {errors.expenses && <div className={styles.errorMsg}>{errors.expenses}</div>}
           <div className={styles.summaryRow}>
             <div className={styles.summaryLeft}>
               <div className={styles.summaryMeta}>Total Expenses</div>
@@ -288,45 +398,115 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {/* --- NEW: SUBSCRIPTION PLANS SECTION --- */}
+        {/* ── Subscription Plans ── */}
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>Select Subscription Plan</div>
-          <div className={styles.planGrid}>
-            {PLANS.map((plan) => (
-              <div 
-                key={plan.id} 
-                className={`${styles.planCard} ${selectedPlan === plan.id ? styles.selectedPlan : ""}`}
-                onClick={() => setSelectedPlan(plan.id)}
-              >
-                <div className={styles.planInfo}>
-                  <div className={styles.planNameRow}>
-                    <span className={styles.planName}>{plan.name}</span>
-                    {plan.tag && <span className={styles.planTag}>{plan.tag}</span>}
-                  </div>
-                  <div className={styles.planFeatures}>{plan.features}</div>
-                </div>
-                
-                <div className={styles.planPriceInfo}>
-                  <div className={styles.priceColumn}>
-                    {plan.discountPrice !== plan.originalPrice && (
-                        <span className={styles.originalPrice}>₹{plan.originalPrice}</span>
-                    )}
-                    <span className={styles.discountPrice}>₹{plan.discountPrice}</span>
-                  </div>
-                  <div className={styles.radioCircle}>
-                    {selectedPlan === plan.id && <div className={styles.radioInner} />}
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className={styles.sectionTitle}>Choose Your Plan</div>
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "8px 14px", fontSize: 12, color: "#1E40AF", fontWeight: 600 }}>
+              ✅ Subscribed — full access to consultant bookings & features
+            </div>
+            <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "8px 14px", fontSize: 12, color: "#64748B", fontWeight: 600 }}>
+              ○ Free — basic access only
+            </div>
           </div>
+
+          {plansLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#94A3B8" }}>
+              <div style={{ width: 24, height: 24, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 10px" }} />
+              Loading plans…
+            </div>
+          ) : plans.length === 0 ? (
+            <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "16px", color: "#B91C1C", fontSize: 13 }}>
+              ⚠️ Could not load subscription plans. Check the console for details.
+              <br /><br />
+              <button onClick={() => window.location.reload()}
+                style={{ background: "#B91C1C", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className={styles.planGrid}>
+              {plans.map(plan => {
+                const free     = isFree(plan);
+                const selected = selectedPlan?.id === plan.id;
+                return (
+                  <div
+                    key={plan.id}
+                    onClick={() => { setSelectedPlan(plan); setErrors(x => ({ ...x, plan: "" })); }}
+                    style={{
+                      border: selected ? "2px solid #2563EB" : "1.5px solid #E2E8F0",
+                      borderRadius: 14, padding: "16px 18px", cursor: "pointer",
+                      background: selected ? "#EFF6FF" : "#fff", position: "relative",
+                      transition: "all 0.15s",
+                      boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.1)" : "0 1px 3px rgba(0,0,0,0.05)",
+                      marginBottom: 10,
+                    }}
+                    className={styles.planCard}
+                  >
+                    {plan.tag && (
+                      <span style={{ position: "absolute", top: -10, right: 14, background: "#2563EB", color: "#fff", fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 20, letterSpacing: "0.06em" }}>
+                        {plan.tag}
+                      </span>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>{plan.name}</span>
+                          {!free && (
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC" }}>
+                              SUBSCRIBED
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>{plan.features}</div>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: free ? "#94A3B8" : "#2563EB" }}>
+                          {free ? "Free" : `₹${plan.discountPrice}`}
+                        </div>
+                        <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${selected ? "#2563EB" : "#CBD5E1"}`, display: "flex", alignItems: "center", justifyContent: "center", background: selected ? "#2563EB" : "#fff" }}>
+                          {selected && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff" }} />}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {errors.plan && <div className={styles.errorMsg}>{errors.plan}</div>}
+
+          {selectedPlan && (
+            <div style={{ marginTop: 12, padding: "12px 16px", background: isFree(selectedPlan) ? "#F8FAFC" : "#F0FDF4", border: `1px solid ${isFree(selectedPlan) ? "#E2E8F0" : "#86EFAC"}`, borderRadius: 10, fontSize: 13, color: isFree(selectedPlan) ? "#64748B" : "#166534", fontWeight: 600 }}>
+              {isFree(selectedPlan)
+                ? "○ You're signing up with a Free account — basic features only."
+                : `✅ You'll be subscribed to ${selectedPlan.name} (₹${selectedPlan.discountPrice}) — full access enabled.`}
+            </div>
+          )}
         </div>
 
-        <button onClick={handleSubmit} className={styles.submitBtn}>
-          {selectedPlan === "free" ? "Create Account" : `Subscribe & Create Account (₹${PLANS.find(p => p.id === selectedPlan)?.discountPrice})`}
+        {apiError && (
+          <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 16px", color: "#B91C1C", fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+            ⚠️ {apiError}
+          </div>
+        )}
+
+        <button onClick={handleSubmit} className={styles.submitBtn} disabled={submitting || plans.length === 0}>
+          {submitting
+            ? <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
+                Creating Account…
+              </span>
+            : selectedPlan && !isFree(selectedPlan)
+              ? `Subscribe & Create Account (₹${selectedPlan.discountPrice})`
+              : "Create Free Account"
+          }
         </button>
+
         <p className={styles.loginText}>
-          Already have an account? <span className={styles.loginLink} onClick={() => navigate("/login")}>Sign In</span>
+          Already have an account?{" "}
+          <span className={styles.loginLink} onClick={() => navigate("/login")}>Sign In</span>
         </p>
       </div>
     </div>

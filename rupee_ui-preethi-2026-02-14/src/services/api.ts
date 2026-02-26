@@ -1,66 +1,141 @@
 import axios from 'axios';
 
-// ── Configuration ──
-const BASE_URL_API = `/api`; // Or your IP: http://52.55.178.31:8081/api
+// ── Configuration ──────────────────────────────────────────────────────────────
+// Keep this as a relative path — Vite proxy (vite.config.ts) forwards
+// /api  → http://52.55.178.31:8081/api
+// /uploads → http://52.55.178.31:8081/uploads
+const BASE_URL_API = `/api`;
 
-// ── Token helpers ──
-export const setToken   = (token: string) => localStorage.setItem("fin_token", token);
-export const getToken   = () => localStorage.getItem("fin_token");
-export const clearToken = () => {
-  localStorage.removeItem("fin_token");
+// ── Token / session helpers ────────────────────────────────────────────────────
+// All keys are prefixed with "fin_" to avoid collisions.
+export const TOKEN_KEY       = "fin_token";
+export const setToken        = (token: string) => localStorage.setItem(TOKEN_KEY, token);
+export const getToken        = ()              => localStorage.getItem(TOKEN_KEY) || "";
+export const clearToken      = () => {
+  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem("fin_role");
+  localStorage.removeItem("fin_user_id");
+  localStorage.removeItem("fin_consultant_id");
 };
-export const setRole    = (role: string)  => localStorage.setItem("fin_role", role);
-export const getRole    = () => localStorage.getItem("fin_role");
+export const setRole         = (role: string) => localStorage.setItem("fin_role", role);
+export const getRole         = ()             => localStorage.getItem("fin_role");
+export const setUserId       = (id: number)   => localStorage.setItem("fin_user_id", String(id));
+export const getUserId       = ()             => localStorage.getItem("fin_user_id");
+export const setConsultantId = (id: number)   => localStorage.setItem("fin_consultant_id", String(id));
+export const getConsultantId = ()             => localStorage.getItem("fin_consultant_id");
 
-// ── Axios Instance ──
+// ── DEBUG: decode JWT payload ─────────────────────────────────────────────────
+// Call debugToken() whenever you see a 403 — it prints exactly what the backend sees.
+export const debugToken = () => {
+  console.group("🔍 AUTH DEBUG");
+
+  console.log("📦 All localStorage keys:");
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)!;
+    const val = localStorage.getItem(key) || "";
+    console.log(`   "${key}" = ${val.length > 80 ? val.substring(0, 80) + "…" : val}`);
+  }
+
+  const token = getToken();
+  if (!token) {
+    console.error(`❌ No token found under key "${TOKEN_KEY}". Admin cannot authenticate.`);
+    console.groupEnd();
+    return null;
+  }
+
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) throw new Error("Not a valid JWT (expected 3 parts)");
+    const payload = JSON.parse(atob(parts[1]));
+    console.log("✅ Token payload:", payload);
+    console.log("   Roles/Authorities:", {
+      role:        payload.role,
+      roles:       payload.roles,
+      authorities: payload.authorities,
+      scope:       payload.scope,
+    });
+    const exp = payload.exp ? new Date(payload.exp * 1000) : null;
+    if (exp) {
+      const expired = exp < new Date();
+      console.log(`   Expires: ${exp.toLocaleString()} — ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
+      if (expired) console.error("   ⚠️  Token is expired — log in again!");
+    }
+    console.groupEnd();
+    return payload;
+  } catch (e) {
+    console.error("❌ Failed to decode token:", e);
+    console.groupEnd();
+    return null;
+  }
+};
+
+// ── Axios Instance ─────────────────────────────────────────────────────────────
 export const api = axios.create({
   baseURL: BASE_URL_API,
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Attach token to every axios request automatically
 api.interceptors.request.use((config) => {
   const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  } else {
+    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+  }
   return config;
 });
 
-// ── Base fetch wrapper ──
+// ── Base fetch wrapper ─────────────────────────────────────────────────────────
+// ✅ Does NOT set Content-Type when body is FormData — lets the browser
+//    add the multipart boundary automatically (prevents corruption).
 const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL_API}${endpoint}`;
-  
+
   const defaultHeaders: Record<string, string> = {
-    "Accept": "application/json",
+    Accept: "application/json",
   };
 
-  // ✅ ONLY attach application/json if we are NOT sending FormData
-  // This prevents boundary corruption for Multipart requests
+  // Only attach application/json if we are NOT sending FormData
   if (!(options.body instanceof FormData)) {
     defaultHeaders["Content-Type"] = "application/json";
   }
 
   const token = getToken();
-  if (token) defaultHeaders["Authorization"] = `Bearer ${token}`;
+  if (token) {
+    defaultHeaders["Authorization"] = `Bearer ${token}`;
+  } else {
+    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+  }
 
   try {
     const res = await fetch(url, {
       ...options,
-      headers: { ...defaultHeaders, ...(options.headers as Record<string, string> || {}) },
+      headers: {
+        ...defaultHeaders,
+        ...((options.headers as Record<string, string>) || {}),
+      },
     });
 
     const contentType = res.headers.get("content-type");
     let data: any = null;
 
-    if (contentType && contentType.includes("application/json")) {
+    if (contentType?.includes("application/json")) {
       data = await res.json();
     } else {
-      const text = await res.text();
-      data = { message: text };
+      data = { message: await res.text() };
     }
 
     if (!res.ok) {
+      if (res.status === 403) {
+        console.error(`🚫 403 Forbidden on ${options.method || "GET"} ${endpoint}`);
+        console.error("   Response body:", data);
+        console.error("   Calling debugToken() to help diagnose…");
+        debugToken();
+      }
       throw new Error(data?.message || `Request failed with status ${res.status}`);
     }
+
     return data;
   } catch (err: any) {
     console.error("API Fetch Error:", err);
@@ -71,7 +146,7 @@ const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 };
 
-// ── Helper: extract array from any backend response shape ──
+// ── Helper: extract array from any backend response shape ──────────────────────
 const extractArray = (data: any): any[] => {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -83,15 +158,24 @@ const extractArray = (data: any): any[] => {
   return [];
 };
 
-// ── Auth ──
+// ────────────────────────────────────────────────────────────────────────────
+// AUTH
+// ────────────────────────────────────────────────────────────────────────────
+
 export const loginUser = async (identifier: string, password: string) => {
   clearToken();
   const data = await apiFetch("/users/authenticate", {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
   });
-  if (data?.token) setToken(data.token);
-  if (data?.role)  setRole(data.role);
+
+  if (data?.token)        setToken(data.token);
+  if (data?.role)         setRole(data.role);
+  if (data?.id)           setUserId(Number(data.id));
+  if (data?.userId)       setUserId(Number(data.userId));
+  if (data?.consultantId) setConsultantId(Number(data.consultantId));
+
+  debugToken(); // verify role after login
   return data;
 };
 
@@ -100,40 +184,45 @@ export const registerUser = async (payload: any) => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (data?.token) setToken(data.token);
-  if (data?.role)  setRole(data.role);
+  if (data?.token)        setToken(data.token);
+  if (data?.role)         setRole(data.role);
+  if (data?.id)           setUserId(Number(data.id));
+  if (data?.consultantId) setConsultantId(Number(data.consultantId));
   return data;
 };
 
-export const changePassword = async (payload: any) => {
-  return await apiFetch("/users/me/password", {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-};
+export const changePassword = async (payload: any) =>
+  apiFetch("/users/me/password", { method: "PUT", body: JSON.stringify(payload) });
 
-// ── CONSULTANTS ──
-export const getConsultants = async () => {
-  return await apiFetch("/consultants");
-};
-export const getAllConsultants = getConsultants;
-export const getAdvisors      = getConsultants;
-export const getAllAdvisors    = getConsultants;
+// ────────────────────────────────────────────────────────────────────────────
+// CONSULTANTS
+// ────────────────────────────────────────────────────────────────────────────
 
-export const getConsultantById = async (consultantId: number) => {
-  return await apiFetch(`/consultants/${consultantId}`);
-};
+export const getConsultants    = async () => apiFetch("/consultants");
+export const getAllConsultants  = getConsultants;
+export const getAdvisors       = getConsultants;
+export const getAllAdvisors     = getConsultants;
+
+export const getConsultantById = async (consultantId: number) =>
+  apiFetch(`/consultants/${consultantId}`);
 export const getAdvisorById = getConsultantById;
 export const getMyProfile   = getConsultantById;
 
-// ✅ FIXED: Converts JSON to FormData, and formats Time for Spring Boot
+// POST /consultants — multipart/form-data
+// Spring controller expects:
+//   @RequestPart("data")                      ConsultantRequest  (JSON)
+//   @RequestPart(value="file", required=false) MultipartFile
+//
+// ConsultantRequest fields:
+//   name, designation, charges, shiftStartTime (HH:mm:ss), shiftEndTime (HH:mm:ss),
+//   description, rating, skills (string[]), email
 export const createConsultant = async (payload: any) => {
-  const formData = new FormData();
+  const formData    = new FormData();
   const dataPayload = { ...payload };
-  let file = null;
-  
+  let   file: File | null = null;
+
   if (dataPayload.file) {
-    file = dataPayload.file;
+    file = dataPayload.file as File;
     delete dataPayload.file;
   }
 
@@ -149,25 +238,41 @@ export const createConsultant = async (payload: any) => {
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
 
-  return await apiFetch("/consultants", {
-    method: "POST",
-    body: formData,
-  });
+  return apiFetch("/consultants", { method: "POST", body: formData });
 };
 export const createAdvisor = createConsultant;
 
-// ✅ FIXED: Converts JSON to FormData, and formats Time for Spring Boot
-export const updateConsultant = async (consultantId: number, payload: any) => {
-  const formData = new FormData();
-  const dataPayload = { ...payload };
-  let file = null;
+// PUT /consultants/:id — multipart/form-data
+// ✅ Supports both explicit file param and file nested inside data object.
+// ✅ Formats HH:mm → HH:mm:ss for Spring Boot compatibility.
+// ⚠️ Do NOT set Content-Type header — browser sets multipart/form-data
+//    with the correct boundary automatically.
+export const updateConsultant = async (
+  consultantId: number,
+  data: {
+    name?:           string;
+    designation?:    string;
+    charges?:        number;
+    email?:          string;
+    skills?:         string[];
+    shiftStartTime?: string | null;  // "HH:mm" or "HH:mm:ss"
+    shiftEndTime?:   string | null;  // "HH:mm" or "HH:mm:ss"
+    description?:    string;
+    rating?:         number | null;
+    [key: string]:   any;            // Allow dynamic fields
+  },
+  explicitFile?: File | null
+): Promise<any> => {
+  const formData    = new FormData();
+  const dataPayload = { ...data };
+  let   file: File | null = explicitFile || null;
 
   if (dataPayload.file) {
-    file = dataPayload.file;
+    if (!file) file = dataPayload.file as File;
     delete dataPayload.file;
   }
 
-  // Formatting: Spring Boot requires HH:mm:ss. HTML inputs give HH:mm
+  // Formatting: Spring Boot requires HH:mm:ss
   if (dataPayload.shiftStartTime && dataPayload.shiftStartTime.length === 5) {
     dataPayload.shiftStartTime += ":00";
   }
@@ -175,62 +280,49 @@ export const updateConsultant = async (consultantId: number, payload: any) => {
     dataPayload.shiftEndTime += ":00";
   }
 
-  formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
-  if (file) formData.append("file", file);
+  // Part 1 — JSON blob read by @RequestPart("data")
+  formData.append('data', new Blob([JSON.stringify(dataPayload)], { type: 'application/json' }));
+  // Part 2 — image file (omit entirely if no file selected)
+  if (file) formData.append('file', file);
 
-  return await apiFetch(`/consultants/${consultantId}`, {
-    method: "PUT",
-    body: formData,
-  });
+  return apiFetch(`/consultants/${consultantId}`, { method: 'PUT', body: formData });
 };
 export const updateAdvisor = updateConsultant;
 
-export const deleteConsultant = async (consultantId: number) => {
-  return await apiFetch(`/consultants/${consultantId}`, {
-    method: "DELETE",
-  });
-};
+export const deleteConsultant = async (consultantId: number) =>
+  apiFetch(`/consultants/${consultantId}`, { method: "DELETE" });
 export const deleteAdvisor = deleteConsultant;
 
-// ── User Management ──
-export const getAllUsers = async () => {
-  return await apiFetch("/users");
-};
-export const getUsersByRole = async (role: string) => {
-  return await apiFetch(`/users/role/${role}`);
-};
-export const updateUser = async (id: number, payload: object) => {
-  return await apiFetch(`/users/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-};
-export const deleteUser = async (id: number) => {
-  return await apiFetch(`/users/${id}`, {
-    method: "DELETE",
-  });
-};
+// ────────────────────────────────────────────────────────────────────────────
+// USER MANAGEMENT
+// ────────────────────────────────────────────────────────────────────────────
 
-// ── Onboarding ──
-export const getOnboarding = async (id: number) => {
-  return await apiFetch(`/onboarding/${id}`);
-};
-export const updateOnboarding = async (id: number, payload: object) => {
-  return await apiFetch(`/onboarding/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-};
-export const deleteOnboarding = async (id: number) => {
-  return await apiFetch(`/onboarding/${id}`, {
-    method: "DELETE",
-  });
-};
+export const getAllUsers    = async ()             => apiFetch("/users");
+export const getUsersByRole = async (role: string) => apiFetch(`/users/role/${role}`);
+export const getCurrentUser = async ()             => apiFetch("/users/me");
+export const logoutUser     = ()                   => clearToken();
 
-// ── Timeslots ──
-export const getTimeslotById = async (id: number) => {
-  return await apiFetch(`/timeslots/${id}`);
-};
+export const updateUser = async (id: number, payload: object) =>
+  apiFetch(`/users/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+export const deleteUser = async (id: number) =>
+  apiFetch(`/users/${id}`, { method: "DELETE" });
+
+// ────────────────────────────────────────────────────────────────────────────
+// ONBOARDING
+// ────────────────────────────────────────────────────────────────────────────
+
+export const getOnboarding = async (id: number) => apiFetch(`/onboarding/${id}`);
+export const updateOnboarding = async (id: number, payload: object) =>
+  apiFetch(`/onboarding/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+export const deleteOnboarding = async (id: number) =>
+  apiFetch(`/onboarding/${id}`, { method: "DELETE" });
+
+// ────────────────────────────────────────────────────────────────────────────
+// TIMESLOTS
+// ────────────────────────────────────────────────────────────────────────────
+
+export const getTimeslotById = async (id: number) => apiFetch(`/timeslots/${id}`);
 
 export const getTimeslotsByConsultant = async (consultantId: number) => {
   const data = await apiFetch(`/timeslots/consultant/${consultantId}`);
@@ -251,50 +343,53 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
 export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 
 export const createTimeslot = async (payload: {
-  consultantId:    number;
-  slotDate:        string;
-  slotTime:        string;
-  durationMinutes: number;
+  consultantId:      number;
+  slotDate:          string;
+  slotTime:          string;
+  durationMinutes:   number;
   masterTimeSlotId?: number;
-}) => {
-  return await apiFetch("/timeslots", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-};
+}) => apiFetch("/timeslots", { method: "POST", body: JSON.stringify(payload) });
 
-export const updateTimeslot = async (id: number, payload: any) => {
-  return await apiFetch(`/timeslots/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-};
+export const updateTimeslot = async (id: number, payload: any) =>
+  apiFetch(`/timeslots/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-export const deleteTimeslot = async (id: number) => {
-  return await apiFetch(`/timeslots/${id}`, {
-    method: "DELETE",
-  });
-};
+export const deleteTimeslot = async (id: number) =>
+  apiFetch(`/timeslots/${id}`, { method: "DELETE" });
 
-// ── Bookings ──
+// ────────────────────────────────────────────────────────────────────────────
+// BOOKINGS
+// ────────────────────────────────────────────────────────────────────────────
+
 export const createBooking = async (payload: {
-  consultantId: number;
-  timeSlotId:   number;
-  amount:       number;
-  userNotes?:   string;
-}) => {
-  return await apiFetch("/bookings", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-};
+  consultantId:      number;
+  timeSlotId:        number;
+  amount:            number;
+  userNotes?:        string;
+  meetingMode?:      string;
+  bookingDate?:      string;
+  slotDate?:         string;
+  masterTimeslotId?: number;
+  slotTime?:         string;
+  timeRange?:        string;
+}) => apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
 
-export const getBookingById = async (id: number) => {
-  return await apiFetch(`/bookings/${id}`);
-};
+export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
 export const getAllBookings = async (): Promise<any[]> => {
-  // ✅ FIXED: Bypassed the failing URLs directly to stop the Red 500 errors in console
+  const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
+
+  for (const endpoint of directEndpoints) {
+    try {
+      const response  = await api.get(endpoint);
+      const extracted = extractArray(response.data);
+      if (extracted.length > 0) return extracted;
+      if (endpoint === "/bookings") return [];
+    } catch {
+      console.warn(`⚠️ ${endpoint} failed, trying next…`);
+    }
+  }
+
+  // Fallback: aggregate bookings per consultant
   try {
     const consultantsData = await api.get("/consultants");
     const consultants: any[] = extractArray(consultantsData.data);
@@ -308,7 +403,9 @@ export const getAllBookings = async (): Promise<any[]> => {
       )
     );
 
-    const allBookings: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+    const allBookings: any[] = results.flatMap(r =>
+      r.status === "fulfilled" ? r.value : []
+    );
     const seen = new Set<number>();
     return allBookings.filter(b => {
       if (seen.has(b.id)) return false;
@@ -331,41 +428,96 @@ export const getMyBookings = async (): Promise<any[]> => {
   }
 };
 
-export const getBookingsByConsultant = async (consultantId: number) => {
-  return await apiFetch(`/bookings/consultant/${consultantId}`);
-};
+export const getBookingsByConsultant = async (consultantId: number) =>
+  apiFetch(`/bookings/consultant/${consultantId}`);
 export const getBookingsByAdvisor = getBookingsByConsultant;
 
-export const updateBooking = async (id: number, payload: any) => {
-  return await apiFetch(`/bookings/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
+export const updateBooking = async (id: number, payload: any) =>
+  apiFetch(`/bookings/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+export const deleteBooking = async (id: number) =>
+  apiFetch(`/bookings/${id}`, { method: "DELETE" });
+
+// ────────────────────────────────────────────────────────────────────────────
+// QUERIES
+// ────────────────────────────────────────────────────────────────────────────
+
+export const getAllQueries = async () => {
+  const data = await apiFetch("/queries");
+  return extractArray(data);
 };
 
-export const deleteBooking = async (id: number) => {
-  return await apiFetch(`/bookings/${id}`, {
-    method: "DELETE",
-  });
+export const submitQuery = async (payload: {
+  userId:       number;
+  consultantId: number;
+  category:     string;
+  queryText:    string;
+  status:       string;
+}) => apiFetch("/queries", { method: "POST", body: JSON.stringify(payload) });
+
+export const getQueryById = async (id: number) => apiFetch(`/queries/${id}`);
+
+export const updateQuery = async (id: number, payload: any) =>
+  apiFetch(`/queries/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+export const updateQueryStatus = async (id: number, status: string) =>
+  apiFetch(`/queries/${id}`, { method: "PUT", body: JSON.stringify({ status }) });
+
+export const deleteQuery = async (id: number) =>
+  apiFetch(`/queries/${id}`, { method: "DELETE" });
+
+export const getQueriesByUser = async (userId: number) => {
+  const data = await apiFetch(`/queries/user/${userId}`);
+  return extractArray(data);
 };
 
-// ── Queries ──
-export const getMyQueries = async () => {
+export const getMyQueries = async (userId?: number): Promise<any[]> => {
+  // If userId provided, fetch real queries from backend
+  if (userId !== undefined) {
+    return getQueriesByUser(userId);
+  }
+  // Fallback mock data (used when userId is not available)
   return [
-    { id: 101, title: "Tax Planning", question: "How to minimize capital gains tax on property sale?", date: "Feb 10, 2026", status: "Pending Review", user: "User #429" },
-    { id: 102, title: "Investment", question: "Best mutual funds for 5 year horizon?", date: "Feb 12, 2026", status: "Replied", user: "User #882" },
+    {
+      id: 101, title: "Tax Planning",
+      question: "How to minimize capital gains tax on property sale?",
+      date: "Feb 10, 2026", status: "Pending Review", user: "User #429",
+    },
+    {
+      id: 102, title: "Investment",
+      question: "Best mutual funds for 5 year horizon?",
+      date: "Feb 12, 2026", status: "Replied", user: "User #882",
+    },
   ];
 };
 
-// ── User Data ──
-export const getCurrentUser = async () => {
-  return await apiFetch("/users/me");
+/**
+ * Fetches all queries assigned to a specific consultant.
+ * Used by the Advisor/Consultant dashboard.
+ */
+export const getQueriesByConsultant = async (consultantId: number) => {
+  const data = await apiFetch(`/queries/consultant/${consultantId}`);
+  return extractArray(data);
 };
 
-export const logoutUser = () => {
-  clearToken();
-};
+// Alias for consistency with other naming conventions
+export const getQueriesByAdvisor = getQueriesByConsultant;
 
-export const getConsultantMasterSlots = async (consultantId: number) => {
-  return await apiFetch(`/consultants/${consultantId}/master-timeslots`);
-};
+/**
+ * Updates a query with a response from the consultant.
+ * Automatically marks the query as RESOLVED when replied.
+ */
+export const replyToQuery = async (queryId: number, responseText: string) =>
+  apiFetch(`/queries/${queryId}`, {
+    method: "PUT",
+    body: JSON.stringify({ responseText, status: "RESOLVED" }),
+  });
+
+// ────────────────────────────────────────────────────────────────────────────
+// MASTER TIMESLOTS
+// ────────────────────────────────────────────────────────────────────────────
+
+export const getConsultantMasterSlots = async (consultantId: number) =>
+  apiFetch(`/consultants/${consultantId}/master-timeslots`);
+
+export default api;

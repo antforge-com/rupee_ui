@@ -1,529 +1,340 @@
 import { useEffect, useState } from "react";
 import {
-  createTimeslot,
-  deleteTimeslot,
-  getConsultantById,
-  getTimeslotsByConsultant,
+  getAllBookings,
+  getBookingsByConsultant,
+  getConsultantId,
+  getToken,
 } from "../services/api";
-import styles from "../styles/BookingsPage.module.css";
+import styles from "../styles/AdminPage.module.css";
 
-interface Slot {
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface Booking {
   id: number;
-  slotDate: string;
-  slotTime: string;
-  slotEndTime?: string;
-  durationMinutes: number;
-  isBooked: boolean;
-  consultantId: number;
+  user: string;
+  userInitial: string;
+  advisor: string;
+  date: string;
+  time: string;
+  status: string;
+  amount: number;
+  meetingMode: string;
 }
 
-// ── Time helpers ─────────────────────────────────────────────────────────────
+interface Props {
+  isAdmin?: boolean;
+}
 
-const toAmPm = (time: string): string => {
-  if (!time) return "";
-  const [hStr, mStr] = time.split(":");
-  const h = Number(hStr);
-  const m = Number(mStr || 0);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 || 12;
-  const min = String(m).padStart(2, "0");
-  return `${hour}:${min} ${ampm}`;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const toAmPm = (t: string): string => {
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  if (isNaN(h)) return t;
+  return `${h % 12 || 12}:${String(m || 0).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 };
 
-const formatTimeRange = (
-  slotTime: string,
-  durationMinutes: number,
-  slotEndTime?: string
-): string => {
-  const startStr = toAmPm(slotTime);
-  if (slotEndTime) return `${startStr} – ${toAmPm(slotEndTime)}`;
-  const [hStr, mStr] = slotTime.split(":");
-  const totalMins = Number(hStr) * 60 + Number(mStr || 0) + durationMinutes;
-  const endH = Math.floor(totalMins / 60) % 24;
-  const endM = totalMins % 60;
-  const endTime = `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
-  return `${startStr} – ${toAmPm(endTime)}`;
+const prettifyName = (raw: string): string => {
+  if (!raw) return raw;
+  if (raw.includes("@")) {
+    return raw.split("@")[0]
+      .replace(/[._\-]/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return raw;
 };
 
-const padHour = (h: number) => `${String(h).padStart(2, "0")}:00`;
-
-/**
- * Robustly parse any time value to an hour (0–23).
- */
-const parseToHour = (val: any): number | null => {
-  if (val === null || val === undefined || val === "") return null;
-  if (typeof val === "number") return isNaN(val) ? null : Math.floor(val);
-  const s = String(val).trim();
-  if (/^\d{1,2}:\d{2}/.test(s)) {
-    const h = Number(s.split(":")[0]);
-    return isNaN(h) ? null : h;
-  }
-  if (/^\d{1,2}$/.test(s)) {
-    const h = Number(s);
-    return isNaN(h) ? null : h;
-  }
-  const ampm = s.match(/^(\d{1,2})(?::\d{2})?\s*(AM|PM)/i);
-  if (ampm) {
-    let h = Number(ampm[1]);
-    const p = ampm[2].toUpperCase();
-    if (p === "PM" && h !== 12) h += 12;
-    if (p === "AM" && h === 12) h = 0;
-    return isNaN(h) ? null : h;
-  }
-  return null;
+const extractUserName = (b: any): string => {
+  const raw =
+    b.user?.name       || b.user?.fullName    || b.user?.username   ||
+    b.client?.name     || b.bookedBy?.name    || b.customer?.name   ||
+    b.userName         || b.clientName        || b.userFullName      ||
+    b.bookedByName     || b.user?.email       || b.userEmail        ||
+    (b.userId   ? `User #${b.userId}`   : null) ||
+    (b.clientId ? `User #${b.clientId}` : null) ||
+    `Booking #${b.id}`;
+  return prettifyName(raw);
 };
 
-/**
- * Extracts shift boundaries strictly looking for "shiftTimings" 
- * to align perfectly with the Java Backend format (e.g., "09:00 AM - 05:00 PM")
- */
-const getShiftFromProfile = (
-  p: any
-): { startHour: number | null; endHour: number | null } => {
-  if (!p) return { startHour: null, endHour: null };
+const extractAdvisorName = (b: any): string =>
+  b.consultant?.name    || b.consultant?.fullName ||
+  b.advisor?.name       || b.consultantName       ||
+  b.advisorName         || b.providerName         ||
+  (b.consultantId ? `Consultant #${b.consultantId}` : null) ||
+  "Consultant";
 
-  // 1. Explicitly check for the Java backend field "shiftTimings" with hyphen format
-  if (p.shiftTimings && typeof p.shiftTimings === "string" && p.shiftTimings.includes("-")) {
-    const parts = p.shiftTimings.split("-");
-    const s = parseToHour(parts[0].trim());
-    const e = parseToHour(parts[1].trim());
-    if (s !== null && e !== null) {
-      return { startHour: s, endHour: e };
-    }
-  }
+const extractDate = (b: any): string =>
+  b.slotDate || b.bookingDate || b.booking_date || b.date ||
+  b.sessionDate || b.appointmentDate ||
+  b.timeSlot?.slotDate || b.slot?.slotDate || "";
 
-  // 2. Fallbacks for other possible names to prevent removal of existing logic
-  const startRaw = p.shiftStart ?? p.shiftStartTime ?? p.shift_start ?? p.startHour ?? null;
-  const endRaw = p.shiftEnd ?? p.shiftEndTime ?? p.shift_end ?? p.endHour ?? null;
-
-  let startHour = parseToHour(startRaw);
-  let endHour   = parseToHour(endRaw);
-
-  const nested = p.shift ?? p.availability ?? null;
-  if (nested && typeof nested === "object") {
-    if (startHour === null) startHour = parseToHour(nested.start ?? nested.startTime ?? null);
-    if (endHour === null) endHour = parseToHour(nested.end ?? nested.endTime ?? null);
-  }
-
-  return { startHour, endHour };
+const extractTime = (b: any): string => {
+  if (b.timeSlot?.masterTimeSlot?.timeRange) return b.timeSlot.masterTimeSlot.timeRange;
+  if (b.masterTimeSlot?.timeRange)           return b.masterTimeSlot.timeRange;
+  if (b.timeRange)                           return b.timeRange;
+  const t = b.slotTime || b.bookingTime || b.sessionTime || b.appointmentTime ||
+    b.timeSlot?.slotTime || b.slot?.slotTime || "";
+  return t ? toAmPm(t.substring(0, 5)) : "";
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
-export default function MySlotsPage() {
-  const [slots, setSlots]             = useState<Slot[]>([]);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState<string | null>(null);
-  const [addingSlot, setAddingSlot]   = useState(false);
-
-  const [shiftHours, setShiftHours]   = useState<number[]>([]);
-  const [shiftLabel, setShiftLabel]   = useState<string>("");
-  const [shiftError, setShiftError]   = useState<string | null>(null);
-
-  const [formDate, setFormDate]         = useState("");
-  const [selectedHour, setSelectedHour] = useState<number | null>(null);
-  const [formError, setFormError]       = useState<string | null>(null);
-
-  const getConsultantId = (): number => {
-    const stored =
-      localStorage.getItem("fin_consultant_id") ||
-      localStorage.getItem("consultant_id")     ||
-      localStorage.getItem("userId");
-    return stored ? Number(stored) : 0;
+const mapBooking = (b: any): Booking => {
+  const user = extractUserName(b);
+  return {
+    id:          b.id,
+    user,
+    userInitial: user.charAt(0).toUpperCase(),
+    advisor:     extractAdvisorName(b),
+    date:        extractDate(b),
+    time:        extractTime(b),
+    status:      (b.status || b.bookingStatus || b.BookingStatus || "PENDING").toUpperCase(),
+    amount:      Number(b.amount || b.charges || b.fee || b.consultantCharges || 0),
+    meetingMode: b.meetingMode || b.meeting_mode || b.mode || "",
   };
+};
 
-  const mapSlot = (s: any): Slot => {
-    // --- NEW ADDITIONS START: Sync Java MasterTimeSlot format smoothly ---
-    // Extract properties cleanly so we do not break any original logic below
-    if (!s.slotTime && s.masterTimeSlot?.timeRange) {
-      const parts = s.masterTimeSlot.timeRange.split("-");
-      if (parts.length === 2) {
-        const convertTo24 = (t: string) => {
-          const m = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-          if (m) {
-            let h = Number(m[1]);
-            if (m[3].toUpperCase() === "PM" && h !== 12) h += 12;
-            if (m[3].toUpperCase() === "AM" && h === 12) h = 0;
-            return `${String(h).padStart(2, "0")}:${m[2]}`;
-          }
-          return t;
-        };
-        s.slotTime = convertTo24(parts[0].trim());
-        s.slotEndTime = convertTo24(parts[1].trim());
-      }
-    }
-    if (s.status === 'BOOKED' || s.status === 'UNAVAILABLE') {
-      s.isBooked = true;
-    }
-    // --- NEW ADDITIONS END ---
+const STATUS_STYLES: Record<string, { bg: string; color: string; border: string }> = {
+  CONFIRMED:  { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
+  PENDING:    { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
+  COMPLETED:  { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
+  CANCELLED:  { bg: "#FEF2F2", color: "#EF4444", border: "#FCA5A5" },
+  DEFAULT:    { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
+};
+const getStatus = (s: string) => STATUS_STYLES[s] || STATUS_STYLES.DEFAULT;
 
-    return {
-      id: s.id,
-      slotDate: s.slotDate || s.date || "",
-      slotTime: (s.slotTime || s.time || "").substring(0, 5),
-      slotEndTime: s.slotEndTime
-        ? s.slotEndTime.substring(0, 5)
-        : s.endTime
-        ? s.endTime.substring(0, 5)
-        : undefined,
-      durationMinutes: Number(s.durationMinutes || s.duration || 60),
-      isBooked: s.isBooked ?? s.booked ?? false,
-      consultantId: s.consultantId || s.consultant?.id || 0,
-    };
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+export default function BookingsPage({ isAdmin = false }: Props) {
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState<string | null>(null);
+  const [filter,   setFilter]   = useState<"ALL"|"PENDING"|"CONFIRMED"|"COMPLETED"|"CANCELLED">("ALL");
 
-  const loadShiftTimings = async (consultantId: number) => {
+  useEffect(() => { fetchBookings(); }, [isAdmin]);
+
+  const fetchBookings = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const profile = await getConsultantById(consultantId);
-      const { startHour, endHour } = getShiftFromProfile(profile);
+      let raw: any[] = [];
 
-      if (startHour !== null && endHour !== null && endHour > startHour) {
-        const hours: number[] = [];
-        for (let h = startHour; h < endHour; h++) hours.push(h);
-        setShiftHours(hours);
-        setShiftLabel(
-          `${toAmPm(padHour(startHour))} – ${toAmPm(padHour(endHour))}`
-        );
-        setShiftError(null);
+      if (isAdmin) {
+        raw = await getAllBookings();
       } else {
-        setShiftHours([]);
-        setShiftLabel("");
-        setShiftError("Shift timings not set correctly in your profile.");
-      }
-    } catch (err) {
-      setShiftHours([]);
-      setShiftLabel("");
-      setShiftError("Could not load shift timings from your profile.");
-    }
-  };
-
-  const fetchSlots = async () => {
-    try {
-      const consultantId = getConsultantId();
-      if (!consultantId) return;
-
-      const data = await getTimeslotsByConsultant(consultantId);
-      const mapped = Array.isArray(data) ? data.map(mapSlot) : [];
-      mapped.sort((a, b) =>
-        a.slotDate + a.slotTime < b.slotDate + b.slotTime ? -1 : 1
-      );
-      setSlots(mapped);
-    } catch (err: any) {
-      setError(err?.message || "Failed to fetch slots.");
-    }
-  };
-
-  useEffect(() => {
-    const init = async () => {
-      setLoading(true);
-      setError(null);
-      const consultantId = getConsultantId();
-      if (!consultantId) {
-        setError("Consultant ID not found. Please log in again.");
-        setLoading(false);
-        return;
-      }
-      await Promise.all([loadShiftTimings(consultantId), fetchSlots()]);
-      setLoading(false);
-    };
-    init();
-    // eslint-disable-next-line
-  }, []);
-
-  const handleAddSlot = async () => {
-    setFormError(null);
-    if (!formDate)          { setFormError("Please select a date."); return; }
-    if (selectedHour === null) { setFormError("Please select a time slot."); return; }
-
-    const consultantId = getConsultantId();
-    if (!consultantId)      { setFormError("Consultant ID not found."); return; }
-
-    const slotTime = padHour(selectedHour);
-
-    if (slots.some((s) => s.slotDate === formDate && s.slotTime === slotTime)) {
-      setFormError("A slot already exists for this date and time.");
-      return;
-    }
-
-    setAddingSlot(true);
-    try {
-      await createTimeslot({ consultantId, slotDate: formDate, slotTime, durationMinutes: 60 });
-      setFormDate("");
-      setSelectedHour(null);
-      await fetchSlots();
-    } catch (err: any) {
-      setFormError(err?.message || "Failed to add slot.");
-    } finally {
-      setAddingSlot(false);
-    }
-  };
-
-  const handleDelete = async (slot: Slot) => {
-    if (slot.isBooked) { alert("Cannot delete a booked slot."); return; }
-    if (!window.confirm("Delete this slot?")) return;
-    try {
-      await deleteTimeslot(slot.id);
-      setSlots((prev) => prev.filter((s) => s.id !== slot.id));
-    } catch {
-      alert("Failed to delete slot.");
-    }
-  };
-
-  const isAlreadyAdded = (hour: number) =>
-    formDate
-      ? slots.some(
-          (s) => s.slotDate === formDate && Number(s.slotTime.split(":")[0]) === hour
-        )
-      : false;
-
-  const availableCount = slots.filter((s) => !s.isBooked).length;
-  const bookedCount    = slots.filter((s) => s.isBooked).length;
-
-  // ── 30-Day Logic Generator ──
-  const generateMonthDays = () => {
-    const days = [];
-    const today = new Date();
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      days.push(d.toISOString().split("T")[0]);
-    }
-    return days;
-  };
-  const monthDays = generateMonthDays();
-
-  // Handle single click toggle directly on the grid
-  const handleToggleMonthSlot = async (date: string, hour: number, existingSlot: Slot | undefined) => {
-    if (existingSlot) {
-      if (existingSlot.isBooked) {
-        alert("This slot is already booked and cannot be modified.");
-        return;
-      }
-      try {
-        await deleteTimeslot(existingSlot.id);
-        setSlots((prev) => prev.filter((s) => s.id !== existingSlot.id));
-      } catch (e) {
-        alert("Failed to make slot unavailable.");
-      }
-    } else {
-      try {
         const consultantId = getConsultantId();
-        if (!consultantId) return;
-        await createTimeslot({ consultantId, slotDate: date, slotTime: padHour(hour), durationMinutes: 60 });
-        fetchSlots();
-      } catch (e) {
-        alert("Failed to make slot available.");
+        if (!consultantId) {
+          setError("Consultant ID not found. Please log in again.");
+          setLoading(false);
+          return;
+        }
+        const data = await getBookingsByConsultant(Number(consultantId));
+        raw = Array.isArray(data) ? data : data?.content ?? [];
       }
+
+      if (raw.length > 0) console.log("📋 Booking sample:", JSON.stringify(raw[0], null, 2));
+
+      let mapped = raw.map(mapBooking);
+
+      // ── Enrich missing user names via /api/users/{id} ────────────────────
+      if (isAdmin) {
+        const needsEnrichment = raw.filter((b: any) => {
+          const hasName = b.user?.name || b.user?.fullName || b.user?.username ||
+                          b.userName  || b.clientName;
+          const uid = b.userId || b.user?.id || b.clientId;
+          return !hasName && uid;
+        });
+
+        if (needsEnrichment.length > 0) {
+          const token = getToken();
+          const ids = [...new Set(needsEnrichment.map((b: any) =>
+            b.userId || b.user?.id || b.clientId
+          ))] as number[];
+
+          const userMap: Record<number, string> = {};
+          await Promise.all(ids.map(async (uid) => {
+            try {
+              const res = await fetch(`/api/users/${uid}`, {
+                headers: {
+                  Accept: "application/json",
+                  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+              });
+              if (res.ok) {
+                const u = await res.json();
+                const name = u.name || u.fullName || u.email || u.username || u.identifier || "";
+                userMap[uid] = prettifyName(name);
+              }
+            } catch { /* skip */ }
+          }));
+
+          mapped = raw.map((b: any) => {
+            const uid = b.userId || b.user?.id || b.clientId;
+            const enrichedName = uid && userMap[uid] ? userMap[uid] : null;
+            const base = mapBooking(b);
+            return enrichedName
+              ? { ...base, user: enrichedName, userInitial: enrichedName.charAt(0).toUpperCase() }
+              : base;
+          });
+        }
+      }
+
+      mapped.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      setBookings(mapped);
+    } catch (err: any) {
+      console.error("BookingsPage error:", err);
+      setError(err.message || "Failed to load bookings.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const filtered = filter === "ALL" ? bookings : bookings.filter(b => b.status === filter);
+
+  const counts = {
+    ALL:       bookings.length,
+    PENDING:   bookings.filter(b => b.status === "PENDING").length,
+    CONFIRMED: bookings.filter(b => b.status === "CONFIRMED").length,
+    COMPLETED: bookings.filter(b => b.status === "COMPLETED").length,
+    CANCELLED: bookings.filter(b => b.status === "CANCELLED").length,
+  };
+
+  const revenue = bookings
+    .filter(b => b.status === "COMPLETED")
+    .reduce((s, b) => s + b.amount, 0);
+
   return (
-    <div className={styles.page}>
-      <h2 className={styles.title}>Manage Availability</h2>
-
-      {/* ── Form Card ── */}
-      <div className={styles.formCard}>
-        <div className={styles.formTopRow}>
-          <div className={styles.formField}>
-            <label className={styles.fieldLabel}>DATE</label>
-            <input
-              type="date"
-              className={styles.fieldInput}
-              value={formDate}
-              onChange={(e) => {
-                setFormDate(e.target.value);
-                setSelectedHour(null);
-                setFormError(null);
-              }}
-              min={new Date().toISOString().split("T")[0]}
-            />
-          </div>
-          <button
-            className={styles.addBtn}
-            onClick={handleAddSlot}
-            disabled={addingSlot || !formDate || selectedHour === null}
-          >
-            {addingSlot ? "Adding…" : "+ Add Slot"}
-          </button>
-        </div>
-
-        <div className={styles.timeSection}>
-          <label className={styles.fieldLabel}>
-            TIME
-            {shiftLabel && (
-              <span className={styles.shiftBadge}>Shift: {shiftLabel}</span>
-            )}
-          </label>
-
-          {loading ? (
-            <div className={styles.chipsLoading}>
-              <div className={styles.spinnerSm} /> Loading shift timings…
-            </div>
-          ) : shiftHours.length > 0 ? (
-            <div className={styles.timeChipsWrap}>
-              {shiftHours.map((hour) => {
-                const added    = isAlreadyAdded(hour);
-                const selected = selectedHour === hour;
-                return (
-                  <button
-                    key={hour}
-                    type="button"
-                    disabled={added}
-                    onClick={() => {
-                      setSelectedHour(selected ? null : hour);
-                      setFormError(null);
-                    }}
-                    className={`${styles.timeChip} ${
-                      selected ? styles.chipSelected :
-                      added    ? styles.chipDisabled :
-                                 styles.chipIdle
-                    }`}
-                    title={
-                      added
-                        ? "Already added for this date"
-                        : `${toAmPm(padHour(hour))} – ${toAmPm(padHour(hour + 1))}`
-                    }
-                  >
-                    <span className={styles.chipStart}>{toAmPm(padHour(hour))}</span>
-                    <span className={styles.chipSep}>–</span>
-                    <span className={styles.chipEnd}>{toAmPm(padHour(hour + 1))}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : shiftError ? (
-            <div className={styles.shiftWarn}>⚠️ {shiftError}</div>
-          ) : null}
-        </div>
-
-        {formError && <p className={styles.formError}>⚠️ {formError}</p>}
+    <div>
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <h2 className={styles.pageTitle} style={{ margin: 0 }}>
+          {isAdmin ? "All Bookings" : "My Bookings"}
+        </h2>
+        <button onClick={fetchBookings} style={{
+          background: "#EFF6FF", color: "#2563EB", border: "1px solid #BFDBFE",
+          borderRadius: 8, padding: "6px 14px", fontWeight: 600, fontSize: 13, cursor: "pointer",
+        }}>↻ Refresh</button>
       </div>
 
-      {error && (
-        <div className={styles.errorBox}>
-          ⚠️ {error}
-          <button className={styles.retryBtn} onClick={fetchSlots}>Retry</button>
+      {/* ── Stats strip ── */}
+      {!loading && bookings.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(120px,1fr))", gap: 12, marginBottom: 20 }}>
+          {[
+            { label: "Total",     value: counts.ALL,                          color: "#2563EB", bg: "#EFF6FF" },
+            { label: "Pending",   value: counts.PENDING,                      color: "#D97706", bg: "#FFFBEB" },
+            { label: "Confirmed", value: counts.CONFIRMED,                    color: "#2563EB", bg: "#EFF6FF" },
+            { label: "Completed", value: counts.COMPLETED,                    color: "#16A34A", bg: "#F0FDF4" },
+            { label: "Revenue",   value: `₹${revenue.toLocaleString()}`,      color: "#16A34A", bg: "#F0FDF4" },
+          ].map(s => (
+            <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: "#64748B", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 2 }}>{s.label}</div>
+            </div>
+          ))}
         </div>
       )}
 
+      {/* ── Error banner ── */}
+      {error && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 16px", marginBottom: 16, color: "#B91C1C", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>⚠️ {error}</span>
+          <button onClick={fetchBookings} style={{ background: "#DC2626", color: "#fff", border: "none", borderRadius: 6, padding: "4px 12px", fontWeight: 600, cursor: "pointer" }}>Retry</button>
+        </div>
+      )}
+
+      {/* ── Filter pills ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {(["ALL","PENDING","CONFIRMED","COMPLETED","CANCELLED"] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{
+            padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            background: filter === f ? "#2563EB" : "#F1F5F9",
+            color:      filter === f ? "#fff"    : "#64748B",
+            border:     filter === f ? "1px solid #2563EB" : "1px solid #E2E8F0",
+          }}>
+            {f} ({counts[f]})
+          </button>
+        ))}
+      </div>
+
+      {/* ── Cards ── */}
       {loading ? (
-        <div className={styles.loadingState}>
-          <div className={styles.spinner} />
-          <span>Loading slots…</span>
+        <div style={{ textAlign: "center", padding: 60, color: "#94A3B8" }}>
+          <div style={{ width: 28, height: 28, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
+          Loading bookings…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "48px 20px", background: "#F8FAFC", borderRadius: 14, color: "#94A3B8" }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>📅</div>
+          <p style={{ margin: 0, fontWeight: 600 }}>
+            {bookings.length === 0 ? "No bookings yet." : `No ${filter.toLowerCase()} bookings.`}
+          </p>
         </div>
       ) : (
-        <>
-          <div className={styles.summaryRow}>
-            <div className={styles.summaryChip}>
-              <span className={styles.dotBlue} />
-              Available: <strong>{availableCount}</strong>
-            </div>
-            <div className={styles.summaryChip}>
-              <span className={styles.dotGray} />
-              Booked: <strong>{bookedCount}</strong>
-            </div>
-            <div className={styles.summaryChip}>
-              Total: <strong>{slots.length}</strong>
-            </div>
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filtered.map((b, idx) => {
+            const sc = getStatus(b.status);
+            return (
+              <div key={b.id} style={{
+                background: "#fff",
+                border: "1px solid #F1F5F9",
+                borderLeft: `4px solid ${sc.border}`,
+                borderRadius: 14,
+                padding: "16px 20px",
+                display: "flex",
+                alignItems: "center",
+                gap: 16,
+                flexWrap: "wrap",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
+              }}>
+                {/* Avatar */}
+                <div style={{
+                  width: 46, height: 46, borderRadius: "50%", flexShrink: 0,
+                  background: "linear-gradient(135deg,#2563EB,#1D4ED8)",
+                  color: "#fff", fontWeight: 700, fontSize: 18,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  {b.userInitial}
+                </div>
 
-          {/* ── Retained Legacy Grid (Unmodified) ── */}
-          {slots.length === 0 && (
-             <div className={styles.emptyState}>
-               <svg width="44" height="44" fill="none" viewBox="0 0 24 24"
-                 style={{ margin: "0 auto 12px", display: "block" }}>
-                 <rect x="3" y="4" width="18" height="18" rx="2"
-                   stroke="#CBD5E1" strokeWidth="1.5" />
-                 <path d="M16 2v4M8 2v4M3 10h18"
-                   stroke="#CBD5E1" strokeWidth="1.5" strokeLinecap="round" />
-               </svg>
-               <p style={{ color: "#94A3B8", margin: 0 }}>
-                 No manual slots added yet. Check your monthly schedule below.
-               </p>
-             </div>
-          )}
-          {slots.length > 0 && (
-            <div className={styles.slotsGrid}>
-              {slots.map((slot) => (
-                <div
-                  key={slot.id}
-                  className={`${styles.slotCard} ${
-                    slot.isBooked ? styles.slotCardBooked : styles.slotCardAvailable
-                  }`}
-                >
-                  <div className={`${styles.slotCardDate} ${slot.isBooked ? styles.strike : ""}`}>
-                    {slot.slotDate}
+                {/* Info */}
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "#0F172A", marginBottom: 4 }}>
+                    {isAdmin ? `${b.user}` : `Session with ${b.advisor}`}
                   </div>
-                  <div className={`${styles.slotCardTime} ${slot.isBooked ? styles.strike : ""}`}>
-                    {formatTimeRange(slot.slotTime, slot.durationMinutes, slot.slotEndTime)}
-                  </div>
-                  <div className={styles.slotCardFooter}>
-                    <span className={`${styles.badge} ${slot.isBooked ? styles.badgeBooked : styles.badgeAvailable}`}>
-                      {slot.isBooked ? "BOOKED" : "AVAILABLE"}
-                    </span>
-                    {!slot.isBooked && (
-                      <button className={styles.cardDeleteBtn} onClick={() => handleDelete(slot)} title="Delete">
-                        ✕
-                      </button>
+                  {isAdmin && (
+                    <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 600, marginBottom: 4 }}>
+                      Consultant: {b.advisor}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 13, color: "#64748B", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    {b.date && <span>📅 {b.date}</span>}
+                    {b.time && (
+                      <span style={{
+                        background: "#EFF6FF", color: "#2563EB", fontWeight: 600,
+                        padding: "2px 10px", borderRadius: 20, fontSize: 12,
+                      }}>{b.time}</span>
+                    )}
+                    {b.meetingMode && (
+                      <span>{b.meetingMode === "ONLINE" ? "💻 Online" : "🏢 Offline"}</span>
+                    )}
+                    {b.amount > 0 && (
+                      <span style={{ color: "#16A34A", fontWeight: 600 }}>
+                        ₹{b.amount.toLocaleString()}
+                      </span>
                     )}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
 
-          {/* ── NEW: 30-Day Auto-Generated Schedule View ── */}
-          {shiftHours.length > 0 && (
-            <div className={styles.monthViewContainer}>
-              <h3 className={styles.monthViewTitle}>My 30-Day Schedule</h3>
-              <p className={styles.monthViewDesc}>
-                This grid automatically loads your 1-hour slots based on your shift timings (<b>{shiftLabel}</b>). <br/>
-                Click any slot below to instantly open or close it. <br/>
-                <span style={{ color: '#2563EB', fontWeight: 600 }}>Blue</span> = Available |{" "}
-                <span style={{ color: '#94A3B8', textDecoration: 'line-through' }}>Gray</span> = Unavailable / Booked
-              </p>
-              
-              <div className={styles.monthGrid}>
-                {monthDays.map((date) => {
-                  return (
-                    <div key={date} className={styles.dayRow}>
-                      <div className={styles.dayDate}>
-                        {new Date(date).toLocaleDateString(undefined, { 
-                          weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' 
-                        })}
-                      </div>
-                      <div className={styles.daySlots}>
-                        {shiftHours.map((hour) => {
-                          // Find if the slot was actually created on backend
-                          const slot = slots.find((s) => s.slotDate === date && Number(s.slotTime.split(":")[0]) === hour);
-                          
-                          // If it exists in DB and is NOT booked, it's Blue
-                          const isAvailable = !!slot && !slot.isBooked;
-
-                          let btnClass = styles.slotBtnUnavailable;
-                          if (isAvailable) btnClass = styles.slotBtnAvailable;
-
-                          return (
-                            <button
-                              key={hour}
-                              className={`${styles.slotBtn} ${btnClass}`}
-                              onClick={() => handleToggleMonthSlot(date, hour, slot)}
-                              title={isAvailable ? "Click to mark Unavailable" : slot?.isBooked ? "This slot is booked" : "Click to mark Available"}
-                            >
-                              {toAmPm(padHour(hour))} – {toAmPm(padHour(hour + 1))}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
+                {/* Status + serial */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, color: "#CBD5E1" }}>#{idx + 1}</span>
+                  <span style={{
+                    padding: "5px 14px", borderRadius: 20,
+                    background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`,
+                    fontSize: 12, fontWeight: 700, letterSpacing: "0.04em",
+                  }}>
+                    {b.status}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
-
-        </>
+            );
+          })}
+        </div>
       )}
     </div>
   );
