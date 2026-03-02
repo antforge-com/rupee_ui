@@ -21,16 +21,19 @@ const getToken = () => localStorage.getItem("fin_token");
 
 const apiFetch = async (url: string, options?: RequestInit) => {
   const token = getToken();
+  const isFormData = options?.body instanceof FormData;
+
   const res = await fetch(url, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(!isFormData ? { "Content-Type": "application/json" } : {}),
       Accept: "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...((options?.headers as Record<string, string>) || {}),
     },
   });
-  const ct = res.headers.get("content-type") || "";
+
+  const ct   = res.headers.get("content-type") || "";
   const data = ct.includes("application/json")
     ? await res.json()
     : { message: await res.text() };
@@ -40,21 +43,34 @@ const apiFetch = async (url: string, options?: RequestInit) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET API CALLS  (all endpoints from ticket-controller in Swagger)
+// TICKET API CALLS
 // ─────────────────────────────────────────────────────────────────────────────
 const ticketApi = {
-  getAll:        ()                                       => apiFetch(`${BASE_URL}/tickets`),
-  getById:       (id: number)                             => apiFetch(`${BASE_URL}/tickets/${id}`),
-  deleteById:    (id: number)                             => apiFetch(`${BASE_URL}/tickets/${id}`, { method: "DELETE" }),
-  patchStatus:   (id: number, status: string)             =>
+  getAll:      ()                         => apiFetch(`${BASE_URL}/tickets`),
+  getById:     (id: number)               => apiFetch(`${BASE_URL}/tickets/${id}`),
+  deleteById:  (id: number)               => apiFetch(`${BASE_URL}/tickets/${id}`, { method: "DELETE" }),
+  patchStatus: (id: number, status: string) =>
     apiFetch(`${BASE_URL}/tickets/${id}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  getComments:   (ticketId: number)                       => apiFetch(`${BASE_URL}/tickets/${ticketId}/comments`),
-  postComment:   (ticketId: number, message: string)      =>
-    apiFetch(`${BASE_URL}/tickets/comments`, { method: "POST", body: JSON.stringify({ ticketId, message, authorRole: "AGENT" }) }),
-};
+  getComments: (ticketId: number)         => apiFetch(`${BASE_URL}/tickets/${ticketId}/comments`),
+
+  // ── FIX: includes senderId + isConsultantReply required by backend ──
+  postComment: (ticketId: number, message: string) => {
+    const senderId = localStorage.getItem("fin_user_id");
+    return apiFetch(`${BASE_URL}/tickets/comments`, {
+      method: "POST",
+      body: JSON.stringify({
+        ticketId,
+        message,
+        authorRole:        "AGENT",
+        senderId:          senderId ? Number(senderId) : null,
+        isConsultantReply: false,
+      }),
+    });
+  },
+}; // ← closing brace was missing in the original file
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOCAL-TIME PARSER  (Spring LocalTime object OR "HH:mm:ss" string → "HH:mm")
+// LOCAL-TIME PARSER
 // ─────────────────────────────────────────────────────────────────────────────
 const parseLocalTime = (t: any): string => {
   if (!t) return "";
@@ -147,9 +163,7 @@ const TicketStepper: React.FC<{ status: TicketStatus }> = ({ status }) => {
   const currentIdx = STEPS.findIndex(s => s.key === status);
   return (
     <div style={{ padding: "14px 0 6px", position: "relative" }}>
-      {/* background track */}
       <div style={{ position: "absolute", top: 30, left: 16, width: "calc(100% - 32px)", height: 2, background: "#E2E8F0", zIndex: 0 }} />
-      {/* filled track */}
       <div style={{
         position: "absolute", top: 30, left: 16,
         width: `calc((100% - 32px) * ${Math.max(0, currentIdx) / (STEPS.length - 1)})`,
@@ -190,7 +204,7 @@ const TicketStepper: React.FC<{ status: TicketStatus }> = ({ status }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET DETAIL PANEL (side drawer-style)
+// TICKET DETAIL PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 interface TicketDetailProps {
   ticket: Ticket;
@@ -200,13 +214,13 @@ interface TicketDetailProps {
 }
 
 const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onStatusChange, onDelete }) => {
-  const [comments, setComments]         = useState<TicketComment[]>([]);
-  const [loadingComments, setLoading]   = useState(true);
-  const [newMsg, setNewMsg]             = useState("");
-  const [sending, setSending]           = useState(false);
+  const [comments, setComments]             = useState<TicketComment[]>([]);
+  const [loadingComments, setLoading]       = useState(true);
+  const [newMsg, setNewMsg]                 = useState("");
+  const [sending, setSending]               = useState(false);
   const [statusChanging, setStatusChanging] = useState(false);
-  const [localStatus, setLocalStatus]   = useState<TicketStatus>(ticket.status);
-  const bottomRef                       = useRef<HTMLDivElement>(null);
+  const [localStatus, setLocalStatus]       = useState<TicketStatus>(ticket.status);
+  const bottomRef                           = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -230,7 +244,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
       const saved = await ticketApi.postComment(ticket.id, newMsg);
       setComments(p => [...p, saved]);
     } catch {
-      // optimistic fallback
       setComments(p => [...p, {
         id: Date.now(), ticketId: ticket.id,
         authorName: "Admin", authorRole: "AGENT",
@@ -269,13 +282,11 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
       position: "fixed", inset: 0, zIndex: 1200,
       display: "flex", alignItems: "stretch", justifyContent: "flex-end",
     }}>
-      {/* backdrop */}
       <div
         onClick={onClose}
         style={{ position: "absolute", inset: 0, background: "rgba(15,23,42,0.5)", backdropFilter: "blur(3px)" }}
       />
 
-      {/* panel */}
       <div style={{
         position: "relative", width: "min(600px, 100vw)", height: "100%",
         background: "#fff", display: "flex", flexDirection: "column",
@@ -283,7 +294,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
         animation: "slideInRight 0.22s ease",
       }}>
 
-        {/* ── Header ── */}
+        {/* Header */}
         <div style={{
           background: "linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)",
           padding: "20px 24px", flexShrink: 0,
@@ -308,7 +319,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
             }}>×</button>
           </div>
 
-          {/* Badges row */}
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <span style={{ padding: "4px 12px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 11, fontWeight: 700 }}>
               {sc.icon} {sc.label}
@@ -322,7 +332,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
           </div>
         </div>
 
-        {/* ── Scrollable body ── */}
+        {/* Scrollable body */}
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
 
           {/* Progress stepper */}
@@ -432,7 +442,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
           </div>
         </div>
 
-        {/* ── Reply box ── */}
+        {/* Reply box */}
         <div style={{ padding: "14px 24px", borderTop: "1px solid #F1F5F9", background: "#FAFBFC", flexShrink: 0 }}>
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{
@@ -470,7 +480,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
           </div>
         </div>
 
-        {/* ── Danger zone ── */}
+        {/* Danger zone */}
         <div style={{ padding: "12px 24px 20px", background: "#FAFBFC", borderTop: "1px solid #FEE2E2", flexShrink: 0 }}>
           <button
             onClick={() => { if (window.confirm(`Delete ticket #${ticket.id}? This cannot be undone.`)) { onDelete(ticket.id); onClose(); } }}
@@ -489,6 +499,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
           from { transform: translateX(100%); opacity: 0; }
           to   { transform: translateX(0);    opacity: 1; }
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
@@ -498,12 +509,12 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({ ticket, onClose, onSta
 // TICKETS SECTION COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 const TicketsSection: React.FC = () => {
-  const [tickets, setTickets]             = useState<Ticket[]>([]);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState<string | null>(null);
-  const [filterStatus, setFilterStatus]   = useState<"ALL" | TicketStatus>("ALL");
+  const [tickets, setTickets]               = useState<Ticket[]>([]);
+  const [loading, setLoading]               = useState(true);
+  const [error, setError]                   = useState<string | null>(null);
+  const [filterStatus, setFilterStatus]     = useState<"ALL" | TicketStatus>("ALL");
   const [filterPriority, setFilterPriority] = useState<"ALL" | TicketPriority>("ALL");
-  const [searchQ, setSearchQ]             = useState("");
+  const [searchQ, setSearchQ]               = useState("");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   const load = async () => {
@@ -511,8 +522,22 @@ const TicketsSection: React.FC = () => {
     try {
       const raw = await ticketApi.getAll();
       const arr: Ticket[] = Array.isArray(raw) ? raw : (raw?.content || []);
-      if (arr.length > 0) console.log("🎫 Raw ticket[0]:", JSON.stringify(arr[0], null, 2));
-      setTickets(arr);
+
+      const enriched = await Promise.all(arr.map(async (t: any) => {
+        if (t.user?.name || t.user?.username || t.userName) return t;
+        const uid = t.userId || t.user?.id;
+        if (!uid) return t;
+        try {
+          const u = await apiFetch(`${BASE_URL}/users/${uid}`);
+          const raw = u.name || u.fullName || u.username || u.email || u.identifier || "";
+          const name = raw.includes("@")
+            ? raw.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
+            : raw;
+          return { ...t, userName: name || `User #${uid}` };
+        } catch { return t; }
+      }));
+
+      setTickets(enriched);
     } catch (e: any) {
       setError(e?.message || "Failed to load tickets.");
     } finally {
@@ -535,17 +560,15 @@ const TicketsSection: React.FC = () => {
     }
   };
 
-  // ── Counts for filter pills ──
   const counts = {
-    ALL: tickets.length,
-    NEW: tickets.filter(t => t.status === "NEW").length,
-    OPEN: tickets.filter(t => t.status === "OPEN").length,
-    PENDING: tickets.filter(t => t.status === "PENDING").length,
+    ALL:      tickets.length,
+    NEW:      tickets.filter(t => t.status === "NEW").length,
+    OPEN:     tickets.filter(t => t.status === "OPEN").length,
+    PENDING:  tickets.filter(t => t.status === "PENDING").length,
     RESOLVED: tickets.filter(t => t.status === "RESOLVED").length,
-    CLOSED: tickets.filter(t => t.status === "CLOSED").length,
+    CLOSED:   tickets.filter(t => t.status === "CLOSED").length,
   };
 
-  // ── Filter + search ──
   const visible = tickets.filter(t => {
     if (filterStatus !== "ALL"   && t.status   !== filterStatus)   return false;
     if (filterPriority !== "ALL" && t.priority !== filterPriority) return false;
@@ -565,8 +588,10 @@ const TicketsSection: React.FC = () => {
     return true;
   });
 
-  // ── Stats ──
-  const openCount     = tickets.filter(t => t.status === "OPEN" || t.status === "NEW" || t.status === "PENDING").length;
+  const openCount = tickets.filter(t =>
+    t.status === "OPEN" || t.status === "NEW" || t.status === "PENDING"
+  ).length;
+
   const resolvedToday = tickets.filter(t =>
     t.status === "RESOLVED" && t.updatedAt &&
     new Date(t.updatedAt).toDateString() === new Date().toDateString()
@@ -580,7 +605,6 @@ const TicketsSection: React.FC = () => {
 
   return (
     <>
-      {/* ── Side panel ── */}
       {selectedTicket && (
         <TicketDetailPanel
           ticket={selectedTicket}
@@ -590,7 +614,7 @@ const TicketsSection: React.FC = () => {
         />
       )}
 
-      {/* ── Header row ── */}
+      {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>
           Support Tickets
@@ -606,14 +630,14 @@ const TicketsSection: React.FC = () => {
         </button>
       </div>
 
-      {/* ── Stats strip ── */}
+      {/* Stats strip */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 12, marginBottom: 20 }}>
         {[
-          { label: "Total",        value: tickets.length,              color: "#2563EB", bg: "#EFF6FF" },
-          { label: "Open / Active", value: openCount,                  color: "#D97706", bg: "#FFFBEB" },
-          { label: "Resolved",     value: counts.RESOLVED,             color: "#16A34A", bg: "#F0FDF4" },
-          { label: "Resolved Today", value: resolvedToday,             color: "#16A34A", bg: "#F0FDF4" },
-          { label: "Closed",       value: counts.CLOSED,               color: "#64748B", bg: "#F1F5F9" },
+          { label: "Total",          value: tickets.length,  color: "#2563EB", bg: "#EFF6FF" },
+          { label: "Open / Active",  value: openCount,       color: "#D97706", bg: "#FFFBEB" },
+          { label: "Resolved",       value: counts.RESOLVED, color: "#16A34A", bg: "#F0FDF4" },
+          { label: "Resolved Today", value: resolvedToday,   color: "#16A34A", bg: "#F0FDF4" },
+          { label: "Closed",         value: counts.CLOSED,   color: "#64748B", bg: "#F1F5F9" },
         ].map(s => (
           <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "12px 16px" }}>
             <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{loading ? "…" : s.value}</div>
@@ -622,7 +646,7 @@ const TicketsSection: React.FC = () => {
         ))}
       </div>
 
-      {/* ── Search + priority filter ── */}
+      {/* Search + priority filter */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
           <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="14" height="14" fill="none" viewBox="0 0 24 24">
@@ -647,7 +671,7 @@ const TicketsSection: React.FC = () => {
         </select>
       </div>
 
-      {/* ── Status filter pills ── */}
+      {/* Status filter pills */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {(["ALL","NEW","OPEN","PENDING","RESOLVED","CLOSED"] as const).map(f => (
           <button key={f} onClick={() => setFilterStatus(f)}
@@ -663,7 +687,7 @@ const TicketsSection: React.FC = () => {
         ))}
       </div>
 
-      {/* ── Error ── */}
+      {/* Error */}
       {error && (
         <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 16px", color: "#B91C1C", fontSize: 13, marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
           ⚠️ {error}
@@ -671,7 +695,7 @@ const TicketsSection: React.FC = () => {
         </div>
       )}
 
-      {/* ── Loading ── */}
+      {/* Loading / empty */}
       {loading ? (
         <div style={{ textAlign: "center", padding: 60, color: "#94A3B8" }}>
           <div style={{ width: 32, height: 32, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
@@ -685,7 +709,7 @@ const TicketsSection: React.FC = () => {
           </p>
         </div>
       ) : (
-        /* ── Ticket table ── */
+        /* Ticket table */
         <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
           {/* Table header */}
           <div style={{
@@ -725,12 +749,9 @@ const TicketsSection: React.FC = () => {
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 onClick={() => setSelectedTicket(ticket)}
               >
-                {/* ID */}
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#94A3B8", fontFamily: "monospace" }}>
                   #{ticket.id}
                 </div>
-
-                {/* Title + user */}
                 <div style={{ minWidth: 0, paddingRight: 12 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {ticket.title}
@@ -739,34 +760,24 @@ const TicketsSection: React.FC = () => {
                     👤 {getUserDisplay(ticket)}
                   </div>
                 </div>
-
-                {/* Category */}
                 <div>
                   <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "#F1F5F9", color: "#475569", fontWeight: 600 }}>
                     {ticket.category}
                   </span>
                 </div>
-
-                {/* Priority */}
                 <div>
                   <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: pc.bg, color: pc.color, fontWeight: 700 }}>
                     ⚑ {pc.label}
                   </span>
                 </div>
-
-                {/* Status */}
                 <div>
                   <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700 }}>
                     {sc.icon} {sc.label}
                   </span>
                 </div>
-
-                {/* Date */}
                 <div style={{ fontSize: 11, color: "#94A3B8" }}>
                   {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
                 </div>
-
-                {/* Action */}
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <button
                     onClick={e => { e.stopPropagation(); setSelectedTicket(ticket); }}
@@ -789,21 +800,20 @@ const TicketsSection: React.FC = () => {
 export default function AdminPage() {
   const navigate = useNavigate();
 
-  const [activeSection, setActiveSection] = useState<AdminSectionType>("dashboard");
-  const [showModal, setShowModal]         = useState(false);
-  const [advisors, setAdvisors]           = useState<Advisor[]>([]);
-  const [dashBookings, setDashBookings]   = useState<any[]>([]);
+  const [activeSection, setActiveSection]   = useState<AdminSectionType>("dashboard");
+  const [showModal, setShowModal]           = useState(false);
+  const [advisors, setAdvisors]             = useState<Advisor[]>([]);
+  const [dashBookings, setDashBookings]     = useState<any[]>([]);
   const [totalBookingsCount, setTotalBookingsCount] = useState(0);
-  const [totalRevenue, setTotalRevenue]   = useState(0);
-  const [ticketCount, setTicketCount]     = useState(0);
-  const [loading, setLoading]             = useState(false);
-  const [backendStatus, setBackendStatus] = useState<"online" | "offline" | "error" | null>(null);
-  const [deletingId, setDeletingId]       = useState<number | null>(null);
+  const [totalRevenue, setTotalRevenue]     = useState(0);
+  const [ticketCount, setTicketCount]       = useState(0);
+  const [loading, setLoading]               = useState(false);
+  const [backendStatus, setBackendStatus]   = useState<"online" | "offline" | "error" | null>(null);
+  const [deletingId, setDeletingId]         = useState<number | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => { debugToken(); }, []);
 
-  // ── Name helpers ──
   const extractUserName = (b: any): string =>
     b.user?.name || b.user?.username || b.user?.fullName ||
     b.user?.firstName || b.client?.name || b.bookedBy?.name ||
@@ -833,7 +843,6 @@ export default function AdminPage() {
     return `${date || "N/A"} • ${time ? time.substring(0, 5) : "N/A"}`;
   };
 
-  // ── Fetch dashboard data ──
   const fetchDashboardData = async () => {
     setLoading(true);
     try {
@@ -858,27 +867,79 @@ export default function AdminPage() {
 
       const bookingsArr: any[] = await getAllBookings();
       if (bookingsArr.length > 0) {
-        const mapped = bookingsArr.map((b: any) => ({
-          id:      b.id,
-          user:    extractUserName(b),
-          advisor: extractAdvisorName(b),
-          time:    extractDateTime(b),
-          status:  (b.status || b.bookingStatus || b.BookingStatus || "PENDING").toUpperCase(),
-          amount:  Number(b.amount || b.charges || b.fee || 0),
-        }));
+
+        const uniqueSlotIds = [...new Set(
+          bookingsArr.map((b: any) => b.timeSlotId).filter(Boolean)
+        )] as number[];
+
+        const slotMap: Record<number, any> = {};
+        await Promise.all(
+          uniqueSlotIds.map(id =>
+            apiFetch(`${BASE_URL}/timeslots/${id}`)
+              .then(s => { slotMap[id] = s; })
+              .catch(() => {})
+          )
+        );
+
+        const masterMap: Record<number, string> = {};
+        try {
+          const mData = await apiFetch(`${BASE_URL}/master-timeslots`);
+          (Array.isArray(mData) ? mData : mData?.content || [])
+            .forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
+        } catch {}
+
+        const uniqueConsultantIds = [...new Set(
+          bookingsArr.map((b: any) => b.consultantId).filter(Boolean)
+        )] as number[];
+
+        const consultantNameMap: Record<number, string> = {};
+        await Promise.all(
+          uniqueConsultantIds.map(id =>
+            apiFetch(`${BASE_URL}/advisors/${id}`)
+              .catch(() => apiFetch(`${BASE_URL}/consultants/${id}`))
+              .then(c => { consultantNameMap[id] = c?.name || `Consultant #${id}`; })
+              .catch(() => { consultantNameMap[id] = `Consultant #${id}`; })
+          )
+        );
+
+        const mapped = bookingsArr.map((b: any) => {
+          const slot     = slotMap[b.timeSlotId];
+          const slotDate = slot?.slotDate || b.slotDate || b.bookingDate || b.date || "N/A";
+          const slotTime = slot?.slotTime || b.slotTime || b.bookingTime || "";
+
+          const masterKey = slot?.masterTimeSlotId || slot?.masterSlotId;
+          const timeRange = (masterKey && masterMap[masterKey])
+            || b.timeSlot?.masterTimeSlot?.timeRange
+            || b.timeRange
+            || (slotTime ? slotTime.substring(0, 5) : "N/A");
+
+          const consultantName =
+            b.consultant?.name || b.consultantName || b.advisorName ||
+            consultantNameMap[b.consultantId] ||
+            `Consultant #${b.consultantId}`;
+
+          return {
+            id:      b.id,
+            user:    extractUserName(b),
+            advisor: consultantName,
+            time:    `${slotDate} • ${timeRange}`,
+            status:  (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(),
+            amount:  Number(b.amount || b.charges || b.fee || 0),
+          };
+        });
+
         setTotalBookingsCount(mapped.length);
         setTotalRevenue(mapped.filter(b => b.status === "COMPLETED").reduce((s, b) => s + b.amount, 0));
         setDashBookings(mapped.slice(0, 5));
       }
 
-      // Also fetch ticket count for sidebar badge
       try {
         const tdata = await ticketApi.getAll();
         const tarr: any[] = Array.isArray(tdata) ? tdata : (tdata?.content || []);
         setTicketCount(tarr.filter((t: any) =>
           t.status === "NEW" || t.status === "OPEN" || t.status === "PENDING"
         ).length);
-      } catch { /* non-fatal */ }
+      } catch {}
 
       setBackendStatus("online");
     } catch (err: any) {
@@ -932,9 +993,9 @@ export default function AdminPage() {
   ];
 
   const stats = [
-    { label: "TOTAL BOOKINGS",      value: loading ? "…" : String(totalBookingsCount),       change: "+12.5%", positive: true,  color: "#2563EB", bg: "#EFF6FF", iconStroke: "#2563EB" },
-    { label: "ACTIVE CONSULTANTS",  value: loading ? "…" : String(advisors.length),          change: "+2",     positive: true,  color: "#7C3AED", bg: "#F5F3FF", iconStroke: "#7C3AED" },
-    { label: "TOTAL REVENUE",       value: loading ? "…" : `₹${totalRevenue.toLocaleString()}`, change: "+8.2%", positive: true, color: "#059669", bg: "#F0FDF4", iconStroke: "#059669" },
+    { label: "TOTAL BOOKINGS",     value: loading ? "…" : String(totalBookingsCount),            change: "+12.5%", positive: true,  color: "#2563EB", bg: "#EFF6FF" },
+    { label: "ACTIVE CONSULTANTS", value: loading ? "…" : String(advisors.length),               change: "+2",     positive: true,  color: "#7C3AED", bg: "#F5F3FF" },
+    { label: "TOTAL REVENUE",      value: loading ? "…" : `₹${totalRevenue.toLocaleString()}`,   change: "+8.2%",  positive: true,  color: "#059669", bg: "#F0FDF4" },
   ];
 
   return (
@@ -945,7 +1006,7 @@ export default function AdminPage() {
         <div className={styles.mobileOverlay} onClick={() => setIsMobileMenuOpen(false)} />
       )}
 
-      {/* ── Sidebar ── */}
+      {/* Sidebar */}
       <div className={`${styles.sidebar} ${isMobileMenuOpen ? styles.sidebarOpen : ""}`}>
         <div className={styles.sidebarLogo}>
           <div style={{ display: "flex", alignItems: "center" }}>
@@ -987,7 +1048,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* ── Main ── */}
+      {/* Main */}
       <div className={styles.main}>
         <div className={styles.topBar}>
           <button className={styles.hamburgerBtn} onClick={() => setIsMobileMenuOpen(true)}>
@@ -1018,7 +1079,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ════════ DASHBOARD ════════ */}
+        {/* ════ DASHBOARD ════ */}
         {activeSection === "dashboard" && (
           <>
             <div className={styles.statsGrid}>
@@ -1072,7 +1133,6 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Quick ticket snapshot on dashboard */}
             {ticketCount > 0 && (
               <div className={`${styles.card} ${styles.mt16}`}
                 style={{ background: "linear-gradient(135deg,#FEF2F2,#FFF7F7)", border: "1px solid #FECACA", cursor: "pointer" }}
@@ -1143,7 +1203,7 @@ export default function AdminPage() {
           </>
         )}
 
-        {/* ════════ CONSULTANTS ════════ */}
+        {/* ════ CONSULTANTS ════ */}
         {activeSection === "advisors" && (
           <div>
             <h2 className={styles.pageTitle}>Consultants {loading && "…"}</h2>
@@ -1180,13 +1240,13 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ════════ BOOKINGS ════════ */}
+        {/* ════ BOOKINGS ════ */}
         {activeSection === "bookings" && <BookingsPage isAdmin={true} />}
 
-        {/* ════════ TICKETS ════════ */}
+        {/* ════ TICKETS ════ */}
         {activeSection === "tickets" && <TicketsSection />}
 
-        {/* ════════ SETTINGS ════════ */}
+        {/* ════ SETTINGS ════ */}
         {activeSection === "settings" && (
           <div>
             <h2 className={styles.pageTitle}>Settings</h2>

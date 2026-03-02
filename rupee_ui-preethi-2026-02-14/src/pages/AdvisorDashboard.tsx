@@ -216,7 +216,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
 
         if (arr.length > 0) console.log('📋 Raw booking sample:', arr[0]);
 
-        // Enrich bookings that only have userId but no name
         const enriched = await Promise.all(arr.map(async (b) => {
           if (b.user?.name || b.user?.username || b.userName || b.clientName || b.client?.name) {
             return b;
@@ -275,7 +274,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
         </span>
       </div>
 
-      {/* Stats strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 14, marginBottom: 24 }}>
         {[
           { label: 'Total',     value: counts.ALL,                          color: '#2563EB', bg: '#EFF6FF' },
@@ -291,7 +289,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
         ))}
       </div>
 
-      {/* Filter pills */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {(['ALL', 'PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED'] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{
@@ -351,7 +348,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                     <span>🕐 {timeRange}</span>
                     {amount > 0 && <span style={{ color: '#16A34A', fontWeight: 600 }}>₹{amount.toLocaleString()}</span>}
                   </div>
-                  {/* Shared Jitsi room — same room the user joins */}
                   <div style={{ fontSize: 11, color: '#94A3B8' }}>
                     🔗 Room: <span style={{ fontFamily: 'monospace', color: '#2563EB' }}>
                       finadvise-booking-{booking.id}
@@ -362,7 +358,6 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                   <span style={{ padding: '5px 14px', borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 12, fontWeight: 700, letterSpacing: '0.04em' }}>
                     {booking.status}
                   </span>
-                  {/* Join Meeting — shown for all non-cancelled bookings */}
                   {booking.status?.toUpperCase() !== 'CANCELLED' && (
                     <a
                       href={booking.meetingLink || booking.jitsiLink || booking.joinUrl || `https://meet.jit.si/finadvise-booking-${booking.id}`}
@@ -393,7 +388,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   );
 };
 
-// ── 30-day pool + 7-visible window (mirrors UserPage carousel exactly) ──────
+// ── 30-day pool + 7-visible window ───────────────────────────────────────────
 const ALL_SCHEDULE_DAYS = (() => {
   const DAY_NAMES   = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
   const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
@@ -411,9 +406,11 @@ const ALL_SCHEDULE_DAYS = (() => {
   return out;
 })();
 const SCHEDULE_VISIBLE = 7;
+// Skip Sunday as default — if today is Sunday, start on Monday
+const DEFAULT_SCHEDULE_DAY = ALL_SCHEDULE_DAYS.find(d => d.wd !== 'SUN')?.iso ?? ALL_SCHEDULE_DAYS[0].iso;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. MY SCHEDULE — interactive slot toggling + custom slot adding
+// 2. MY SCHEDULE
 // ─────────────────────────────────────────────────────────────────────────────
 const MySlotsView: React.FC<{
   consultantId: number;
@@ -421,11 +418,12 @@ const MySlotsView: React.FC<{
   shiftEndTime: string;
 }> = ({ consultantId, shiftStartTime, shiftEndTime }) => {
   const [dbSlots,       setDbSlots]       = useState<TimeSlotRecord[]>([]);
+  const [masterSlots,   setMasterSlots]   = useState<MasterSlot[]>([]);
   const [bookings,      setBookings]      = useState<any[]>([]);
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState<string | null>(null);
   const [dayOffset,     setDayOffset]     = useState(0);
-  const [selectedDate,  setSelectedDate]  = useState<string>(ALL_SCHEDULE_DAYS[0].iso);
+  const [selectedDate,  setSelectedDate]  = useState<string>(DEFAULT_SCHEDULE_DAY);
   const [togglingSlot,  setTogglingSlot]  = useState<string | null>(null);
   const [slotToast,     setSlotToast]     = useState<{ msg: string; ok: boolean } | null>(null);
   const [showAddSlot,   setShowAddSlot]   = useState(false);
@@ -445,6 +443,7 @@ const MySlotsView: React.FC<{
         const mData = await apiFetch('/master-timeslots');
         const mArr  = Array.isArray(mData) ? mData : (mData?.content || []);
         mArr.forEach((m: any) => { if (m.id && m.timeRange) masterLookup[m.id] = m.timeRange; });
+        setMasterSlots(mArr);
       } catch { /* non-fatal */ }
 
       try {
@@ -476,7 +475,6 @@ const MySlotsView: React.FC<{
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
   };
 
-  // Build sets for booked-by-client and manually-disabled slots
   const bookedByClientSet = new Set<string>();
   bookings.forEach(b => {
     const st = (b.status || '').toUpperCase();
@@ -527,14 +525,14 @@ const MySlotsView: React.FC<{
 
   const hasShift = !!(shiftStartTime && shiftEndTime && hourlySlotTimes.length > 0);
 
-  // 7 visible days from the 30-day pool, driven by dayOffset (mirrors UserPage)
   const visibleDays   = ALL_SCHEDULE_DAYS.slice(dayOffset, dayOffset + SCHEDULE_VISIBLE);
-  const activeDateKey = selectedDate || ALL_SCHEDULE_DAYS[0].iso;
+  const activeDateKey = selectedDate || DEFAULT_SCHEDULE_DAY;
+  const isActiveSunday = ALL_SCHEDULE_DAYS.find(d => d.iso === activeDateKey)?.wd === 'SUN';
 
-  // Stats over the visible 7 days
   let totalCount = 0, availableCount = 0, bookedCount = 0;
   if (hasShift) {
     visibleDays.forEach(d => {
+      if (d.wd === 'SUN') return; // Sundays don't count
       hourlySlotTimes.forEach(t => {
         totalCount++;
         if (unavailableSet.has(`${d.iso}|${t}`)) bookedCount++;
@@ -543,7 +541,6 @@ const MySlotsView: React.FC<{
     });
   }
 
-  // Toggle slot available ↔ unavailable
   const handleToggleSlot = async (slotStart: string) => {
     const key = `${activeDateKey}|${slotStart}`;
     if (bookedByClientSet.has(key)) {
@@ -555,11 +552,22 @@ const MySlotsView: React.FC<{
     const isCurrentlyUnavailable = manuallyDisabledSet.has(key);
     const newStatus = isCurrentlyUnavailable ? 'AVAILABLE' : 'UNAVAILABLE';
 
+    const matchedMaster = masterSlots.find(ms => {
+      const startPart = ms.timeRange.split(/[-–]/)[0].trim();
+      const normStart = normaliseTimeKey(startPart);
+      return normStart === slotStart;
+    });
+
     try {
-      const existing = dbSlots.find(s =>
-        s.slotDate === activeDateKey &&
-        ((s as any).slotTime || '').substring(0, 5) === slotStart
-      );
+      const existing = dbSlots.find(s => {
+        if (s.slotDate !== activeDateKey) return false;
+        const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
+        if (dbSlotTime && dbSlotTime === slotStart) return true;
+        if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        if (normTR && normTR === slotStart) return true;
+        return false;
+      });
 
       if (existing) {
         await apiFetch(`/timeslots/${existing.id}`, {
@@ -567,16 +575,20 @@ const MySlotsView: React.FC<{
           body: JSON.stringify({ ...existing, status: newStatus }),
         });
       } else {
-        await apiFetch('/timeslots', {
-          method: 'POST',
-          body: JSON.stringify({
-            consultantId,
-            slotDate:        activeDateKey,
-            slotTime:        slotTimeFull,
-            durationMinutes: 60,
-            status:          newStatus,
-          }),
-        });
+        if (!matchedMaster) {
+          showSlotToast('⚠️ No matching master time range found. Add this time in "Master Time Ranges" tab first.', false);
+          setTogglingSlot(null);
+          return;
+        }
+        const payload: any = {
+          consultantId,
+          slotDate:         activeDateKey,
+          slotTime:         slotTimeFull,
+          durationMinutes:  60,
+          status:           newStatus,
+          masterTimeSlotId: matchedMaster.id,
+        };
+        await apiFetch('/timeslots', { method: 'POST', body: JSON.stringify(payload) });
       }
       showSlotToast(newStatus === 'AVAILABLE' ? '✓ Slot marked as available' : '✓ Slot marked as unavailable');
       await loadData();
@@ -587,22 +599,27 @@ const MySlotsView: React.FC<{
     }
   };
 
-  // Add a custom slot for the selected date
   const handleAddCustomSlot = async () => {
     if (!newSlotTime) return;
     setAddingSlot(true);
     const slotTimeFull = newSlotTime.length === 5 ? `${newSlotTime}:00` : newSlotTime;
+
+    const matchedMaster = masterSlots.find(ms => {
+      const startPart = ms.timeRange.split(/[-–]/)[0].trim();
+      const normStart = normaliseTimeKey(startPart);
+      return normStart === newSlotTime;
+    });
+
     try {
-      await apiFetch('/timeslots', {
-        method: 'POST',
-        body: JSON.stringify({
-          consultantId,
-          slotDate:        activeDateKey,
-          slotTime:        slotTimeFull,
-          durationMinutes: 60,
-          status:          'AVAILABLE',
-        }),
-      });
+      const payload: any = {
+        consultantId,
+        slotDate:        activeDateKey,
+        slotTime:        slotTimeFull,
+        durationMinutes: 60,
+        status:          'AVAILABLE',
+      };
+      if (matchedMaster) payload.masterTimeSlotId = matchedMaster.id;
+      await apiFetch('/timeslots', { method: 'POST', body: JSON.stringify(payload) });
       showSlotToast('✓ New slot added successfully!');
       setNewSlotTime('');
       setShowAddSlot(false);
@@ -614,8 +631,8 @@ const MySlotsView: React.FC<{
     }
   };
 
-  const customSlots = getCustomSlotsForDate(activeDateKey);
-  const allSlotTimes = [...new Set([...hourlySlotTimes, ...customSlots])].sort();
+  const customSlots    = getCustomSlotsForDate(activeDateKey);
+  const allSlotTimes   = [...new Set([...hourlySlotTimes, ...customSlots])].sort();
 
   return (
     <div className="advisor-content-container">
@@ -680,10 +697,9 @@ const MySlotsView: React.FC<{
             ))}
           </div>
 
-          {/* ══ Date + Time card — with blue gradient header like UserPage booking modal ══ */}
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 16px rgba(37,99,235,0.12)' }}>
 
-            {/* ── Blue gradient header — matches UserPage modal header exactly ── */}
+            {/* Blue gradient header */}
             <div style={{
               background: 'linear-gradient(135deg, #1E3A5F 0%, #2563EB 100%)',
               padding: '20px 24px 18px',
@@ -701,14 +717,13 @@ const MySlotsView: React.FC<{
               </p>
             </div>
 
-            {/* ── Step 1 — Select Date (30-day carousel with ‹ › arrows, mirrors UserPage) ── */}
+            {/* Step 1 — Select Date */}
             <div style={{ padding: '20px 24px', borderBottom: '1px solid #F1F5F9' }}>
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>
                 Step 1 — Select Date
               </p>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {/* ‹ PREV — scrolls window back 1 day, mirrors UserPage */}
                 <button
                   disabled={dayOffset === 0}
                   onClick={() => setDayOffset(o => Math.max(0, o - 1))}
@@ -721,34 +736,37 @@ const MySlotsView: React.FC<{
                     fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>‹</button>
 
-                {/* 7 visible day cards from the 30-day pool */}
                 <div style={{ display: 'flex', gap: 6, flex: 1 }}>
                   {visibleDays.map((d) => {
-                    const isActive = d.iso === activeDateKey;
-                    const isToday  = d.iso === ALL_SCHEDULE_DAYS[0].iso;
+                    const isActive  = d.iso === activeDateKey;
+                    const isToday   = d.iso === ALL_SCHEDULE_DAYS[0].iso;
+                    const isSunday  = d.wd === 'SUN';
                     return (
                       <button
                         key={d.iso}
-                        onClick={() => setSelectedDate(d.iso)}
+                        disabled={isSunday}
+                        onClick={() => { if (!isSunday) setSelectedDate(d.iso); }}
+                        title={isSunday ? 'No slots on Sundays' : undefined}
                         style={{
                           flex: 1,
                           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                           padding: '8px 4px', borderRadius: 10, gap: 2,
-                          border: `1.5px solid ${isActive ? '#2563EB' : '#E2E8F0'}`,
-                          background: isActive ? '#2563EB' : '#F8FAFC',
-                          cursor: 'pointer', fontFamily: 'inherit', outline: 'none',
+                          border: `1.5px solid ${isActive && !isSunday ? '#2563EB' : '#E2E8F0'}`,
+                          background: isSunday ? '#F8FAFC' : isActive ? '#2563EB' : '#F8FAFC',
+                          cursor: isSunday ? 'not-allowed' : 'pointer',
+                          fontFamily: 'inherit', outline: 'none',
                           transition: 'all 0.2s', minHeight: 72,
+                          opacity: isSunday ? 0.38 : 1,
                         }}>
-                        {/* Weekday */}
-                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: isActive ? '#BFDBFE' : '#94A3B8' }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: isSunday ? '#CBD5E1' : isActive ? '#BFDBFE' : '#94A3B8' }}>
                           {d.wd}
                         </span>
-                        {/* Date number */}
-                        <span style={{ fontSize: 17, fontWeight: 700, lineHeight: 1, color: isActive ? '#fff' : '#0F172A' }}>
+                        <span style={{ fontSize: 17, fontWeight: 700, lineHeight: 1, color: isSunday ? '#CBD5E1' : isActive ? '#fff' : '#0F172A' }}>
                           {d.day}
                         </span>
-                        {/* Month or TODAY badge */}
-                        {isToday && !isActive ? (
+                        {isSunday ? (
+                          <span style={{ fontSize: 8, fontWeight: 800, color: '#CBD5E1' }}>OFF</span>
+                        ) : isToday && !isActive ? (
                           <span style={{ fontSize: 8, fontWeight: 800, color: '#2563EB', background: '#EFF6FF', padding: '1px 4px', borderRadius: 4 }}>
                             TODAY
                           </span>
@@ -762,7 +780,6 @@ const MySlotsView: React.FC<{
                   })}
                 </div>
 
-                {/* › NEXT — scrolls window forward 1 day */}
                 <button
                   disabled={dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE}
                   onClick={() => setDayOffset(o => Math.min(ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE, o + 1))}
@@ -777,130 +794,145 @@ const MySlotsView: React.FC<{
               </div>
             </div>
 
-            {/* ── Step 2 — Select Time ── */}
+            {/* Step 2 — Select Time */}
             <div style={{ padding: '20px 24px' }}>
-              {/* Step label */}
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>
                 Step 2 — Select Time
               </p>
 
-              {/* Stats */}
-              <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <span>{allSlotTimes.filter(t => !unavailableSet.has(`${activeDateKey}|${t}`)).length} available</span>
-                <span>· {allSlotTimes.filter(t => bookedByClientSet.has(`${activeDateKey}|${t}`)).length} booked by clients</span>
-                <span>· {allSlotTimes.filter(t => manuallyDisabledSet.has(`${activeDateKey}|${t}`)).length} marked unavailable</span>
-              </div>
-
-              {/* Legend */}
-              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                {[
-                  { label: 'Available (click to disable)',          bg: '#fff',    border: '#BFDBFE' },
-                  { label: 'Booked by client',                     bg: '#F1F5F9', border: '#E2E8F0' },
-                  { label: 'Marked unavailable (click to enable)', bg: '#F8FAFC', border: '#E2E8F0' },
-                ].map(l => (
-                  <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
-                    <span style={{ fontSize: 11, color: '#64748B' }}>{l.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              {allSlotTimes.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '30px 20px', color: '#94A3B8', fontSize: 13 }}>
-                  No slots for this date. Use "+ Add Slot" to add a custom slot.
+              {/* ── SUNDAY: show "no slots" banner instead of time grid ── */}
+              {isActiveSunday ? (
+                <div style={{ background: '#FEF2F2', border: '1.5px solid #FECACA', borderRadius: 12, padding: '20px 18px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>🚫</div>
+                  <p style={{ fontWeight: 700, margin: '0 0 4px', color: '#DC2626', fontSize: 14 }}>No slots on Sundays</p>
+                  <p style={{ fontSize: 12, margin: 0, color: '#EF4444' }}>Sundays are off — please select a weekday (Monday – Saturday).</p>
                 </div>
               ) : (
-                /* 3-column grid — exact match of UserPage .timeGrid */
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 4 }}>
-                  {allSlotTimes.map(slotStart => {
-                    const key                = `${activeDateKey}|${slotStart}`;
-                    const isBookedByClient   = bookedByClientSet.has(key);
-                    const isManuallyDisabled = manuallyDisabledSet.has(key);
-                    const isUnavailable      = unavailableSet.has(key);
-                    const isToggling         = togglingSlot === key;
-                    const isCustom           = !hourlySlotTimes.includes(slotStart);
+                <>
+                  <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <span>{allSlotTimes.filter(t => !unavailableSet.has(`${activeDateKey}|${t}`)).length} available</span>
+                    <span>· {allSlotTimes.filter(t => bookedByClientSet.has(`${activeDateKey}|${t}`)).length} booked by clients</span>
+                    <span>· {allSlotTimes.filter(t => manuallyDisabledSet.has(`${activeDateKey}|${t}`)).length} marked unavailable (click to restore)</span>
+                  </div>
 
-                    const [h, m_]    = slotStart.split(':').map(Number);
-                    const endSlotStr = `${String(h + 1).padStart(2, '0')}:${String(m_).padStart(2, '0')}`;
-                    const timeLabel  = `${fmt24to12(slotStart)} - ${fmt24to12(endSlotStr)}`;
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {[
+                      { label: 'Available (click to disable)',                          bg: '#fff',    border: '#BFDBFE' },
+                      { label: 'Booked by client',                                     bg: '#2563EB', border: '#1D4ED8' },
+                      { label: 'Unavailable — click ↺ Mark Available to restore',      bg: '#F1F5F9', border: '#CBD5E1' },
+                    ].map(l => (
+                      <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
+                        <span style={{ fontSize: 11, color: '#64748B' }}>{l.label}</span>
+                      </div>
+                    ))}
+                  </div>
 
-                    // Exact colours from UserPage .timeBtn / .timeBtnBooked / .timeBtnDisabled
-                    // Available  → white #fff, border #BFDBFE, text #334155
-                    // Booked     → #F1F5F9, border #E2E8F0, text #94A3B8, line-through, opacity 0.65
-                    // ManuallyOff→ #F8FAFC, border #E2E8F0, text #94A3B8, line-through, opacity 0.65
-                    let bg = '#fff', borderCol = '#BFDBFE', textCol = '#334155', textDec = 'none', opacity: number = 1;
-                    if (isBookedByClient)        { bg = '#F1F5F9'; borderCol = '#E2E8F0'; textCol = '#94A3B8'; textDec = 'line-through'; opacity = 0.65; }
-                    else if (isManuallyDisabled) { bg = '#F8FAFC'; borderCol = '#E2E8F0'; textCol = '#94A3B8'; textDec = 'line-through'; opacity = 0.65; }
+                  {allSlotTimes.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '30px 20px', color: '#94A3B8', fontSize: 13 }}>
+                      No slots for this date. Use "+ Add Slot" to add a custom slot.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 4 }}>
+                      {allSlotTimes.map(slotStart => {
+                        const key                = `${activeDateKey}|${slotStart}`;
+                        const isBookedByClient   = bookedByClientSet.has(key);
+                        const isManuallyDisabled = manuallyDisabledSet.has(key);
+                        const isUnavailable      = unavailableSet.has(key);
+                        const isToggling         = togglingSlot === key;
+                        const isCustom           = !hourlySlotTimes.includes(slotStart);
 
-                    return (
-                      <button
-                        key={slotStart}
-                        disabled={isBookedByClient || isToggling}
-                        onClick={() => handleToggleSlot(slotStart)}
-                        title={isBookedByClient ? 'Booked by a client — cannot change' : isManuallyDisabled ? 'Click to mark as available' : 'Click to mark as unavailable'}
-                        style={{
-                          /* exact .timeBtn styles from UserPage.module.css */
-                          position: 'relative',
-                          padding: '10px 6px',
-                          borderRadius: 100,                   /* --radius-pill */
-                          border: `1.5px solid ${borderCol}`,
-                          background: bg,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: textCol,
-                          cursor: isBookedByClient ? 'not-allowed' : 'pointer',
-                          fontFamily: 'inherit',
-                          textAlign: 'center',
-                          lineHeight: 1.3,
-                          transition: 'all 0.15s',
-                          outline: 'none',
-                          textDecoration: textDec,
-                          opacity: isToggling ? 0.5 : opacity,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 2,
-                          width: '100%',
-                          pointerEvents: isBookedByClient ? 'none' : 'auto',
-                        }}>
-                        <span>{isToggling ? '…' : timeLabel}</span>
+                        const [h, m_]    = slotStart.split(':').map(Number);
+                        const endSlotStr = `${String(h + 1).padStart(2, '0')}:${String(m_).padStart(2, '0')}`;
+                        const timeLabel  = `${fmt24to12(slotStart)} - ${fmt24to12(endSlotStr)}`;
 
-                        {/* BOOKED label — exact .unavailableLabel from UserPage.module.css */}
-                        {isBookedByClient && (
-                          <span style={{
-                            fontSize: 8, fontWeight: 800, color: '#94A3B8',
-                            letterSpacing: '0.05em', textTransform: 'uppercase',
-                            textDecoration: 'none', display: 'block', marginTop: 2,
-                          }}>BOOKED</span>
-                        )}
-                        {/* OFF label */}
-                        {isManuallyDisabled && !isBookedByClient && (
-                          <span style={{
-                            fontSize: 8, fontWeight: 800, color: '#94A3B8',
-                            letterSpacing: '0.05em', textTransform: 'uppercase',
-                            textDecoration: 'none', display: 'block', marginTop: 2,
-                          }}>OFF</span>
-                        )}
-                        {/* CUSTOM badge */}
-                        {isCustom && !isUnavailable && !isBookedByClient && (
-                          <span style={{
-                            fontSize: 8, fontWeight: 800, color: '#10B981',
-                            background: '#D1FAE5', borderRadius: 4, padding: '1px 5px',
-                            textDecoration: 'none', display: 'block', marginTop: 2,
-                          }}>CUSTOM</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+                        let bg = '#fff', borderCol = '#BFDBFE', textCol = '#334155', textDec = 'none', opacity: number = 1;
+                        if (isBookedByClient) {
+                          bg = '#2563EB'; borderCol = '#1D4ED8'; textCol = '#fff'; textDec = 'none'; opacity = 1;
+                        } else if (isManuallyDisabled) {
+                          bg = '#F1F5F9'; borderCol = '#CBD5E1'; textCol = '#94A3B8'; textDec = 'line-through'; opacity = 1;
+                        }
+
+                        return (
+                          <button
+                            key={slotStart}
+                            disabled={isBookedByClient || isToggling}
+                            onClick={() => handleToggleSlot(slotStart)}
+                            title={
+                              isBookedByClient
+                                ? 'Booked by a client — cannot change'
+                                : isManuallyDisabled
+                                ? 'Click to mark as AVAILABLE again'
+                                : 'Click to mark as UNAVAILABLE'
+                            }
+                            style={{
+                              position: 'relative',
+                              padding: '10px 6px',
+                              borderRadius: 100,
+                              border: `1.5px solid ${borderCol}`,
+                              background: bg,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: textCol,
+                              cursor: isBookedByClient ? 'not-allowed' : 'pointer',
+                              fontFamily: 'inherit',
+                              textAlign: 'center',
+                              lineHeight: 1.3,
+                              transition: 'all 0.15s',
+                              outline: 'none',
+                              textDecoration: textDec,
+                              opacity: isToggling ? 0.5 : opacity,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 2,
+                              width: '100%',
+                              pointerEvents: isBookedByClient ? 'none' : 'auto',
+                            }}>
+                            <span>{isToggling ? '…' : timeLabel}</span>
+
+                            {isBookedByClient && (
+                              <span style={{
+                                fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)',
+                                letterSpacing: '0.05em', textTransform: 'uppercase',
+                                textDecoration: 'none', display: 'block', marginTop: 2,
+                              }}>BOOKED</span>
+                            )}
+                            {isManuallyDisabled && !isBookedByClient && (
+                              <>
+                                <span style={{
+                                  fontSize: 8, fontWeight: 800, color: '#94A3B8',
+                                  letterSpacing: '0.05em', textTransform: 'uppercase',
+                                  textDecoration: 'none', display: 'block',
+                                }}>UNAVAILABLE</span>
+                                <span style={{
+                                  fontSize: 8, fontWeight: 800, color: '#16A34A',
+                                  background: '#F0FDF4', border: '1px solid #86EFAC',
+                                  borderRadius: 5, padding: '1px 6px',
+                                  letterSpacing: '0.04em', textTransform: 'uppercase',
+                                  textDecoration: 'none', display: 'block', marginTop: 2,
+                                }}>↺ Mark Available</span>
+                              </>
+                            )}
+                            {isCustom && !isUnavailable && !isBookedByClient && (
+                              <span style={{
+                                fontSize: 8, fontWeight: 800, color: '#10B981',
+                                background: '#D1FAE5', borderRadius: 4, padding: '1px 5px',
+                                textDecoration: 'none', display: 'block', marginTop: 2,
+                              }}>CUSTOM</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
         </>
-      )}
-
-      {slotToast && (
+      )}{slotToast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: slotToast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', zIndex: 9999, whiteSpace: 'nowrap' }}>
           {slotToast.msg}
         </div>
@@ -965,15 +997,12 @@ const MasterSlotsView: React.FC = () => {
           <strong>How it works:</strong> These static ranges appear as options in the user booking modal as predefined global options. Add formats like <em>"9 AM – 10 AM"</em>.
         </div>
       </div>
-
       {masterError && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>
           ⚠️ {masterError}
           <button onClick={loadMasterSlots} style={{ marginLeft: 12, padding: '3px 10px', background: '#B91C1C', color: '#fff', border: 'none', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>Retry</button>
         </div>
-      )}
-
-      {loading ? (
+      )}{loading ? (
         <div style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
           <div style={{ width: 28, height: 28, border: '3px solid #DBEAFE', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
           Loading…
@@ -1014,7 +1043,7 @@ const MasterSlotsView: React.FC = () => {
           ))}
         </div>
       )}
-      {/* Add new range */}
+
       <div style={{ background: '#F8FAFC', border: '1.5px dashed #BFDBFE', borderRadius: 14, padding: '20px 22px' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.07em' }}>+ Add New Time Range</div>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -1032,7 +1061,6 @@ const MasterSlotsView: React.FC = () => {
         </p>
       </div>
 
-      {/* Preview grid */}
       {masterSlots.length > 0 && (
         <div style={{ marginTop: 28 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
@@ -1092,7 +1120,6 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
 
       if (arr.length === 0) { setFeedbacks([]); return; }
 
-      // Fetch all bookings for context (date + time range + client name)
       let bookingMap: Record<number, { clientName: string; slotDate: string; timeRange: string }> = {};
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
@@ -1131,7 +1158,6 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         });
       } catch { /* non-fatal */ }
 
-      // Merge booking context into feedbacks + enrich missing client names
       const enriched: FeedbackItem[] = await Promise.all(arr.map(async (f: any) => {
         const ctx = f.bookingId ? bookingMap[f.bookingId] : undefined;
         let clientName = ctx?.clientName || '';
@@ -1198,7 +1224,6 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         </div>
       </div>
 
-      {/* Summary card */}
       {feedbacks.length > 0 && (
         <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', borderRadius: 16, padding: '22px 24px', marginBottom: 24, display: 'flex', gap: 32, alignItems: 'center', flexWrap: 'wrap', color: '#fff' }}>
           <div style={{ textAlign: 'center' }}>
@@ -1225,7 +1250,6 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         </div>
       )}
 
-      {/* Filter pills */}
       {feedbacks.length > 0 && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[0,5,4,3,2,1].map(r => (
@@ -1408,15 +1432,12 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         shiftEndTime:   toLocalTime(formData.shiftEnd),
       };
 
-      console.log('📤 Profile payload:', JSON.stringify(dataPayload, null, 2));
-
       await updateAdvisor(profile.id, dataPayload, photoFile ?? undefined);
       await onUpdate();
       setIsEditing(false);
       setPhotoFile(null);
       showSaveToast('✓ Profile saved! Changes are now visible to users.');
     } catch (e: any) {
-      console.error('Profile save error:', e);
       setFormError(e?.message || 'Failed to save. Please try again.');
     } finally { setSaving(false); }
   };
@@ -1460,7 +1481,6 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         </div>
       )}
 
-      {/* ════════════ VIEW MODE ════════════ */}
       {!isEditing ? (
         <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
           <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', padding: '28px 28px 24px' }}>
@@ -1539,7 +1559,6 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         </div>
 
       ) : (
-        /* ════════════ EDIT MODE ════════════ */
         <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #E2E8F0', padding: 28 }}>
           <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 20 }}>
             <div onClick={() => fileInputRef.current?.click()} style={{ width: 80, height: 80, borderRadius: '50%', flexShrink: 0, cursor: 'pointer', background: photoPreview ? 'transparent' : 'linear-gradient(135deg,#1E3A5F,#2563EB)', border: '3px solid #DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
@@ -1613,7 +1632,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN PAGE — 5 tabs: bookings, calendar, master-slots, feedbacks, profile
+// MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 export default function AdvisorDashboard() {
   const navigate = useNavigate();
@@ -1688,7 +1707,6 @@ export default function AdvisorDashboard() {
         </div>
       </header>
 
-      {/* Pending bookings banner */}
       {pendingBookings.length > 0 && (
         <div style={{ background: 'linear-gradient(90deg,#EFF6FF 0%,#DBEAFE 100%)', borderBottom: '1px solid #BFDBFE', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

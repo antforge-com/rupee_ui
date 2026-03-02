@@ -4,26 +4,38 @@ import { loginUser } from "../services/api";
 import styles from "../styles/LoginPage.module.css";
 
 export default function LoginPage() {
-  const [cred, setCred]         = useState("");
-  const [pass, setPass]         = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [apiError, setApiError] = useState("");
+  const [cred, setCred]           = useState("");
+  const [pass, setPass]           = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [apiError, setApiError]   = useState("");
   const [errorType, setErrorType] = useState<"auth" | "server" | "network" | "">("");
 
   const navigate = useNavigate();
 
-  const normalizeRole = (role?: string) => role ? role.toUpperCase().trim() : "";
-
   // Classify the error so we can show the right message
   const classifyError = (err: any): { msg: string; type: "auth" | "server" | "network" } => {
     const msg = err?.message || "";
-    if (msg.toLowerCase().includes("cannot connect") || msg.toLowerCase().includes("failed to fetch")) {
-      return { msg: "Cannot reach the server. Please check your internet connection or try again later.", type: "network" };
+    if (
+      msg.toLowerCase().includes("cannot connect") ||
+      msg.toLowerCase().includes("failed to fetch")
+    ) {
+      return {
+        msg: "Cannot reach the server. Please check your internet connection or try again later.",
+        type: "network",
+      };
     }
     if (msg.includes("500") || msg.toLowerCase().includes("internal server")) {
-      return { msg: "The server encountered an error. This is a backend issue — please contact support or check the server logs.", type: "server" };
+      return {
+        msg: "The server encountered an error. This is a backend issue — please contact support or check the server logs.",
+        type: "server",
+      };
     }
-    if (msg.includes("401") || msg.includes("403") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid")) {
+    if (
+      msg.includes("401") ||
+      msg.includes("403") ||
+      msg.toLowerCase().includes("unauthorized") ||
+      msg.toLowerCase().includes("invalid")
+    ) {
       return { msg: "Invalid email or password. Please try again.", type: "auth" };
     }
     return { msg: msg || "Login failed. Please check your credentials.", type: "auth" };
@@ -49,14 +61,19 @@ export default function LoginPage() {
 
       console.log("🔑 Login response role:", raw, "→ normalized:", role);
 
-      if (role === "USER" || role === "SUBSCRIBER") {
+      // ── Subscriber popup: clear session flag so UserPage shows the popup ──
+      // Always reset on fresh login so premium users see it every time they log in
+      if (role === "SUBSCRIBER" || role === "SUBSCRIBED") {
+        sessionStorage.removeItem("sub_popup_shown");
+      }
+
+      if (role === "USER" || role === "SUBSCRIBER" || role === "SUBSCRIBED") {
         navigate("/user");
       } else if (role === "ADMIN") {
         navigate("/admin");
       } else if (role === "CONSULTANT" || role === "ADVISOR") {
-        navigate("/advisor");
+        navigate("/consultant");
       } else {
-        // Show the actual role so we can debug
         setApiError(`Role not recognized: "${raw || "empty"}". Contact support.`);
         setErrorType("auth");
       }
@@ -74,27 +91,33 @@ export default function LoginPage() {
   };
 
   // Error banner styles based on type
-  const errorBannerStyle: React.CSSProperties = errorType === "server" ? {
-    background: "#FFF7ED",
-    border: "1px solid #FED7AA",
-    borderRadius: 10,
-    padding: "12px 14px",
-    marginBottom: 16,
-    fontSize: 13,
-    color: "#9A3412",
-    lineHeight: 1.5,
-  } : errorType === "network" ? {
-    background: "#F1F5F9",
-    border: "1px solid #CBD5E1",
-    borderRadius: 10,
-    padding: "12px 14px",
-    marginBottom: 16,
-    fontSize: 13,
-    color: "#475569",
-    lineHeight: 1.5,
-  } : {};
+  const errorBannerStyle: React.CSSProperties =
+    errorType === "server"
+      ? {
+          background: "#FFF7ED",
+          border: "1px solid #FED7AA",
+          borderRadius: 10,
+          padding: "12px 14px",
+          marginBottom: 16,
+          fontSize: 13,
+          color: "#9A3412",
+          lineHeight: 1.5,
+        }
+      : errorType === "network"
+      ? {
+          background: "#F1F5F9",
+          border: "1px solid #CBD5E1",
+          borderRadius: 10,
+          padding: "12px 14px",
+          marginBottom: 16,
+          fontSize: 13,
+          color: "#475569",
+          lineHeight: 1.5,
+        }
+      : {};
 
-  const errorIcon = errorType === "server" ? "🔧" : errorType === "network" ? "📡" : "⚠";
+  const errorIcon =
+    errorType === "server" ? "🔧" : errorType === "network" ? "📡" : "⚠";
 
   return (
     <div className={styles.page}>
@@ -139,12 +162,21 @@ export default function LoginPage() {
           errorType === "server" || errorType === "network" ? (
             <div style={errorBannerStyle}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                {errorIcon} {errorType === "server" ? "Server Error" : "Connection Error"}
+                {errorIcon}{" "}
+                {errorType === "server" ? "Server Error" : "Connection Error"}
               </div>
               <div>{apiError}</div>
               {errorType === "server" && (
-                <div style={{ marginTop: 8, fontSize: 11, color: "#C2410C", fontWeight: 600 }}>
-                  Tip: Check if Spring Boot is running and the database schema is up to date.
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "#C2410C",
+                    fontWeight: 600,
+                  }}
+                >
+                  Tip: Check if Spring Boot is running and the database schema is
+                  up to date.
                 </div>
               )}
             </div>
@@ -159,18 +191,39 @@ export default function LoginPage() {
           className={styles.loginSubmitBtn}
           disabled={loading}
         >
-          {loading
-            ? <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-                Authenticating...
-              </span>
-            : "Login to Account"
-          }
+          {loading ? (
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              <span
+                style={{
+                  width: 14,
+                  height: 14,
+                  border: "2px solid rgba(255,255,255,0.4)",
+                  borderTopColor: "#fff",
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  animation: "spin 0.7s linear infinite",
+                }}
+              />
+              Authenticating...
+            </span>
+          ) : (
+            "Login to Account"
+          )}
         </button>
 
         <p className={styles.registerText}>
           Don't have an account?{" "}
-          <span className={styles.registerLink} onClick={() => navigate("/register")}>
+          <span
+            className={styles.registerLink}
+            onClick={() => navigate("/register")}
+          >
             Create Account
           </span>
         </p>
@@ -179,6 +232,7 @@ export default function LoginPage() {
           By logging in, you agree to our{" "}
           <span className={styles.termsLink}>Terms of Service</span>
         </p>
+
       </div>
     </div>
   );
