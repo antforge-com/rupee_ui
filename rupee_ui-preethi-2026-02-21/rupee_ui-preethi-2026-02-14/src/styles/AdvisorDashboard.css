@@ -5,11 +5,11 @@
    DESIGN TOKENS
    ============================================================ */
 :root {
-  --blue-600: #2563EB;
-  --blue-700: #1D4ED8;
-  --blue-50: #EFF6FF;
-  --blue-100: #DBEAFE;
-  --blue-200: #BFDBFE;
+  --blue-600:  #2563EB;
+  --blue-700:  #1D4ED8;
+  --blue-50:   #EFF6FF;
+  --blue-100:  #DBEAFE;
+  --blue-200:  #BFDBFE;
 
   --slate-900: #0F172A;
   --slate-800: #1E293B;
@@ -20,57 +20,42 @@
   --slate-300: #CBD5E1;
   --slate-200: #E2E8F0;
   --slate-100: #F1F5F9;
-  --slate-50: #F8FAFC;
+  --slate-50:  #F8FAFC;
 
   --green-600: #16A34A;
-  --green-50: #F0FDF4;
+  --green-50:  #F0FDF4;
   --green-100: #DCFCE7;
 
-  --red-50: #FEF2F2;
-  --red-100: #FEE2E2;
-  --red-200: #FECACA;
-  --red-600: #DC2626;
+  --red-50:    #FEF2F2;
+  --red-100:   #FEE2E2;
+  --red-200:   #FECACA;
+  --red-600:   #DC2626;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 24px;
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-xl:   20px;
+  --radius-2xl:  24px;
   --radius-pill: 100px;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.05);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
 }
 
 /* ============================================================
    GLOBAL RESET
    ============================================================ */
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  padding: 0;
-}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 @keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ============================================================
@@ -97,13 +82,10 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.03);
 }
 
-.nav-brand {
-  display: flex;
-  flex-direction: column;
-}
+.nav-brand { display: flex; flex-direction: column; }
 
 .brand-text {
   color: var(--blue-600);
@@ -153,10 +135,7 @@ body {
   overflow-x: auto;
   scrollbar-width: none;
 }
-
-.advisor-tabs::-webkit-scrollbar {
-  display: none;
-}
+.advisor-tabs::-webkit-scrollbar { display: none; }
 
 .tab-btn {
   background: none;
@@ -172,15 +151,8 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-
-.tab-btn:hover {
-  color: var(--blue-600);
-}
-
-.tab-btn.active {
-  color: var(--blue-600);
-  border-bottom-color: var(--blue-600);
-}
+.tab-btn:hover  { color: var(--blue-600); }
+.tab-btn.active { color: var(--blue-600); border-bottom-color: var(--blue-600); }
 
 /* ============================================================
    MAIN CONTENT
@@ -229,8 +201,7 @@ body {
 .schedule-step {
   padding: 20px 24px;
 }
-
-.schedule-step+.schedule-step {
+.schedule-step + .schedule-step {
   border-top: 1px solid var(--slate-100);
 }
 
@@ -269,12 +240,10 @@ body {
   padding: 0;
   line-height: 1;
 }
-
 .schedule-arrow-btn:hover:not(:disabled) {
   background: var(--blue-50);
   border-color: var(--blue-600);
 }
-
 .schedule-arrow-btn:disabled {
   border-color: var(--slate-100);
   color: var(--slate-300);
@@ -306,12 +275,10 @@ body {
   gap: 2px;
   min-width: 0;
 }
-
 .schedule-date-btn:hover {
   border-color: var(--blue-600);
   background: var(--blue-50);
 }
-
 .schedule-date-btn.active {
   background: var(--blue-600) !important;
   border-color: var(--blue-600) !important;
@@ -324,10 +291,7 @@ body {
   letter-spacing: 0.1em;
   color: var(--slate-400);
 }
-
-.schedule-date-btn.active .schedule-date-wd {
-  color: var(--blue-200);
-}
+.schedule-date-btn.active .schedule-date-wd { color: var(--blue-200); }
 
 /* Date number — matches .dateGridDate */
 .schedule-date-num {
@@ -336,20 +300,14 @@ body {
   color: var(--slate-900);
   line-height: 1;
 }
-
-.schedule-date-btn.active .schedule-date-num {
-  color: #fff;
-}
+.schedule-date-btn.active .schedule-date-num { color: #fff; }
 
 /* Month label — matches .dateGridMonth */
 .schedule-date-mon {
   font-size: 9px;
   color: var(--slate-400);
 }
-
-.schedule-date-btn.active .schedule-date-mon {
-  color: var(--blue-200);
-}
+.schedule-date-btn.active .schedule-date-mon { color: var(--blue-200); }
 
 /* TODAY badge — matches .todayLabel */
 .schedule-today-badge {
@@ -384,7 +342,6 @@ body {
   flex-wrap: wrap;
   align-items: center;
 }
-
 .schedule-legend-item {
   display: flex;
   align-items: center;
@@ -392,7 +349,6 @@ body {
   font-size: 11px;
   color: var(--slate-500);
 }
-
 .schedule-legend-dot {
   width: 13px;
   height: 13px;
@@ -411,8 +367,7 @@ body {
 .schedule-time-btn {
   position: relative;
   padding: 12px 8px;
-  border-radius: var(--radius-pill);
-  /* 100px full pill */
+  border-radius: var(--radius-pill);       /* 100px full pill */
   border: 1.5px solid var(--blue-200);
   background: #fff;
   font-size: 11px;
@@ -431,7 +386,6 @@ body {
   gap: 2px;
   width: 100%;
 }
-
 .schedule-time-btn:hover:not(:disabled) {
   border-color: var(--blue-600);
   background: var(--blue-50);
@@ -458,7 +412,6 @@ body {
   text-decoration: line-through !important;
   opacity: 0.65 !important;
 }
-
 .schedule-time-btn.disabled:hover {
   background: var(--green-50) !important;
   border-color: var(--green-600) !important;
@@ -477,7 +430,6 @@ body {
   margin-top: 2px;
   color: var(--slate-400);
 }
-
 .schedule-slot-sublabel.custom {
   color: #10B981;
   background: #D1FAE5;
@@ -507,13 +459,11 @@ body {
   align-items: center;
   flex-wrap: wrap;
 }
-
 .shift-banner-text {
   font-size: 13px;
   color: #1E40AF;
   font-weight: 600;
 }
-
 .shift-banner-slots {
   font-size: 12px;
   color: #60A5FA;
@@ -529,18 +479,15 @@ body {
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
-
 .schedule-stat-card {
   border-radius: 10px;
   padding: 10px 18px;
   min-width: 115px;
 }
-
 .schedule-stat-value {
   font-size: 20px;
   font-weight: 700;
 }
-
 .schedule-stat-label {
   font-size: 11px;
   color: var(--slate-500);
@@ -560,7 +507,6 @@ body {
   padding: 18px 20px;
   margin-bottom: 20px;
 }
-
 .add-slot-panel-title {
   font-size: 12px;
   font-weight: 700;
@@ -678,7 +624,6 @@ body {
   justify-content: space-between;
   transition: transform 0.2s, box-shadow 0.2s;
 }
-
 .booking-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
@@ -728,16 +673,9 @@ body {
   font-weight: 700;
   text-transform: uppercase;
 }
+.status-badge.confirmed { background: var(--green-100); color: var(--green-600); }
 
-.status-badge.confirmed {
-  background: var(--green-100);
-  color: var(--green-600);
-}
-
-.booking-actions {
-  display: flex;
-  gap: 12px;
-}
+.booking-actions { display: flex; gap: 12px; }
 
 .btn-join {
   background: var(--blue-600);
@@ -752,10 +690,7 @@ body {
   align-items: center;
   gap: 8px;
 }
-
-.btn-join:hover {
-  background: var(--blue-700);
-}
+.btn-join:hover { background: var(--blue-700); }
 
 .btn-outline {
   background: #fff;
@@ -767,10 +702,7 @@ body {
   font-size: 14px;
   cursor: pointer;
 }
-
-.btn-outline:hover {
-  background: var(--slate-100);
-}
+.btn-outline:hover { background: var(--slate-100); }
 
 /* ============================================================
    EDIT FORM
@@ -806,12 +738,11 @@ body {
   transition: all 0.2s;
   width: 100%;
 }
-
 .form-input:focus {
   background: #fff;
   border-color: var(--blue-600);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
 }
 
 .btn-save {
@@ -831,10 +762,7 @@ body {
   white-space: nowrap;
   width: auto;
 }
-
-.btn-save:hover {
-  background: var(--blue-700);
-}
+.btn-save:hover { background: var(--blue-700); }
 
 .btn-cancel {
   background: #fff;
@@ -847,11 +775,7 @@ body {
   cursor: pointer;
   margin-right: 12px;
 }
-
-.btn-cancel:hover {
-  background: var(--slate-100);
-  color: var(--slate-900);
-}
+.btn-cancel:hover { background: var(--slate-100); color: var(--slate-900); }
 
 /* ============================================================
    QUERIES
@@ -862,13 +786,10 @@ body {
   padding: 40px;
   border-radius: var(--radius-2xl);
   margin-bottom: 32px;
-  box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.4);
+  box-shadow: 0 10px 25px -5px rgba(37,99,235,0.4);
 }
 
-.queries-list {
-  display: grid;
-  gap: 16px;
-}
+.queries-list { display: grid; gap: 16px; }
 
 .query-card {
   background: #fff;
@@ -918,7 +839,7 @@ body {
   border-radius: 10px;
   font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
   z-index: 9999;
   white-space: nowrap;
 }
@@ -927,7 +848,6 @@ body {
    RESPONSIVE
    ============================================================ */
 @media (max-width: 768px) {
-
   .advisor-navbar,
   .advisor-tabs {
     padding: 0 16px;
@@ -938,28 +858,21 @@ body {
     padding: 0 12px;
   }
 
-  .advisor-tabs {
-    gap: 16px;
-  }
+  .advisor-tabs { gap: 16px; }
 
-  .tab-btn {
-    font-size: 13px;
-    padding: 14px 2px;
-  }
+  .tab-btn { font-size: 13px; padding: 14px 2px; }
 
   .booking-card {
     flex-direction: column;
     align-items: flex-start;
     gap: 16px;
   }
-
   .booking-right,
   .booking-actions {
     width: 100%;
     flex-direction: row;
     gap: 10px;
   }
-
   .btn-join,
   .btn-outline {
     flex: 1;
@@ -977,93 +890,51 @@ body {
   }
 
   /* Date grid — slightly smaller on mobile */
-  .schedule-date-btn {
-    padding: 6px 2px;
-  }
-
-  .schedule-date-num {
-    font-size: 15px;
-  }
+  .schedule-date-btn { padding: 6px 2px; }
+  .schedule-date-num { font-size: 15px; }
 
   /* Time grid — 2 columns on mobile */
   .schedule-time-grid {
     grid-template-columns: repeat(2, 1fr) !important;
   }
 
-  .profile-card-large {
-    padding: 20px;
-  }
-
-  .profile-header {
-    flex-direction: column;
-    text-align: center;
-  }
-
-  .profile-details-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
+  .profile-card-large { padding: 20px; }
+  .profile-header { flex-direction: column; text-align: center; }
+  .profile-details-grid { grid-template-columns: 1fr 1fr; gap: 16px; }
 }
 
 @media (max-width: 480px) {
   .schedule-time-grid {
     grid-template-columns: repeat(2, 1fr) !important;
   }
-
-  .schedule-date-num {
-    font-size: 14px;
-  }
-
+  .schedule-date-num { font-size: 14px; }
   .schedule-date-wd,
-  .schedule-date-mon {
-    font-size: 8px;
-  }
+  .schedule-date-mon { font-size: 8px; }
 
-  .profile-details-grid {
-    grid-template-columns: 1fr;
-  }
+  .profile-details-grid { grid-template-columns: 1fr; }
 }
-
 /* ═══════════════════════════════════════════════════════════════════════════
    AdvisorDashboard.css  —  FinAdvise Consultant Portal Styles
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Reset / Base ─────────────────────────────────────────────────────────── */
-*,
-*::before,
-*::after {
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
 /* ── Keyframes ─────────────────────────────────────────────────────────────── */
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
@@ -1344,15 +1215,9 @@ body {
   margin-top: 2px;
 }
 
-.slot-label-booked {
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.slot-label-off {
-  color: #94A3B8;
-}
-
-.slot-label-custom {
+.slot-label-booked  { color: rgba(255, 255, 255, 0.85); }
+.slot-label-off     { color: #94A3B8; }
+.slot-label-custom  {
   color: #10B981;
   background: #D1FAE5;
   border-radius: 4px;
@@ -1468,13 +1333,8 @@ body {
   animation: slideDown 0.2s ease;
 }
 
-.slot-toast.success {
-  background: #0F172A;
-}
-
-.slot-toast.error {
-  background: #7F1D1D;
-}
+.slot-toast.success { background: #0F172A; }
+.slot-toast.error   { background: #7F1D1D; }
 
 /* ── Booking Cards ──────────────────────────────────────────────────────────── */
 .booking-card {
@@ -1580,423 +1440,5 @@ body {
 @media (max-width: 380px) {
   .slot-grid {
     grid-template-columns: 1fr 1fr;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   FINADVISE — ADVISOR DASHBOARD
-   Responsive layout: sidebar on ≥900 px, bottom-tabs on mobile
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* ── Reset / base ────────────────────────────────────────────────────────── */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* ── Root layout ─────────────────────────────────────────────────────────── */
-.advisor-layout {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-  background: #F1F5F9;
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-}
-
-/* ── Top navbar ──────────────────────────────────────────────────────────── */
-.advisor-navbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  height: 58px;
-  flex-shrink: 0;
-  background: linear-gradient(135deg, #1E3A5F 0%, #2563EB 100%);
-  box-shadow: 0 2px 16px rgba(37, 99, 235, 0.25);
-  z-index: 100;
-}
-
-.nav-brand {
-  display: flex;
-  flex-direction: column;
-  line-height: 1;
-}
-
-.brand-text {
-  font-size: 16px;
-  font-weight: 900;
-  color: #fff;
-  letter-spacing: 0.12em;
-}
-
-.brand-sub {
-  font-size: 8px;
-  font-weight: 700;
-  color: #93C5FD;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  margin-top: 2px;
-}
-
-.nav-profile {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 5px 10px;
-  border-radius: 20px;
-  transition: background 0.15s;
-}
-
-.nav-profile:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.avatar-circle-sm {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.25);
-  border: 1.5px solid rgba(255, 255, 255, 0.5);
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ── Body: sidebar + main ────────────────────────────────────────────────── */
-.advisor-body {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
-/* ── Sidebar ─────────────────────────────────────────────────────────────── */
-.advisor-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  background: #fff;
-  border-right: 1px solid #E2E8F0;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  overflow-x: hidden;
-  z-index: 50;
-  transition: width 0.25s ease;
-}
-
-.sidebar-section-label {
-  padding: 18px 16px 6px;
-  font-size: 9px;
-  font-weight: 800;
-  color: #94A3B8;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-}
-
-.sidebar-nav-btn {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  color: #475569;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-  border-radius: 0;
-  transition: all 0.15s;
-  position: relative;
-  font-family: inherit;
-}
-
-.sidebar-nav-btn:hover {
-  background: #F8FAFC;
-  color: #1E40AF;
-}
-
-.sidebar-nav-btn.active {
-  background: linear-gradient(90deg, #EFF6FF, #DBEAFE);
-  color: #1D4ED8;
-  font-weight: 700;
-  border-right: 3px solid #2563EB;
-}
-
-.sidebar-nav-btn.active .sidebar-icon {
-  transform: scale(1.1);
-}
-
-.sidebar-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-  width: 20px;
-  text-align: center;
-  transition: transform 0.15s;
-}
-
-.sidebar-badge {
-  margin-left: auto;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 800;
-  padding: 0 5px;
-  color: #fff;
-  flex-shrink: 0;
-}
-
-.sidebar-divider {
-  height: 1px;
-  background: #F1F5F9;
-  margin: 8px 0;
-}
-
-.sidebar-footer {
-  margin-top: auto;
-  padding: 12px;
-  border-top: 1px solid #F1F5F9;
-}
-
-.sidebar-logout-btn {
-  width: 100%;
-  padding: 9px 14px;
-  border: 1.5px solid #FECACA;
-  background: #FEF2F2;
-  color: #DC2626;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: inherit;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition: all 0.15s;
-}
-
-.sidebar-logout-btn:hover {
-  background: #FEE2E2;
-}
-
-/* ── Main content area ───────────────────────────────────────────────────── */
-.advisor-main {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.advisor-content-container {
-  padding: 24px;
-  max-width: 1100px;
-  width: 100%;
-  margin: 0 auto;
-  animation: fadeIn 0.2s ease;
-}
-
-/* ── Mobile bottom tab bar ───────────────────────────────────────────────── */
-.advisor-tabs-mobile {
-  display: none;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  background: #fff;
-  border-top: 1px solid #E2E8F0;
-  flex-shrink: 0;
-  z-index: 80;
-}
-
-/* Legacy .advisor-tabs — hidden on desktop, shown as mobile tabs */
-.advisor-tabs {
-  display: none;
-}
-
-/* ── Section header ──────────────────────────────────────────────────────── */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.section-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 800;
-  color: #0F172A;
-}
-
-/* ── Tab button (mobile / legacy) ───────────────────────────────────────── */
-.tab-btn {
-  flex-shrink: 0;
-  padding: 10px 16px;
-  border: none;
-  background: transparent;
-  color: #64748B;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  border-bottom: 2.5px solid transparent;
-  white-space: nowrap;
-  transition: all 0.15s;
-  font-family: inherit;
-}
-
-.tab-btn:hover {
-  color: #2563EB;
-  background: #F8FAFC;
-}
-
-.tab-btn.active {
-  color: #2563EB;
-  border-bottom-color: #2563EB;
-  background: #EFF6FF;
-}
-
-/* ── Banners ─────────────────────────────────────────────────────────────── */
-.advisor-banner {
-  padding: 10px 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-/* ── Responsive breakpoints ──────────────────────────────────────────────── */
-
-/* Tablet: narrow sidebar */
-@media (max-width: 1024px) and (min-width: 769px) {
-  .advisor-sidebar {
-    width: 64px;
-  }
-
-  .sidebar-nav-btn span.sidebar-label {
-    display: none;
-  }
-
-  .sidebar-badge {
-    position: absolute;
-    top: 6px;
-    right: 4px;
-    min-width: 14px;
-    height: 14px;
-    font-size: 8px;
-  }
-
-  .sidebar-section-label {
-    display: none;
-  }
-
-  .sidebar-nav-btn {
-    padding: 12px;
-    justify-content: center;
-  }
-
-  .sidebar-icon {
-    width: auto;
-    font-size: 18px;
-  }
-
-  .sidebar-footer {
-    padding: 8px;
-  }
-
-  .sidebar-logout-btn span {
-    display: none;
-  }
-
-  .sidebar-logout-btn {
-    justify-content: center;
-    padding: 9px;
-  }
-}
-
-/* Mobile: hide sidebar, show bottom tabs */
-@media (max-width: 768px) {
-  .advisor-body {
-    flex-direction: column;
-  }
-
-  .advisor-sidebar {
-    display: none;
-  }
-
-  .advisor-tabs-mobile {
-    display: flex;
-    order: 99;
-    /* push to bottom */
-  }
-
-  .advisor-main {
-    flex: 1;
-    overflow-y: auto;
-  }
-
-  .advisor-content-container {
-    padding: 16px;
-  }
-
-  .section-header h2 {
-    font-size: 17px;
-  }
-
-  .advisor-navbar {
-    height: 52px;
-    padding: 0 14px;
-  }
-
-  .brand-text {
-    font-size: 14px;
-  }
-}
-
-@media (max-width: 480px) {
-  .advisor-content-container {
-    padding: 12px;
   }
 }

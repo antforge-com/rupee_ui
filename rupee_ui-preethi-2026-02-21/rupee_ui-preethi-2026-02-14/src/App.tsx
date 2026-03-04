@@ -9,21 +9,20 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import UserPage from "./pages/UserPage";
 
-// ── Notification System ──
-import { NotificationProvider } from "./pages/NotificationSystem";
-
 // ── Service Imports ──
 import { getRole, getToken } from "./services/api";
 
 // ── Role helpers ──────────────────────────────────────────────────────────────
+// Normalizes any role string the backend might return
 const normalizeRole = (raw?: string | null) =>
   (raw || "").toUpperCase().trim().replace(/^ROLE_/, "");
 
-const USER_ROLES = ["USER", "SUBSCRIBER"];
-const ADMIN_ROLES = ["ADMIN"];
-const ADVISOR_ROLES = ["CONSULTANT", "ADVISOR"];
+const USER_ROLES  = ["USER", "SUBSCRIBER"];         // → /user
+const ADMIN_ROLES = ["ADMIN"];                       // → /admin
+const ADVISOR_ROLES = ["CONSULTANT", "ADVISOR"];     // → /advisor
 
 // ── ProtectedRoute ────────────────────────────────────────────────────────────
+// allowedRoles: if provided, also checks the stored role matches
 const ProtectedRoute = ({
   children,
   allowedRoles,
@@ -31,15 +30,19 @@ const ProtectedRoute = ({
   children: React.ReactNode;
   allowedRoles?: string[];
 }) => {
-  const navigate = useNavigate();
-  const token = getToken();
-  const role = normalizeRole(getRole());
+  const navigate  = useNavigate();
+  const token     = getToken();
+  const role      = normalizeRole(getRole());
 
   useEffect(() => {
-    if (!token) { navigate("/login", { replace: true }); return; }
+    if (!token) {
+      navigate("/login", { replace: true });
+      return;
+    }
     if (allowedRoles && !allowedRoles.includes(role)) {
-      if (USER_ROLES.includes(role)) { navigate("/user", { replace: true }); return; }
-      if (ADMIN_ROLES.includes(role)) { navigate("/admin", { replace: true }); return; }
+      // Logged in but wrong role — redirect to their correct dashboard
+      if (USER_ROLES.includes(role))    { navigate("/user",    { replace: true }); return; }
+      if (ADMIN_ROLES.includes(role))   { navigate("/admin",   { replace: true }); return; }
       if (ADVISOR_ROLES.includes(role)) { navigate("/consultant", { replace: true }); return; }
       navigate("/login", { replace: true });
     }
@@ -54,10 +57,14 @@ const ProtectedRoute = ({
 function AppRoutes() {
   return (
     <Routes>
+      {/* 1. Landing Page */}
       <Route path="/" element={<HomePage />} />
-      <Route path="/login" element={<LoginPage />} />
+
+      {/* 2. Auth */}
+      <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
+      {/* 3. User Dashboard — USER + SUBSCRIBER roles */}
       <Route
         path="/user"
         element={
@@ -66,6 +73,8 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+
+      {/* 4. Admin Dashboard — ADMIN role only */}
       <Route
         path="/admin"
         element={
@@ -74,6 +83,8 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+
+      {/* 5. Advisor Dashboard — CONSULTANT + ADVISOR roles */}
       <Route
         path="/consultant"
         element={
@@ -82,23 +93,17 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+
+      {/* Fallback */}
       <Route path="*" element={<HomePage />} />
     </Routes>
   );
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   return (
-    // NotificationProvider wraps the entire app so every page can use
-    // useNotifications(), UserTicketMonitor, NotificationBell, etc.
-    // Note: AdminPage has its own internal NotificationProvider wrap too,
-    // which is fine — the inner one takes precedence for admin-specific
-    // notifications while this outer one covers UserPage and AdvisorDashboard.
-    <NotificationProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </NotificationProvider>
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   );
 }

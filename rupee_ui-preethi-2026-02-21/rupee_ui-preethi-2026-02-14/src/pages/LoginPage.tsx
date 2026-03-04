@@ -9,22 +9,22 @@ export default function LoginPage() {
   const navigate = useNavigate();
 
   // ── Login state ───────────────────────────────────────────────────────────
-  const [cred, setCred] = useState("");
-  const [pass, setPass] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [apiError, setApiError] = useState("");
+  const [cred,      setCred]      = useState("");
+  const [pass,      setPass]      = useState("");
+  const [loading,   setLoading]   = useState(false);
+  const [apiError,  setApiError]  = useState("");
   const [errorType, setErrorType] = useState<"auth" | "server" | "network" | "registered" | "">("");
 
   // ── Forgot password modal ─────────────────────────────────────────────────
-  const [showForgot, setShowForgot] = useState(false);
-  const [forgotStep, setForgotStep] = useState<ForgotStep>("email");
-  const [forgotEmail, setForgotEmail] = useState("");
-  const [forgotOtp, setForgotOtp] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPass, setConfirmPass] = useState("");
+  const [showForgot,    setShowForgot]    = useState(false);
+  const [forgotStep,    setForgotStep]    = useState<ForgotStep>("email");
+  const [forgotEmail,   setForgotEmail]   = useState("");
+  const [forgotOtp,     setForgotOtp]     = useState("");
+  const [newPassword,   setNewPassword]   = useState("");
+  const [confirmPass,   setConfirmPass]   = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
-  const [forgotError, setForgotError] = useState("");
-  const [otpCountdown, setOtpCountdown] = useState(0);
+  const [forgotError,   setForgotError]   = useState("");
+  const [otpCountdown,  setOtpCountdown]  = useState(0);
 
   // ── Countdown helper ──────────────────────────────────────────────────────
   const startCountdown = () => {
@@ -76,18 +76,14 @@ export default function LoginPage() {
     setErrorType("");
     try {
       const data = await loginUser(cred.trim(), pass);
-      const raw = data?.role || data?.userRole || "";
+      const raw  = data?.role || data?.userRole || "";
       const role = raw.toString().toUpperCase().trim().replace(/^ROLE_/, "");
-
-      // ✅ Ensure the normalised role is persisted so guards (e.g. ticket creation)
-      // can read it reliably without re-decoding the JWT every time.
-      if (role) localStorage.setItem("fin_role", role);
 
       if (role === "SUBSCRIBER" || role === "SUBSCRIBED") sessionStorage.removeItem("sub_popup_shown");
 
-      if (role === "USER" || role === "SUBSCRIBER" || role === "SUBSCRIBED") navigate("/user");
-      else if (role === "ADMIN") navigate("/admin");
-      else if (role === "CONSULTANT" || role === "ADVISOR") navigate("/consultant");
+      if      (role === "USER" || role === "SUBSCRIBER" || role === "SUBSCRIBED") navigate("/user");
+      else if (role === "ADMIN")                                                   navigate("/admin");
+      else if (role === "CONSULTANT" || role === "ADVISOR")                        navigate("/consultant");
       else { setApiError(`Role not recognized: "${raw || "empty"}". Contact support.`); setErrorType("auth"); }
     } catch (err: any) {
       const { msg, type } = classifyError(err);
@@ -142,7 +138,7 @@ export default function LoginPage() {
   // ── Forgot — Step 3: reset password ──────────────────────────────────────
   const handleResetPassword = async () => {
     if (!newPassword || newPassword.length < 6) { setForgotError("Password must be at least 6 characters."); return; }
-    if (newPassword !== confirmPass) { setForgotError("Passwords do not match."); return; }
+    if (newPassword !== confirmPass)             { setForgotError("Passwords do not match."); return; }
     setForgotLoading(true);
     setForgotError("");
     try {
@@ -231,21 +227,21 @@ export default function LoginPage() {
           errorType === "server" || errorType === "network" || errorType === "registered" ? (
             <div style={{
               background:
-                errorType === "server" ? "#FFF7ED" :
-                  errorType === "network" ? "#F1F5F9" : "#EFF6FF",
+                errorType === "server"     ? "#FFF7ED" :
+                errorType === "network"    ? "#F1F5F9" : "#EFF6FF",
               border:
-                errorType === "server" ? "1px solid #FED7AA" :
-                  errorType === "network" ? "1px solid #CBD5E1" : "1px solid #BFDBFE",
+                errorType === "server"     ? "1px solid #FED7AA" :
+                errorType === "network"    ? "1px solid #CBD5E1" : "1px solid #BFDBFE",
               color:
-                errorType === "server" ? "#9A3412" :
-                  errorType === "network" ? "#475569" : "#1E40AF",
+                errorType === "server"     ? "#9A3412" :
+                errorType === "network"    ? "#475569"  : "#1E40AF",
               borderRadius: 10, padding: "12px 14px",
               marginBottom: 16, fontSize: 13, lineHeight: 1.6,
             }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                {errorType === "server" ? "🔧 Server Error"
-                  : errorType === "network" ? "📡 Connection Error"
-                    : "ℹ️ Account Already Registered"}
+                {errorType === "server"     ? "🔧 Server Error"
+                : errorType === "network"   ? "📡 Connection Error"
+                : "ℹ️ Account Already Registered"}
               </div>
               <div>{apiError}</div>
 
@@ -274,9 +270,9 @@ export default function LoginPage() {
         <button type="button" onClick={handleLogin} className={styles.loginSubmitBtn} disabled={loading}>
           {loading
             ? <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-              Authenticating...
-            </span>
+                <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
+                Authenticating...
+              </span>
             : "Login to Account"
           }
         </button>
@@ -308,10 +304,10 @@ export default function LoginPage() {
                   {forgotStep === "done" ? "✅ Password Reset!" : "Reset Password"}
                 </div>
                 <div style={{ fontSize: 12, color: "#64748B", marginTop: 3 }}>
-                  {forgotStep === "email" && "Enter your registered email address"}
-                  {forgotStep === "otp" && `OTP sent to ${forgotEmail}`}
+                  {forgotStep === "email"   && "Enter your registered email address"}
+                  {forgotStep === "otp"     && `OTP sent to ${forgotEmail}`}
                   {forgotStep === "newpass" && "Create your new password"}
-                  {forgotStep === "done" && "You can now log in with your new password"}
+                  {forgotStep === "done"    && "You can now log in with your new password"}
                 </div>
               </div>
               <button onClick={closeForgotModal} style={{ background: "#F1F5F9", border: "none", borderRadius: "50%", width: 30, height: 30, cursor: "pointer", fontSize: 14, color: "#64748B", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>

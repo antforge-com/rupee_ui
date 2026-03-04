@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   extractArray,
@@ -18,7 +18,6 @@ import {
   updateTicketStatus,
 } from '../services/api';
 import '../styles/AdvisorDashboard.css';
-import AnalyticsDashboard from './AnalyticsDashboard';
 
 // ── Photo URL resolver ────────────────────────────────────────────────────────
 const resolvePhotoUrl = (path: string | null | undefined): string => {
@@ -29,7 +28,7 @@ const resolvePhotoUrl = (path: string | null | undefined): string => {
 
 // ── Master Timeslots API ──────────────────────────────────────────────────────
 const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
-  const BASE = '/api';
+  const BASE  = '/api';
   const token = localStorage.getItem('fin_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -37,19 +36,19 @@ const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };
-  const res = await fetch(`${BASE}${endpoint}`, { ...options, headers });
-  const ct = res.headers.get('content-type');
+  const res  = await fetch(`${BASE}${endpoint}`, { ...options, headers });
+  const ct   = res.headers.get('content-type');
   const data = ct?.includes('application/json') ? await res.json() : { message: await res.text() };
   if (!res.ok) throw new Error(data?.message || `Error ${res.status}`);
   return data;
 };
 
-const getMasterTimeslots = () => apiFetch('/master-timeslots');
-const createMasterTimeslot = (timeRange: string) =>
+const getMasterTimeslots   = ()                              => apiFetch('/master-timeslots');
+const createMasterTimeslot = (timeRange: string)             =>
   apiFetch('/master-timeslots', { method: 'POST', body: JSON.stringify({ timeRange }) });
 const updateMasterTimeslot = (id: number, timeRange: string) =>
   apiFetch(`/master-timeslots/${id}`, { method: 'PUT', body: JSON.stringify({ timeRange }) });
-const deleteMasterTimeslot = (id: number) =>
+const deleteMasterTimeslot = (id: number)                    =>
   apiFetch(`/master-timeslots/${id}`, { method: 'DELETE' });
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -133,7 +132,7 @@ const deepFindDate = (b: any): string => {
   for (const k of directKeys) {
     if (b[k] && typeof b[k] === 'string') return b[k].split('T')[0];
   }
-  const nestedKeys = ['timeSlot', 'timeslot', 'time_slot', 'slot', 'consultation', 'appointment', 'schedule'];
+  const nestedKeys  = ['timeSlot', 'timeslot', 'time_slot', 'slot', 'consultation', 'appointment', 'schedule'];
   const subDateKeys = ['slotDate', 'slot_date', 'date', 'bookingDate', 'booking_date', 'appointmentDate'];
   for (const nk of nestedKeys) {
     if (b[nk] && typeof b[nk] === 'object') {
@@ -142,7 +141,7 @@ const deepFindDate = (b: any): string => {
       }
     }
   }
-  if (b.createdAt && typeof b.createdAt === 'string') return b.createdAt.split('T')[0];
+  if (b.createdAt  && typeof b.createdAt  === 'string') return b.createdAt.split('T')[0];
   if (b.created_at && typeof b.created_at === 'string') return b.created_at.split('T')[0];
   for (const key of Object.keys(b)) {
     const val = b[key];
@@ -165,15 +164,15 @@ const deepFindTime = (b: any): string => {
   const masterPaths: [string, string][] = [
     ['timeSlot', 'masterTimeSlot'], ['timeSlot', 'masterTimeslot'],
     ['timeSlot', 'master_time_slot'], ['timeslot', 'masterTimeSlot'],
-    ['timeslot', 'masterTimeslot'], ['slot', 'masterTimeSlot'],
+    ['timeslot', 'masterTimeslot'],  ['slot', 'masterTimeSlot'],
     ['slot', 'masterTimeslot'],
   ];
   for (const [p1, p2] of masterPaths) {
     const tr = b?.[p1]?.[p2]?.timeRange || b?.[p1]?.[p2]?.time_range;
     if (tr) return tr;
   }
-  if (b.masterTimeSlot?.timeRange) return b.masterTimeSlot.timeRange;
-  if (b.masterTimeslot?.timeRange) return b.masterTimeslot.timeRange;
+  if (b.masterTimeSlot?.timeRange)    return b.masterTimeSlot.timeRange;
+  if (b.masterTimeslot?.timeRange)    return b.masterTimeslot.timeRange;
   if (b.master_time_slot?.time_range) return b.master_time_slot.time_range;
   const nestedKeys = ['timeSlot', 'timeslot', 'time_slot', 'slot'];
   const timeFields = ['timeRange', 'time_range', 'slotTime', 'slot_time', 'startTime', 'start_time', 'time'];
@@ -240,7 +239,7 @@ const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
       const d = new Date(`${dateStr}T23:59:59`);
       return d < now;
     }
-    const sessionEnd = new Date(`${dateStr}T${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}:00`);
+    const sessionEnd = new Date(`${dateStr}T${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}:00`);
     return sessionEnd < now;
   } catch { return false; }
 };
@@ -271,25 +270,25 @@ const deepFindAmount = (b: any): number => {
 
 const deepFindClientName = (b: any): string => {
   const raw =
-    b?.user?.name ||
-    b?.user?.username ||
-    b?.user?.fullName ||
-    b?.client?.name ||
-    b?.client?.username ||
-    b?.client?.fullName ||
-    b?.userName ||
-    b?.clientName ||
-    b?.customerName ||
-    b?.name ||
-    b?.clientFullName ||
-    b?.customer_name ||
-    b?.user?.email ||
-    b?.userEmail ||
-    b?.client?.email ||
-    b?.user?.identifier ||
-    (b?.userId ? `User #${b.userId}` : null) ||
+    b?.user?.name        ||
+    b?.user?.username    ||
+    b?.user?.fullName    ||
+    b?.client?.name      ||
+    b?.client?.username  ||
+    b?.client?.fullName  ||
+    b?.userName          ||
+    b?.clientName        ||
+    b?.customerName      ||
+    b?.name              ||
+    b?.clientFullName    ||
+    b?.customer_name     ||
+    b?.user?.email       ||
+    b?.userEmail         ||
+    b?.client?.email     ||
+    b?.user?.identifier  ||
+    (b?.userId   ? `User #${b.userId}`   : null) ||
     (b?.clientId ? `Client #${b.clientId}` : null) ||
-    (b?.user?.id ? `User #${b.user.id}` : null) ||
+    (b?.user?.id ? `User #${b.user.id}`  : null)  ||
     `Booking #${b?.id || '?'}`;
 
   if (raw && raw.includes('@')) {
@@ -308,13 +307,13 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
     const match = timeString.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
     if (match) {
       let h = parseInt(match[1]);
-      const m = parseInt(match[2]);
+      const m  = parseInt(match[2]);
       const ap = match[3].toUpperCase();
       if (ap === 'PM' && h !== 12) h += 12;
       if (ap === 'AM' && h === 12) h = 0;
       const start = new Date(); start.setHours(h, m, 0);
-      const end = new Date(start.getTime() + durationMins * 60000);
-      const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      const end   = new Date(start.getTime() + durationMins * 60000);
+      const fmt   = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
       return `${fmt(start)} – ${fmt(end)}`;
     }
     return timeString;
@@ -322,8 +321,8 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
   const parts = timeString.split(':').map(Number);
   if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
     const start = new Date(); start.setHours(parts[0], parts[1], 0);
-    const end = new Date(start.getTime() + durationMins * 60000);
-    const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    const end   = new Date(start.getTime() + durationMins * 60000);
+    const fmt   = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     return `${fmt(start)} – ${fmt(end)}`;
   }
   return timeString;
@@ -331,12 +330,11 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
 
 const getStatusColor = (status: string) => {
   switch (status?.toUpperCase()) {
-    case 'CONFIRMED': return { bg: '#EFF6FF', color: '#2563EB', border: '#93C5FD' };
-    case 'BOOKED': return { bg: '#EFF6FF', color: '#2563EB', border: '#93C5FD' };
-    case 'PENDING': return { bg: '#FFFBEB', color: '#D97706', border: '#FCD34D' };
-    case 'COMPLETED': return { bg: '#F0FDF4', color: '#16A34A', border: '#86EFAC' };
-    case 'CANCELLED': return { bg: '#FEF2F2', color: '#EF4444', border: '#FCA5A5' };
-    default: return { bg: '#F1F5F9', color: '#64748B', border: '#CBD5E1' };
+    case 'CONFIRMED':  return { bg: '#EFF6FF', color: '#2563EB', border: '#93C5FD' };
+    case 'PENDING':    return { bg: '#FFFBEB', color: '#D97706', border: '#FCD34D' };
+    case 'COMPLETED':  return { bg: '#F0FDF4', color: '#16A34A', border: '#86EFAC' };
+    case 'CANCELLED':  return { bg: '#FEF2F2', color: '#EF4444', border: '#FCA5A5' };
+    default:           return { bg: '#F1F5F9', color: '#64748B', border: '#CBD5E1' };
   }
 };
 
@@ -346,7 +344,7 @@ const generateHourlySlots = (shiftStart: string, shiftEnd: string): string[] => 
     const [sh, sm] = shiftStart.split(':').map(Number);
     const [eh, em] = shiftEnd.split(':').map(Number);
     const startMins = sh * 60 + (isNaN(sm) ? 0 : sm);
-    const endMins = eh * 60 + (isNaN(em) ? 0 : em);
+    const endMins   = eh * 60 + (isNaN(em) ? 0 : em);
     const result: string[] = [];
     for (let m = startMins; m + 60 <= endMins; m += 60) {
       result.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
@@ -359,7 +357,7 @@ const fmt24to12 = (t: string): string => {
   if (!t) return '';
   const [h, m] = t.split(':').map(Number);
   const ampm = h >= 12 ? 'PM' : 'AM';
-  const hr = h % 12 || 12;
+  const hr   = h % 12 || 12;
   return `${hr}:${String(m).padStart(2, '0')} ${ampm}`;
 };
 
@@ -377,16 +375,6 @@ const normaliseTimeKey = (raw: string): string => {
     return `${String(hh).padStart(2, '0')}:${mm}`;
   }
   return '';
-};
-const parseSlotTimeKey = (raw: any, fallbackRange?: string): string => {
-  if (!raw && !fallbackRange) return '';
-  if (typeof raw === 'object' && raw?.hour !== undefined) {
-    return `${String(raw.hour).padStart(2, '0')}:${String(raw.minute ?? 0).padStart(2, '0')}`;
-  }
-  if (typeof raw === 'string' && raw.length >= 5) {
-    return raw.substring(0, 5);
-  }
-  return normaliseTimeKey(fallbackRange || '');
 };
 
 // ── Shared Badge ──────────────────────────────────────────────────────────────
@@ -462,10 +450,10 @@ const MaterialTimePicker: React.FC<{
           <div style={{ position: 'relative', width: 240, height: 240, borderRadius: '50%', background: '#F1F5F9' }}>
             <div style={{ position: 'absolute', top: '50%', left: '50%', width: 8, height: 8, background: '#1976D2', borderRadius: '50%', transform: 'translate(-50%,-50%)', zIndex: 10 }} />
             {items.map((val, i) => {
-              const angle = (i * 30) * (Math.PI / 180);
-              const r = 96;
-              const x = 120 + r * Math.sin(angle);
-              const y = 120 - r * Math.cos(angle);
+              const angle   = (i * 30) * (Math.PI / 180);
+              const r       = 96;
+              const x       = 120 + r * Math.sin(angle);
+              const y       = 120 - r * Math.cos(angle);
               const isActive = activeValue === val;
               return (
                 <React.Fragment key={val}>
@@ -492,7 +480,7 @@ const MaterialTimePicker: React.FC<{
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px 16px', gap: 16 }}>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#1976D2', fontWeight: 700, fontSize: 14, cursor: 'pointer', textTransform: 'uppercase' }}>CANCEL</button>
+          <button type="button" onClick={onClose}    style={{ background: 'none', border: 'none', color: '#1976D2', fontWeight: 700, fontSize: 14, cursor: 'pointer', textTransform: 'uppercase' }}>CANCEL</button>
           <button type="button" onClick={handleSave} style={{ background: 'none', border: 'none', color: '#1976D2', fontWeight: 700, fontSize: 14, cursor: 'pointer', textTransform: 'uppercase' }}>OK</button>
         </div>
       </div>
@@ -501,17 +489,17 @@ const MaterialTimePicker: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKETS TAB
+// TICKETS TAB — AdvisorTicketsView
 // ─────────────────────────────────────────────────────────────────────────────
 const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
-  const [tickets, setTickets] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<any | null>(null);
-  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [tickets,        setTickets]        = useState<any[]>([]);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState<string | null>(null);
+  const [selected,       setSelected]       = useState<any | null>(null);
+  const [filterStatus,   setFilterStatus]   = useState('ALL');
   const [filterPriority, setFilterPriority] = useState('ALL');
   const [filterCategory, setFilterCategory] = useState('ALL');
-  const [search, setSearch] = useState('');
+  const [search,         setSearch]         = useState('');
 
   useEffect(() => {
     (async () => {
@@ -527,30 +515,35 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
   const categories = [...new Set(tickets.map((t: any) => t.category))];
 
   const filtered = tickets.filter((t: any) =>
-    (filterStatus === 'ALL' || t.status === filterStatus) &&
+    (filterStatus   === 'ALL' || t.status   === filterStatus)   &&
     (filterPriority === 'ALL' || t.priority === filterPriority) &&
     (filterCategory === 'ALL' || t.category === filterCategory) &&
     (search === '' || t.description?.toLowerCase().includes(search.toLowerCase()) || String(t.id).includes(search))
   );
 
   const stats = {
-    total: tickets.length,
-    open: tickets.filter((t: any) => ['NEW', 'OPEN', 'IN_PROGRESS'].includes(t.status)).length,
+    total:     tickets.length,
+    open:      tickets.filter((t: any) => ['NEW','OPEN','IN_PROGRESS'].includes(t.status)).length,
     escalated: tickets.filter((t: any) => t.status === 'ESCALATED').length,
-    slaRisk: tickets.filter((t: any) => getSlaInfo(t)?.breached || getSlaInfo(t)?.warning).length,
+    slaRisk:   tickets.filter((t: any) => getSlaInfo(t)?.breached || getSlaInfo(t)?.warning).length,
   };
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+
+      {/* ── LEFT: list ──────────────────────────────────────────────────── */}
       <div style={{ width: selected ? 340 : '100%', flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #E2E8F0', transition: 'width 0.2s', overflow: 'hidden' }}>
+
         <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #F1F5F9' }}>
           <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
+
+          {/* Stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 12 }}>
             {[
-              { l: 'Total', v: stats.total, c: '#2563EB', bg: '#EFF6FF' },
-              { l: 'Active', v: stats.open, c: '#EA580C', bg: '#FFF7ED' },
+              { l: 'Total',     v: stats.total,     c: '#2563EB', bg: '#EFF6FF' },
+              { l: 'Active',    v: stats.open,      c: '#EA580C', bg: '#FFF7ED' },
               { l: 'Escalated', v: stats.escalated, c: '#DC2626', bg: '#FEF2F2' },
-              { l: 'SLA Risk', v: stats.slaRisk, c: '#D97706', bg: '#FFFBEB' },
+              { l: 'SLA Risk',  v: stats.slaRisk,   c: '#D97706', bg: '#FFFBEB' },
             ].map(s => (
               <div key={s.l} style={{ background: s.bg, borderRadius: 8, padding: '7px 10px', textAlign: 'center' }}>
                 <div style={{ fontSize: 16, fontWeight: 800, color: s.c }}>{s.v}</div>
@@ -558,21 +551,27 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
               </div>
             ))}
           </div>
+
+          {/* Search */}
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search…"
             style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #E2E8F0', borderRadius: 10, fontSize: 13, outline: 'none', boxSizing: 'border-box', background: '#F8FAFC', marginBottom: 8 }} />
+
+          {/* Filters */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
-              { v: filterStatus, s: setFilterStatus, opts: ['ALL', 'NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'ESCALATED'] },
-              { v: filterPriority, s: setFilterPriority, opts: ['ALL', 'LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
+              { v: filterStatus,   s: setFilterStatus,   opts: ['ALL','NEW','OPEN','IN_PROGRESS','RESOLVED','CLOSED','ESCALATED'] },
+              { v: filterPriority, s: setFilterPriority, opts: ['ALL','LOW','MEDIUM','HIGH','URGENT'] },
               { v: filterCategory, s: setFilterCategory, opts: ['ALL', ...categories] },
             ].map((f, i) => (
               <select key={i} value={f.v} onChange={e => f.s(e.target.value)}
                 style={{ flex: 1, minWidth: 80, padding: '6px 8px', borderRadius: 8, border: '1.5px solid #E2E8F0', fontSize: 11, background: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
-                {f.opts.map(o => <option key={o} value={o}>{o.replace('_', ' ')}</option>)}
+                {f.opts.map(o => <option key={o} value={o}>{o.replace('_',' ')}</option>)}
               </select>
             ))}
           </div>
         </div>
+
+        {/* Ticket rows */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}>
@@ -587,8 +586,8 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
               <p style={{ margin: 0, fontWeight: 600 }}>No tickets match.</p>
             </div>
           ) : filtered.map((t: any) => {
-            const sc = getStatusStyle(t.status);
-            const pc = getPriorityStyle(t.priority);
+            const sc  = getStatusStyle(t.status);
+            const pc  = getPriorityStyle(t.priority);
             const sla = getSlaInfo(t);
             const isSel = selected?.id === t.id;
             return (
@@ -601,7 +600,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                   <span style={{ fontWeight: 700, fontSize: 13, color: '#0F172A' }}>#{t.id} · {t.category}</span>
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <Badge label={t.status} style={sc} />
+                    <Badge label={t.status}   style={sc} />
                     <Badge label={t.priority} style={pc} />
                   </div>
                 </div>
@@ -621,6 +620,8 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
           })}
         </div>
       </div>
+
+      {/* ── RIGHT: detail ────────────────────────────────────────────────── */}
       {selected && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <AdvisorTicketDetail
@@ -647,17 +648,17 @@ const AdvisorTicketDetail: React.FC<{
   onClose: () => void;
   onStatusChange: (id: number, status: string) => void;
 }> = ({ ticket, consultantId, onClose, onStatusChange }) => {
-  const [comments, setComments] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reply, setReply] = useState('');
-  const [sending, setSending] = useState(false);
+  const [comments,    setComments]    = useState<any[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [reply,       setReply]       = useState('');
+  const [sending,     setSending]     = useState(false);
   const [localStatus, setLocalStatus] = useState(ticket.status);
-  const [updatingSt, setUpdatingSt] = useState(false);
-  const [notes, setNotes] = useState<any[]>(ticket.internalNotes ?? []);
-  const [noteText, setNoteText] = useState('');
+  const [updatingSt,  setUpdatingSt]  = useState(false);
+  const [notes,       setNotes]       = useState<any[]>(ticket.notes ?? []);
+  const [noteText,    setNoteText]    = useState('');
   const [postingNote, setPostingNote] = useState(false);
-  const [escalating, setEscalating] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [escalating,  setEscalating]  = useState(false);
+  const [toast,       setToast]       = useState<{ msg: string; ok: boolean } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3000); };
@@ -693,7 +694,7 @@ const AdvisorTicketDetail: React.FC<{
       await updateTicketStatus(ticket.id, s);
       setLocalStatus(s);
       onStatusChange(ticket.id, s);
-      showToast(`Status → ${s.replace('_', ' ')}`);
+      showToast(`Status → ${s.replace('_',' ')}`);
     } catch (e: any) { showToast(e.message || 'Failed.', false); }
     finally { setUpdatingSt(false); }
   };
@@ -724,25 +725,29 @@ const AdvisorTicketDetail: React.FC<{
   };
 
   const sla = getSlaInfo({ ...ticket, status: localStatus });
-  const sc = getStatusStyle(localStatus);
-  const pc = getPriorityStyle(ticket.priority);
-  const STATUSES = ['NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
+  const sc  = getStatusStyle(localStatus);
+  const pc  = getPriorityStyle(ticket.priority);
+  const STATUSES = ['NEW','OPEN','IN_PROGRESS','RESOLVED','CLOSED'];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#fff' }}>
+
+      {/* Header */}
       <div style={{ padding: '16px 20px', background: 'linear-gradient(135deg,#1E3A5F,#2563EB)', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ fontSize: 10, fontWeight: 700, color: '#93C5FD', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>Ticket #{ticket.id}</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 6 }}>{ticket.category}</div>
             <div style={{ display: 'flex', gap: 5 }}>
-              <Badge label={localStatus} style={sc} />
+              <Badge label={localStatus}     style={sc} />
               <Badge label={ticket.priority} style={pc} />
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
         </div>
       </div>
+
+      {/* SLA */}
       {sla && (
         <div style={{ padding: '8px 16px', background: sla.breached ? '#FEF2F2' : sla.warning ? '#FFFBEB' : '#F0FDF4', borderBottom: `1px solid ${sla.breached ? '#FECACA' : sla.warning ? '#FDE68A' : '#BBF7D0'}`, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span>{sla.breached ? '🔴' : sla.warning ? '🟡' : '🟢'}</span>
@@ -754,7 +759,10 @@ const AdvisorTicketDetail: React.FC<{
           </div>
         </div>
       )}
+
       <div style={{ flex: 1, overflowY: 'auto' }}>
+
+        {/* Description */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 8 }}>Description</div>
           <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.7, background: '#F8FAFC', padding: '10px 14px', borderRadius: 10, borderLeft: '3px solid #BFDBFE' }}>
@@ -766,6 +774,8 @@ const AdvisorTicketDetail: React.FC<{
             </a>
           )}
         </div>
+
+        {/* Status Controls */}
         <div style={{ padding: '12px 20px', borderBottom: '1px solid #F1F5F9', background: '#FAFAFA' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: 8 }}>Update Status</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -775,48 +785,38 @@ const AdvisorTicketDetail: React.FC<{
               return (
                 <button key={s} onClick={() => !active && handleStatus(s)} disabled={updatingSt || active}
                   style={{ padding: '5px 12px', borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: active ? 'default' : 'pointer', background: active ? st.bg : '#fff', color: active ? st.color : '#64748B', border: `1.5px solid ${active ? st.border : '#E2E8F0'}`, opacity: updatingSt ? 0.6 : 1 }}>
-                  {s.replace('_', ' ')}{active && ' ✓'}
+                  {s.replace('_',' ')}{active && ' ✓'}
                 </button>
               );
             })}
           </div>
         </div>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9', background: '#E5DDD5', flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 16, background: 'rgba(255,255,255,0.7)', padding: '4px 8px', borderRadius: 4, alignSelf: 'center' }}>
-            💬 Thread
-          </div>
+
+        {/* Thread */}
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: 10 }}>💬 Thread</div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 20, color: '#94A3B8', fontSize: 12 }}>Loading…</div>
           ) : comments.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 20, color: '#94A3B8', fontSize: 12, fontStyle: 'italic' }}>No messages yet.</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {comments.map((c: any) => {
-                const isAgent = c.isConsultantReply || c.authorRole === 'AGENT';
-                return (
-                  <div key={c.id} style={{ display: 'flex', justifyContent: isAgent ? 'flex-end' : 'flex-start' }}>
-                    <div style={{
-                      maxWidth: '85%', padding: '8px 12px', borderRadius: 8,
-                      background: isAgent ? '#DCF8C6' : '#FFFFFF',
-                      boxShadow: '0 1px 0.5px rgba(0,0,0,0.13)',
-                      borderTopRightRadius: isAgent ? 0 : 8,
-                      borderTopLeftRadius: isAgent ? 8 : 0,
-                    }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: isAgent ? '#075E54' : '#2563EB', marginBottom: 2 }}>
-                        {isAgent ? 'You (Agent)' : (ticket.user?.name || ticket.userName || 'User')}
-                      </div>
-                      <div style={{ fontSize: 13, color: '#111', lineHeight: 1.55, wordBreak: 'break-word' }}>{c.message}</div>
-                      <div style={{ fontSize: 10, color: '#667781', marginTop: 4, textAlign: 'right' }}>
-                        {new Date(c.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                      </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {comments.map((c: any) => (
+                <div key={c.id} style={{ display: 'flex', justifyContent: c.isConsultantReply ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ maxWidth: '82%', padding: '9px 13px', borderRadius: c.isConsultantReply ? '14px 14px 4px 14px' : '14px 14px 14px 4px', background: c.isConsultantReply ? 'linear-gradient(135deg,#2563EB,#1D4ED8)' : '#F1F5F9', color: c.isConsultantReply ? '#fff' : '#1E293B' }}>
+                    <div style={{ fontSize: 13, lineHeight: 1.5 }}>{c.message}</div>
+                    <div style={{ fontSize: 10, opacity: 0.7, marginTop: 3, textAlign: 'right' }}>
+                      {c.isConsultantReply ? 'You' : 'User'} · {new Date(c.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
               <div ref={bottomRef} />
             </div>
           )}
         </div>
+
+        {/* Reply */}
         <div style={{ padding: '12px 20px', borderBottom: '1px solid #F1F5F9', background: '#F8FAFC' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: 8 }}>Reply to Customer</div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -830,6 +830,8 @@ const AdvisorTicketDetail: React.FC<{
             </button>
           </div>
         </div>
+
+        {/* Internal Notes */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #FEF9C3', background: '#FFFBEB' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#92400E', textTransform: 'uppercase', marginBottom: 10 }}>
             🔒 Internal Notes <span style={{ fontSize: 10, fontWeight: 400, color: '#B45309', textTransform: 'none' }}>(private)</span>
@@ -853,6 +855,8 @@ const AdvisorTicketDetail: React.FC<{
             </button>
           </div>
         </div>
+
+        {/* Escalate */}
         <div style={{ padding: '14px 20px', background: '#FFF7ED' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#9A3412', textTransform: 'uppercase', marginBottom: 10 }}>🚨 Escalate</div>
           {localStatus === 'ESCALATED' ? (
@@ -870,6 +874,7 @@ const AdvisorTicketDetail: React.FC<{
           )}
         </div>
       </div>
+
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: toast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', zIndex: 9999 }}>
           {toast.ok ? '✓' : '✕'} {toast.msg}
@@ -880,119 +885,15 @@ const AdvisorTicketDetail: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSULTANT NOTIFICATIONS VIEW
-// ─────────────────────────────────────────────────────────────────────────────
-const ConsultantNotificationsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
-  const STORAGE_KEY = `fin_notifs_CONSULTANT_${consultantId}`;
-
-  interface LocalNotif {
-    id: string; type: string; title: string; message: string;
-    timestamp: string; read: boolean; ticketId?: number;
-  }
-
-  const [notifs, setNotifs] = useState<LocalNotif[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
-    catch { return []; }
-  });
-
-  const markAllRead = () => {
-    const updated = notifs.map(n => ({ ...n, read: true }));
-    setNotifs(updated);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-  };
-
-  const clearAll = () => {
-    setNotifs([]);
-    localStorage.removeItem(STORAGE_KEY);
-  };
-
-  const unread = notifs.filter(n => !n.read).length;
-
-  const TYPE_CFG: Record<string, { color: string; bg: string; border: string; icon: string }> = {
-    info: { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', icon: 'ℹ️' },
-    success: { color: '#16A34A', bg: '#F0FDF4', border: '#86EFAC', icon: '✅' },
-    warning: { color: '#D97706', bg: '#FFFBEB', border: '#FCD34D', icon: '⚠️' },
-    error: { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', icon: '🚨' },
-  };
-
-  const timeAgo = (d: string) => {
-    const diff = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  };
-
-  return (
-    <div className="advisor-content-container">
-      <div className="section-header" style={{ marginBottom: 20 }}>
-        <div>
-          <h2>My Notifications</h2>
-          {unread > 0 && (
-            <span style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}>
-              {unread} unread notification{unread !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {unread > 0 && (
-            <button onClick={markAllRead} style={{ padding: '7px 14px', background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#2563EB', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              Mark all read
-            </button>
-          )}
-          {notifs.length > 0 && (
-            <button onClick={clearAll} style={{ padding: '7px 14px', background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              Clear all
-            </button>
-          )}
-        </div>
-      </div>
-      {notifs.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '60px 20px', background: '#F8FAFC', borderRadius: 16, color: '#94A3B8' }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🔔</div>
-          <p style={{ margin: 0, fontWeight: 600, color: '#64748B' }}>No notifications yet</p>
-          <p style={{ fontSize: 12, marginTop: 8 }}>When the admin assigns a ticket or sends an update, you'll see it here.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {notifs.map(n => {
-            const cfg = TYPE_CFG[n.type] || TYPE_CFG.info;
-            return (
-              <div key={n.id} style={{
-                background: n.read ? '#fff' : cfg.bg,
-                border: `1.5px solid ${n.read ? '#F1F5F9' : cfg.border}`,
-                borderLeft: `4px solid ${cfg.color}`,
-                borderRadius: 12, padding: '14px 18px',
-                display: 'flex', gap: 14, alignItems: 'flex-start',
-              }}>
-                <div style={{ fontSize: 22, flexShrink: 0, lineHeight: 1.2 }}>{cfg.icon}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: cfg.color, marginBottom: 3 }}>
-                    {n.title}
-                    {!n.read && <span style={{ marginLeft: 6, width: 6, height: 6, borderRadius: '50%', background: cfg.color, display: 'inline-block', verticalAlign: 'middle' }} />}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6, wordBreak: 'break-word' }}>{n.message}</div>
-                  <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 6 }}>{timeAgo(n.timestamp)}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKINGS VIEW
+// 1. BOOKINGS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string>('ALL');
+  const [bookings,   setBookings]   = useState<any[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState<string | null>(null);
+  const [filter,     setFilter]     = useState<string>('ALL');
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [now, setNow] = useState(() => new Date());
+  const [now,        setNow]        = useState(() => new Date());
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000);
@@ -1025,57 +926,82 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
       setLoading(true); setError(null);
       try {
         const data = await getBookingsByConsultant(consultantId);
-        const arr = extractArray(data);
-        if (arr.length > 0) console.log('📋 FIRST BOOKING (raw):', JSON.stringify(arr[0], null, 2));
+        const arr  = extractArray(data);
+
+        if (arr.length > 0) {
+          console.log('📋 FIRST BOOKING (raw):', JSON.stringify(arr[0], null, 2));
+        }
 
         const token = localStorage.getItem('fin_token');
-        const authHeaders = { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+        const authHeaders = {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        };
 
-        const enriched = await Promise.all(arr.map(async (b: any) => {
-          let enrichedBooking = { ...b };
-          if (!b.user?.name && !b.user?.username && !b.userName && !b.clientName && !b.client?.name) {
-            const uid = b.userId || b.user?.id || b.clientId;
-            if (uid) {
-              try {
-                const res = await fetch(`/api/users/${uid}`, { headers: authHeaders });
-                if (res.ok) {
-                  const u = await res.json();
-                  enrichedBooking.user = { id: u.id, name: u.name || u.fullName || u.identifier, email: u.email || u.identifier, username: u.username || u.identifier };
-                }
-              } catch { /* skip */ }
+        const enriched = await Promise.all(
+          arr.map(async (b: any) => {
+            let enrichedBooking = { ...b };
+
+            if (!b.user?.name && !b.user?.username && !b.userName && !b.clientName && !b.client?.name) {
+              const uid = b.userId || b.user?.id || b.clientId;
+              if (uid) {
+                try {
+                  const res = await fetch(`/api/users/${uid}`, { headers: authHeaders });
+                  if (res.ok) {
+                    const u = await res.json();
+                    enrichedBooking.user = {
+                      id:       u.id,
+                      name:     u.name || u.fullName || u.identifier,
+                      email:    u.email || u.identifier,
+                      username: u.username || u.identifier,
+                    };
+                  }
+                } catch { /* skip */ }
+              }
             }
-          }
-          const hasDate = deepFindDate(enrichedBooking);
-          const hasTime = deepFindTime(enrichedBooking);
-          if (!hasDate || !hasTime) {
-            const tsId = b.timeSlotId || b.timeslotId || b.time_slot_id || b.slotId || b.slot_id || b.timeSlot?.id || b.timeslot?.id || b.slot?.id;
-            if (tsId) {
-              try {
-                const tsRes = await fetch(`/api/timeslots/${tsId}`, { headers: authHeaders });
-                if (tsRes.ok) {
-                  const ts = await tsRes.json();
-                  enrichedBooking = {
-                    ...enrichedBooking,
-                    slotDate: enrichedBooking.slotDate || ts.slotDate || ts.slot_date || ts.date || '',
-                    bookingDate: enrichedBooking.bookingDate || ts.slotDate || ts.slot_date || ts.date || '',
-                    slotTime: enrichedBooking.slotTime || ts.slotTime || ts.slot_time || '',
-                    timeRange: enrichedBooking.timeRange || ts.timeRange || ts.time_range || ts.masterTimeSlot?.timeRange || ts.masterTimeslot?.timeRange || '',
-                    timeSlot: { ...(enrichedBooking.timeSlot || {}), ...ts },
-                  };
-                }
-              } catch { /* skip */ }
+
+            const hasDate = deepFindDate(enrichedBooking);
+            const hasTime = deepFindTime(enrichedBooking);
+
+            if (!hasDate || !hasTime) {
+              const tsId =
+                b.timeSlotId   || b.timeslotId   || b.time_slot_id ||
+                b.slotId       || b.slot_id       ||
+                b.timeSlot?.id || b.timeslot?.id  || b.slot?.id;
+
+              if (tsId) {
+                try {
+                  const tsRes = await fetch(`/api/timeslots/${tsId}`, { headers: authHeaders });
+                  if (tsRes.ok) {
+                    const ts = await tsRes.json();
+                    enrichedBooking = {
+                      ...enrichedBooking,
+                      slotDate:    enrichedBooking.slotDate    || ts.slotDate    || ts.slot_date    || ts.date || '',
+                      bookingDate: enrichedBooking.bookingDate || ts.slotDate    || ts.slot_date    || ts.date || '',
+                      slotTime:    enrichedBooking.slotTime    || ts.slotTime    || ts.slot_time    || '',
+                      timeRange:   enrichedBooking.timeRange   || ts.timeRange   || ts.time_range   ||
+                                   ts.masterTimeSlot?.timeRange || ts.masterTimeslot?.timeRange || '',
+                      timeSlot: { ...(enrichedBooking.timeSlot || {}), ...ts },
+                    };
+                  }
+                } catch { /* skip */ }
+              }
             }
-          }
-          return enrichedBooking;
-        }));
+
+            return enrichedBooking;
+          })
+        );
+
         setBookings(enriched);
       } catch (e: any) {
         setError(e?.message || 'Could not load bookings. Please try again.');
-      } finally { setLoading(false); }
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [consultantId]);
 
-  const activeBookings = bookings.filter((b: any) => {
+  const activeBookings  = bookings.filter((b: any) => {
     const st = deepFindStatus(b);
     if (st === 'COMPLETED' || st === 'CANCELLED') return false;
     return !isBookingExpired(b, now);
@@ -1087,23 +1013,20 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   });
 
   const visibleBookings = filter === 'HISTORY' ? historyBookings : activeBookings;
+
   const filtered = filter === 'ALL'
     ? visibleBookings
     : filter === 'HISTORY'
-      ? historyBookings
-      : visibleBookings.filter((b: any) => {
-        const st = deepFindStatus(b);
-        if (filter === 'CONFIRMED') return st === 'CONFIRMED' || st === 'BOOKED';
-        return st === filter;
-      });
+    ? historyBookings
+    : visibleBookings.filter((b: any) => deepFindStatus(b) === filter);
 
   const counts: Record<string, number> = {
-    ALL: activeBookings.length,
-    PENDING: activeBookings.filter((b: any) => deepFindStatus(b) === 'PENDING').length,
-    CONFIRMED: activeBookings.filter((b: any) => ['CONFIRMED', 'BOOKED'].includes(deepFindStatus(b))).length,
+    ALL:       activeBookings.length,
+    PENDING:   activeBookings.filter((b: any) => deepFindStatus(b) === 'PENDING').length,
+    CONFIRMED: activeBookings.filter((b: any) => deepFindStatus(b) === 'CONFIRMED').length,
     COMPLETED: bookings.filter((b: any) => deepFindStatus(b) === 'COMPLETED').length,
     CANCELLED: bookings.filter((b: any) => deepFindStatus(b) === 'CANCELLED').length,
-    HISTORY: historyBookings.length,
+    HISTORY:   historyBookings.length,
   };
 
   const totalRevenue = bookings
@@ -1114,15 +1037,18 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
     <div className="advisor-content-container">
       <div className="section-header">
         <h2>My Bookings</h2>
-        <span style={{ fontSize: 13, color: '#64748B' }}>{bookings.length} total session{bookings.length !== 1 ? 's' : ''}</span>
+        <span style={{ fontSize: 13, color: '#64748B' }}>
+          {bookings.length} total session{bookings.length !== 1 ? 's' : ''}
+        </span>
       </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 12, marginBottom: 22 }}>
         {[
-          { label: 'Upcoming', value: String(counts.ALL), color: '#2563EB', bg: '#EFF6FF' },
-          { label: 'Pending', value: String(counts.PENDING), color: '#D97706', bg: '#FFFBEB' },
-          { label: 'Confirmed', value: String(counts.CONFIRMED), color: '#2563EB', bg: '#EFF6FF' },
-          { label: 'Completed', value: String(counts.COMPLETED), color: '#16A34A', bg: '#F0FDF4' },
-          { label: 'Revenue', value: `₹${totalRevenue.toLocaleString()}`, color: '#16A34A', bg: '#F0FDF4' },
+          { label: 'Upcoming',  value: String(counts.ALL),                color: '#2563EB', bg: '#EFF6FF' },
+          { label: 'Pending',   value: String(counts.PENDING),            color: '#D97706', bg: '#FFFBEB' },
+          { label: 'Confirmed', value: String(counts.CONFIRMED),          color: '#2563EB', bg: '#EFF6FF' },
+          { label: 'Completed', value: String(counts.COMPLETED),          color: '#16A34A', bg: '#F0FDF4' },
+          { label: 'Revenue',   value: `₹${totalRevenue.toLocaleString()}`, color: '#16A34A', bg: '#F0FDF4' },
         ].map(s => (
           <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 12, padding: '14px 16px' }}>
             <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.value}</div>
@@ -1130,29 +1056,32 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
           </div>
         ))}
       </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {[
-          { key: 'ALL', label: `ALL (${counts.ALL})` },
-          { key: 'PENDING', label: `PENDING (${counts.PENDING})` },
+          { key: 'ALL',       label: `ALL (${counts.ALL})` },
+          { key: 'PENDING',   label: `PENDING (${counts.PENDING})` },
           { key: 'CONFIRMED', label: `CONFIRMED (${counts.CONFIRMED})` },
-          { key: 'HISTORY', label: `HISTORY (${counts.HISTORY})` },
+          { key: 'HISTORY',   label: `HISTORY (${counts.HISTORY})` },
         ].map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)} style={{
             padding: '6px 16px', borderRadius: 20, border: '1.5px solid',
             borderColor: filter === f.key ? '#2563EB' : '#E2E8F0',
-            background: filter === f.key ? '#2563EB' : '#fff',
-            color: filter === f.key ? '#fff' : '#64748B',
+            background:  filter === f.key ? '#2563EB' : '#fff',
+            color:       filter === f.key ? '#fff'    : '#64748B',
             fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
           }}>
             {f.label}
           </button>
         ))}
       </div>
+
       {error && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>
           ⚠️ {error}
         </div>
       )}
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: '#94A3B8' }}>
           <div style={{ width: 32, height: 32, border: '3px solid #E2E8F0', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
@@ -1168,13 +1097,14 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {filtered.map((booking: any, idx: number) => {
-            const status = deepFindStatus(booking);
-            const sc = getStatusColor(status);
+            const status     = deepFindStatus(booking);
+            const sc         = getStatusColor(status);
             const clientName = deepFindClientName(booking);
-            const date = deepFindDate(booking) || '—';
-            const rawTime = deepFindTime(booking);
+            const date       = deepFindDate(booking) || '—';
+            const rawTime    = deepFindTime(booking);
             const timeDisplay = rawTime ? formatTimeRange(rawTime, booking.durationMinutes || 60) : '—';
-            const amount = deepFindAmount(booking);
+            const amount     = deepFindAmount(booking);
+
             return (
               <div key={booking.id || idx} style={{
                 background: '#fff', border: '1px solid #F1F5F9',
@@ -1185,8 +1115,11 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                 <div style={{ width: 46, height: 46, borderRadius: '50%', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, flexShrink: 0 }}>
                   {clientName.charAt(0).toUpperCase()}
                 </div>
+
                 <div style={{ flex: 1, minWidth: 180 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A', marginBottom: 4 }}>Session with {clientName}</div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A', marginBottom: 4 }}>
+                    Session with {clientName}
+                  </div>
                   <div style={{ fontSize: 13, color: '#64748B', display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
                     <span>📅 {date}</span>
                     <span>🕐 {timeDisplay}</span>
@@ -1196,23 +1129,43 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                     🔗 Room: <span style={{ fontFamily: 'monospace', color: '#2563EB' }}>finadvise-booking-{booking.id}</span>
                   </div>
                 </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ padding: '5px 14px', borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 12, fontWeight: 700, letterSpacing: '0.04em' }}>
+                  <span style={{
+                    padding: '5px 14px', borderRadius: 20,
+                    background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`,
+                    fontSize: 12, fontWeight: 700, letterSpacing: '0.04em',
+                  }}>
                     {status || 'UNKNOWN'}
                   </span>
                   {status !== 'CANCELLED' && (
-                    <a href={booking.meetingLink || booking.jitsiLink || booking.joinUrl || `https://meet.jit.si/finadvise-booking-${booking.id}`}
+                    <a
+                      href={booking.meetingLink || booking.jitsiLink || booking.joinUrl || `https://meet.jit.si/finadvise-booking-${booking.id}`}
                       target="_blank" rel="noreferrer"
-                      style={{ padding: '7px 16px', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(37,99,235,0.3)' }}>
+                      style={{
+                        padding: '7px 16px', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)',
+                        color: '#fff', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                        textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6,
+                        boxShadow: '0 2px 8px rgba(37,99,235,0.3)',
+                      }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                        <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14" />
-                        <rect x="3" y="6" width="12" height="12" rx="2" />
+                        <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14"/>
+                        <rect x="3" y="6" width="12" height="12" rx="2"/>
                       </svg>
                       Join Meeting
                     </a>
                   )}
-                  <button onClick={() => handleDelete(booking.id)} disabled={deletingId === booking.id} title="Delete this booking"
-                    style={{ width: 32, height: 32, borderRadius: 8, border: '1.5px solid #FECACA', background: deletingId === booking.id ? '#FEF2F2' : '#fff', color: '#EF4444', cursor: deletingId === booking.id ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0, transition: 'all 0.15s' }}>
+                  <button
+                    onClick={() => handleDelete(booking.id)}
+                    disabled={deletingId === booking.id}
+                    title="Delete this booking"
+                    style={{
+                      width: 32, height: 32, borderRadius: 8, border: '1.5px solid #FECACA',
+                      background: deletingId === booking.id ? '#FEF2F2' : '#fff',
+                      color: '#EF4444', cursor: deletingId === booking.id ? 'default' : 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 15, flexShrink: 0, transition: 'all 0.15s',
+                    }}>
                     {deletingId === booking.id ? '…' : '🗑'}
                   </button>
                 </div>
@@ -1227,183 +1180,64 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
 
 // ── 30-day pool + 7-visible window ───────────────────────────────────────────
 const ALL_SCHEDULE_DAYS = (() => {
-  const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-  const MONTH_NAMES = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+  const DAY_NAMES   = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
   const out: { iso: string; wd: string; day: string; mon: string }[] = [];
   for (let i = 0; i < 30; i++) {
     const d = new Date();
     d.setDate(d.getDate() + i);
     out.push({
-      iso: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-      wd: DAY_NAMES[d.getDay()],
-      day: String(d.getDate()).padStart(2, '0'),
+      iso: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`,
+      wd:  DAY_NAMES[d.getDay()],
+      day: String(d.getDate()).padStart(2,'0'),
       mon: MONTH_NAMES[d.getMonth()],
     });
   }
   return out;
 })();
-const SCHEDULE_VISIBLE = 7;
+const SCHEDULE_VISIBLE    = 7;
 const DEFAULT_SCHEDULE_DAY = ALL_SCHEDULE_DAYS.find(d => d.wd !== 'SUN')?.iso ?? ALL_SCHEDULE_DAYS[0].iso;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MY SCHEDULE — WITH PATCH A FULLY INTEGRATED
+// 2. MY SCHEDULE
 // ─────────────────────────────────────────────────────────────────────────────
 const MySlotsView: React.FC<{
   consultantId: number;
   shiftStartTime: string;
   shiftEndTime: string;
 }> = ({ consultantId, shiftStartTime, shiftEndTime }) => {
-  // ── existing state ──────────────────────────────────────────────────────────
-  const [dbSlots, setDbSlots] = useState<TimeSlotRecord[]>([]);
-  const [masterSlots, setMasterSlots] = useState<MasterSlot[]>([]);
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [dayOffset, setDayOffset] = useState(0);
+  const [dbSlots,      setDbSlots]      = useState<TimeSlotRecord[]>([]);
+  const [masterSlots,  setMasterSlots]  = useState<MasterSlot[]>([]);
+  const [bookings,     setBookings]     = useState<any[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
+  const [dayOffset,    setDayOffset]    = useState(0);
   const [selectedDate, setSelectedDate] = useState<string>(DEFAULT_SCHEDULE_DAY);
   const [togglingSlot, setTogglingSlot] = useState<string | null>(null);
-  const [slotToast, setSlotToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [showAddSlot, setShowAddSlot] = useState(false);
-  const [newSlotTime, setNewSlotTime] = useState('');
-  const [addingSlot, setAddingSlot] = useState(false);
-
-  // ── PATCH A – new state ─────────────────────────────────────────────────────
-  const [bookedSlots, setBookedSlots] = useState<{ slotDate: string; slotTime: string }[]>([]);
-  const [unavailableSlots, setUnavailableSlots] = useState<{ slotDate: string; slotTime: string }[]>([]);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // "date|time"
+  const [slotToast,    setSlotToast]    = useState<{ msg: string; ok: boolean } | null>(null);
+  const [showAddSlot,  setShowAddSlot]  = useState(false);
+  const [newSlotTime,  setNewSlotTime]  = useState('');
+  const [addingSlot,   setAddingSlot]   = useState(false);
 
   const showSlotToast = (msg: string, ok = true) => {
     setSlotToast({ msg, ok });
     setTimeout(() => setSlotToast(null), 3000);
   };
 
-  // ── PATCH A – mark unavailable / restore ───────────────────────────────────
-  // ── PATCH A – mark unavailable using existing /timeslots endpoint ───────────
-  const handleMarkUnavailable = async (slotDate: string, slotStart: string) => {
-    const key = `${slotDate}|${slotStart}`;
-    setActionLoading(key);
-    try {
-      const slotTimeFull = slotStart.length === 5 ? `${slotStart}:00` : slotStart;
-
-      // Find matching master slot
-      const matchedMaster = masterSlots.find(ms => {
-        const startPart = ms.timeRange.split(/[-–]/)[0].trim();
-        return normaliseTimeKey(startPart) === slotStart;
-      });
-
-      // Check if a timeslot record already exists for this date+time
-      const existing = dbSlots.find(s => {
-        if (s.slotDate !== slotDate) return false;
-        const dbSlotTime = (s as any).slotTime
-          ? String((s as any).slotTime).substring(0, 5)
-          : '';
-        if (dbSlotTime && dbSlotTime === slotStart) return true;
-        if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
-        return normTR === slotStart;
-      });
-
-      if (existing) {
-        await apiFetch(`/timeslots/${existing.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ ...existing, status: 'UNAVAILABLE' }),
-        });
-      } else {
-        if (!matchedMaster) {
-          showSlotToast('⚠️ No matching master time range found. Add it in "Master Time Ranges" tab first.', false);
-          setActionLoading(null);
-          return;
-        }
-        await apiFetch('/timeslots', {
-          method: 'POST',
-          body: JSON.stringify({
-            consultantId,
-            slotDate,
-            slotTime: slotTimeFull,
-            durationMinutes: 60,
-            status: 'UNAVAILABLE',
-            masterTimeSlotId: matchedMaster.id,
-          }),
-        });
-      }
-
-      // Optimistic update
-      setUnavailableSlots(prev => [...prev, { slotDate, slotTime: slotStart }]);
-      showSlotToast('✓ Slot blocked');
-      await loadData(); // Refresh to sync with backend
-    } catch (err: any) {
-      showSlotToast(`Failed to block slot: ${err.message}`, false);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleMarkAvailable = async (slotDate: string, slotStart: string) => {
-    const key = `${slotDate}|${slotStart}`;
-    setActionLoading(key);
-    try {
-      const matchedMaster = masterSlots.find(ms => {
-        const startPart = ms.timeRange.split(/[-–]/)[0].trim();
-        return normaliseTimeKey(startPart) === slotStart;
-      });
-
-      const existing = dbSlots.find(s => {
-        if (s.slotDate !== slotDate) return false;
-        const dbSlotTime = (s as any).slotTime
-          ? String((s as any).slotTime).substring(0, 5)
-          : '';
-        if (dbSlotTime && dbSlotTime === slotStart) return true;
-        if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
-        return normTR === slotStart;
-      });
-
-      if (existing) {
-        await apiFetch(`/timeslots/${existing.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ ...existing, status: 'AVAILABLE' }),
-        });
-        setUnavailableSlots(prev =>
-          prev.filter(u => !(u.slotDate === slotDate && u.slotTime === slotStart))
-        );
-        showSlotToast('✓ Slot restored');
-        await loadData();
-      } else {
-        showSlotToast('⚠️ Slot record not found to restore.', false);
-      }
-    } catch (err: any) {
-      showSlotToast(`Failed to restore slot: ${err.message}`, false);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  // ── PATCH A – fast O(1) lookup sets ────────────────────────────────────────
-  const bookedSlotSet = useMemo(
-    () => new Set(bookedSlots.map(b => `${b.slotDate}|${b.slotTime}`)),
-    [bookedSlots]
-  );
-  const unavailSlotSet = useMemo(
-    () => new Set(unavailableSlots.map(u => `${u.slotDate}|${u.slotTime}`)),
-    [unavailableSlots]
-  );
-
-  // ── data loader ─────────────────────────────────────────────────────────────
   const loadData = async () => {
     setLoading(true); setError(null);
-    let slotArr: any[] = [];
     try {
       let masterLookup: Record<number, string> = {};
       try {
         const mData = await apiFetch('/master-timeslots');
-        const mArr = extractArray(mData);
+        const mArr  = extractArray(mData);
         mArr.forEach((m: any) => { if (m.id && m.timeRange) masterLookup[m.id] = m.timeRange; });
         setMasterSlots(mArr);
       } catch { /* non-fatal */ }
 
       try {
         const slotData = await apiFetch(`/timeslots/consultant/${consultantId}`);
-        slotArr = extractArray(slotData);
+        const slotArr  = extractArray(slotData);
         setDbSlots(slotArr.map((s: any) => ({
           ...s,
           timeRange: (s.timeRange && s.timeRange !== 'Unknown Time')
@@ -1414,7 +1248,7 @@ const MySlotsView: React.FC<{
 
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
-        const bArr = extractArray(bData);
+        const bArr  = extractArray(bData);
         const token = localStorage.getItem('fin_token');
         const authH = { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
         const enrichedB = await Promise.all(bArr.map(async (b: any) => {
@@ -1429,27 +1263,7 @@ const MySlotsView: React.FC<{
           } catch { return b; }
         }));
         setBookings(enrichedB);
-
-        // ── PATCH A – populate bookedSlots state from API bookings ────────────
-        const mapped = enrichedB.map((b: any) => ({
-          slotDate: deepFindDate(b),
-          slotTime: parseSlotTimeKey(b.slotTime, deepFindTime(b)),
-        })).filter(b => b.slotDate && b.slotTime);
-        setBookedSlots(mapped);
       } catch { setBookings([]); }
-
-      // Derive unavailable slots from consultant timeslots status.
-      setUnavailableSlots(
-        slotArr
-          .map((s: any) => ({
-            slotDate: s.slotDate || '',
-            slotTime: parseSlotTimeKey(s.slotTime, s.timeRange),
-            status: (s.status || '').toUpperCase(),
-          }))
-          .filter((s: any) => s.slotDate && s.slotTime && !['AVAILABLE', 'BOOKED'].includes(s.status))
-          .map((s: any) => ({ slotDate: s.slotDate, slotTime: s.slotTime }))
-      );
-
     } catch (e: any) {
       setError(e?.message || 'Failed to load slots.');
     } finally { setLoading(false); }
@@ -1457,7 +1271,6 @@ const MySlotsView: React.FC<{
 
   useEffect(() => { if (consultantId) loadData(); }, [consultantId]);
 
-  // ── derived sets from dbSlots (keep for backward-compat toggle handler) ─────
   const fmtTime = (t: string) => {
     if (!t) return '—';
     const parts = t.split(':').map(Number);
@@ -1471,13 +1284,17 @@ const MySlotsView: React.FC<{
     if (st === 'CANCELLED') return;
     const date = deepFindDate(b);
     if (!date) return;
-    const timeKey = parseSlotTimeKey(b.slotTime, deepFindTime(b));
+    let timeKey = '';
+    if (b.slotTime) timeKey = String(b.slotTime).substring(0, 5);
+    else timeKey = normaliseTimeKey(deepFindTime(b));
     if (date && timeKey) bookedByClientSet.add(`${date}|${timeKey}`);
   });
+
   dbSlots.forEach(s => {
     const st = (s.status || '').toUpperCase();
     if (st !== 'BOOKED') return;
-    const timeKey = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
+    const slotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
+    const timeKey  = slotTime || normaliseTimeKey(s.timeRange || '');
     if (s.slotDate && timeKey) bookedByClientSet.add(`${s.slotDate}|${timeKey}`);
   });
 
@@ -1485,27 +1302,29 @@ const MySlotsView: React.FC<{
   dbSlots.forEach(s => {
     const st = (s.status || '').toUpperCase();
     if (st === 'AVAILABLE' || st === 'BOOKED') return;
-    const timeKey = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
+    const slotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
+    const timeKey  = slotTime || normaliseTimeKey(s.timeRange || '');
     if (s.slotDate && timeKey && !bookedByClientSet.has(`${s.slotDate}|${timeKey}`)) {
       manuallyDisabledSet.add(`${s.slotDate}|${timeKey}`);
     }
   });
 
+  const unavailableSet  = new Set([...bookedByClientSet, ...manuallyDisabledSet]);
   const hourlySlotTimes = generateHourlySlots(shiftStartTime.substring(0, 5), shiftEndTime.substring(0, 5));
 
   const getCustomSlotsForDate = (dateStr: string): string[] => {
     const extras: string[] = [];
     dbSlots.forEach(s => {
       if (s.slotDate !== dateStr) return;
-      const slotT = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
+      const slotT = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
       if (slotT && !hourlySlotTimes.includes(slotT)) extras.push(slotT);
     });
     return [...new Set(extras)].sort();
   };
 
-  const hasShift = !!(shiftStartTime && shiftEndTime && hourlySlotTimes.length > 0);
-  const visibleDays = ALL_SCHEDULE_DAYS.slice(dayOffset, dayOffset + SCHEDULE_VISIBLE);
-  const activeDateKey = selectedDate || DEFAULT_SCHEDULE_DAY;
+  const hasShift       = !!(shiftStartTime && shiftEndTime && hourlySlotTimes.length > 0);
+  const visibleDays    = ALL_SCHEDULE_DAYS.slice(dayOffset, dayOffset + SCHEDULE_VISIBLE);
+  const activeDateKey  = selectedDate || DEFAULT_SCHEDULE_DAY;
   const isActiveSunday = ALL_SCHEDULE_DAYS.find(d => d.iso === activeDateKey)?.wd === 'SUN';
 
   let totalCount = 0, availableCount = 0, bookedCount = 0;
@@ -1514,14 +1333,12 @@ const MySlotsView: React.FC<{
       if (d.wd === 'SUN') return;
       hourlySlotTimes.forEach(t => {
         totalCount++;
-        const key = `${d.iso}|${t}`;
-        if (bookedSlotSet.has(key) || unavailSlotSet.has(key) || bookedByClientSet.has(key) || manuallyDisabledSet.has(key)) bookedCount++;
+        if (unavailableSet.has(`${d.iso}|${t}`)) bookedCount++;
         else availableCount++;
       });
     });
   }
 
-  // ── existing timeslot toggle handler (unchanged) ────────────────────────────
   const handleToggleSlot = async (slotStart: string) => {
     const key = `${activeDateKey}|${slotStart}`;
     if (bookedByClientSet.has(key)) {
@@ -1577,7 +1394,7 @@ const MySlotsView: React.FC<{
   const handleAddCustomSlot = async () => {
     if (!newSlotTime) return;
     setAddingSlot(true);
-    const slotTimeFull = newSlotTime.length === 5 ? `${newSlotTime}:00` : newSlotTime;
+    const slotTimeFull  = newSlotTime.length === 5 ? `${newSlotTime}:00` : newSlotTime;
     const matchedMaster = masterSlots.find(ms => normaliseTimeKey(ms.timeRange.split(/[-–]/)[0].trim()) === newSlotTime);
     try {
       const payload: any = { consultantId, slotDate: activeDateKey, slotTime: slotTimeFull, durationMinutes: 60, status: 'AVAILABLE' };
@@ -1594,113 +1411,9 @@ const MySlotsView: React.FC<{
     }
   };
 
-  const customSlots = getCustomSlotsForDate(activeDateKey);
+  const customSlots  = getCustomSlotsForDate(activeDateKey);
   const allSlotTimes = [...new Set([...hourlySlotTimes, ...customSlots])].sort();
 
-  // ── PATCH A – slot button renderer ─────────────────────────────────────────
-  const renderSlotButton = (slotDate: string, slotStart: string) => {
-    const key = `${slotDate}|${slotStart}`;
-    const isBooked = bookedSlotSet.has(key) || bookedByClientSet.has(key);
-    const isUnavail = !isBooked && (unavailSlotSet.has(key) || manuallyDisabledSet.has(key));
-    const isLoading = actionLoading === key || togglingSlot === key;
-    const isCustom = !hourlySlotTimes.includes(slotStart);
-
-    const endH = parseInt(slotStart.split(':')[0]) + 1;
-    const endStr = `${String(endH).padStart(2, '0')}:${slotStart.split(':')[1]}`;
-    const label = `${fmt24to12(slotStart)} – ${fmt24to12(endStr)}`;
-
-    // ── Booked: solid blue pill, no block button ──────────────────────────────
-    if (isBooked) {
-      return (
-        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{
-            padding: '10px 6px', borderRadius: 100,
-            background: '#2563EB', border: '1.5px solid #1D4ED8',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-          }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{label}</span>
-            <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.08em' }}>
-              BOOKED
-            </span>
-          </div>
-          {/* No block button for booked slots */}
-        </div>
-      );
-    }
-
-    // ── Unavailable: red-tinted pill + Restore button ─────────────────────────
-    if (isUnavail) {
-      return (
-        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{
-            padding: '10px 6px', borderRadius: 100,
-            background: '#FEE2E2', border: '1.5px solid #FCA5A5',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-          }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#DC2626' }}>{label}</span>
-            <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>
-              UNAVAILABLE
-            </span>
-          </div>
-          <button
-            onClick={() => handleMarkAvailable(slotDate, slotStart)}
-            disabled={isLoading}
-            style={{
-              padding: '3px 8px', borderRadius: 6,
-              border: '1px solid #86EFAC',
-              background: '#F0FDF4',
-              color: '#15803D',
-              fontSize: 9, fontWeight: 700,
-              cursor: isLoading ? 'default' : 'pointer',
-              fontFamily: 'inherit', width: '100%',
-              opacity: isLoading ? 0.6 : 1,
-            }}
-          >
-            {isLoading ? '…' : '✓ Restore'}
-          </button>
-        </div>
-      );
-    }
-
-    // ── Available: white pill + Block button ──────────────────────────────────
-    return (
-      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{
-          padding: '10px 6px', borderRadius: 100,
-          background: '#fff', border: '1.5px solid #BFDBFE',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-        }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>{label}</span>
-          {isCustom && (
-            <span style={{
-              fontSize: 8, fontWeight: 800, color: '#10B981',
-              background: '#D1FAE5', borderRadius: 4, padding: '1px 5px',
-            }}>
-              CUSTOM
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => handleMarkUnavailable(slotDate, slotStart)}
-          disabled={isLoading}
-          style={{
-            padding: '3px 8px', borderRadius: 6,
-            border: '1px solid #FBBF24',
-            background: '#FFFBEB',
-            color: '#92400E',
-            fontSize: 9, fontWeight: 700,
-            cursor: isLoading ? 'default' : 'pointer',
-            fontFamily: 'inherit', width: '100%',
-            opacity: isLoading ? 0.6 : 1,
-          }}
-        >
-          {isLoading ? '…' : 'Block'}
-        </button>
-      </div>
-    );
-  };
-
-  // ── render ──────────────────────────────────────────────────────────────────
   return (
     <div className="advisor-content-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 20 }}>
@@ -1748,12 +1461,11 @@ const MySlotsView: React.FC<{
         </div>
       ) : (
         <>
-          {/* Stats row */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
             {[
-              { label: 'Total (7 days)', value: totalCount, color: '#2563EB', bg: '#EFF6FF' },
-              { label: 'Available', value: availableCount, color: '#16A34A', bg: '#F0FDF4' },
-              { label: 'Unavailable', value: bookedCount, color: '#64748B', bg: '#F1F5F9' },
+              { label: 'Total (7 days)', value: totalCount,     color: '#2563EB', bg: '#EFF6FF' },
+              { label: 'Available',      value: availableCount, color: '#16A34A', bg: '#F0FDF4' },
+              { label: 'Unavailable',    value: bookedCount,    color: '#64748B', bg: '#F1F5F9' },
             ].map(c => (
               <div key={c.label} style={{ background: c.bg, border: `1px solid ${c.color}22`, borderRadius: 10, padding: '10px 18px', minWidth: 115 }}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: c.color }}>{c.value}</div>
@@ -1763,7 +1475,6 @@ const MySlotsView: React.FC<{
           </div>
 
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 16px rgba(37,99,235,0.12)' }}>
-            {/* Header */}
             <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', padding: '20px 24px 18px' }}>
               <p style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#93C5FD', margin: '0 0 4px', fontWeight: 700 }}>My Schedule</p>
               <h3 style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>My Schedule Slots</h3>
@@ -1773,17 +1484,15 @@ const MySlotsView: React.FC<{
               </p>
             </div>
 
-            {/* Date picker */}
             <div style={{ padding: '20px 24px', borderBottom: '1px solid #F1F5F9' }}>
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 — Select Date</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))}
-                  style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
+                <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
                 <div style={{ display: 'flex', gap: 6, flex: 1 }}>
                   {visibleDays.map(d => {
-                    const isActive = d.iso === activeDateKey;
-                    const isToday = d.iso === ALL_SCHEDULE_DAYS[0].iso;
-                    const isSunday = d.wd === 'SUN';
+                    const isActive  = d.iso === activeDateKey;
+                    const isToday   = d.iso === ALL_SCHEDULE_DAYS[0].iso;
+                    const isSunday  = d.wd === 'SUN';
                     return (
                       <button key={d.iso} disabled={isSunday} onClick={() => !isSunday && setSelectedDate(d.iso)}
                         title={isSunday ? 'No slots on Sundays' : undefined}
@@ -1801,12 +1510,10 @@ const MySlotsView: React.FC<{
                     );
                   })}
                 </div>
-                <button disabled={dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE} onClick={() => setDayOffset(o => Math.min(ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE, o + 1))}
-                  style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? 'default' : 'pointer', color: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>›</button>
+                <button disabled={dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE} onClick={() => setDayOffset(o => Math.min(ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE, o + 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? 'default' : 'pointer', color: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>›</button>
               </div>
             </div>
 
-            {/* Slot grid */}
             <div style={{ padding: '20px 24px' }}>
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 — Select Time</p>
               {isActiveSunday ? (
@@ -1819,12 +1526,11 @@ const MySlotsView: React.FC<{
                 <div style={{ textAlign: 'center', padding: '30px 20px', color: '#94A3B8', fontSize: 13 }}>No slots for this date.</div>
               ) : (
                 <>
-                  {/* Legend */}
                   <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
                     {[
-                      { label: 'Available', bg: '#fff', border: '#BFDBFE' },
-                      { label: 'Booked', bg: '#2563EB', border: '#1D4ED8' },
-                      { label: 'Unavailable', bg: '#FEE2E2', border: '#FCA5A5' },
+                      { label: 'Available',   bg: '#fff',    border: '#BFDBFE' },
+                      { label: 'Booked',      bg: '#2563EB', border: '#1D4ED8' },
+                      { label: 'Unavailable', bg: '#F1F5F9', border: '#CBD5E1' },
                     ].map(l => (
                       <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
@@ -1832,9 +1538,35 @@ const MySlotsView: React.FC<{
                       </div>
                     ))}
                   </div>
-                  {/* Grid — uses PATCH A renderSlotButton */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                    {allSlotTimes.map(slotStart => renderSlotButton(activeDateKey, slotStart))}
+                    {allSlotTimes.map(slotStart => {
+                      const key        = `${activeDateKey}|${slotStart}`;
+                      const isBooked   = bookedByClientSet.has(key);
+                      const isDisabled = manuallyDisabledSet.has(key);
+                      const isToggling = togglingSlot === key;
+                      const isCustom   = !hourlySlotTimes.includes(slotStart);
+                      const [h, m_]    = slotStart.split(':').map(Number);
+                      const endStr     = `${String(h + 1).padStart(2, '0')}:${String(m_).padStart(2, '0')}`;
+                      const label      = `${fmt24to12(slotStart)} - ${fmt24to12(endStr)}`;
+
+                      let bg = '#fff', borderCol = '#BFDBFE', textCol = '#334155', textDec = 'none';
+                      if (isBooked)        { bg = '#2563EB'; borderCol = '#1D4ED8'; textCol = '#fff'; }
+                      else if (isDisabled) { bg = '#F1F5F9'; borderCol = '#CBD5E1'; textCol = '#94A3B8'; textDec = 'line-through'; }
+
+                      return (
+                        <button key={slotStart} disabled={isBooked || isToggling} onClick={() => handleToggleSlot(slotStart)}
+                          style={{ padding: '10px 6px', borderRadius: 100, border: `1.5px solid ${borderCol}`, background: bg, fontSize: 11, fontWeight: 600, color: textCol, cursor: isBooked ? 'not-allowed' : 'pointer', fontFamily: 'inherit', textAlign: 'center', lineHeight: 1.3, textDecoration: textDec, opacity: isToggling ? 0.5 : 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, width: '100%', outline: 'none' }}>
+                          <span>{isToggling ? '…' : label}</span>
+                          {isBooked && <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)', textDecoration: 'none' }}>BOOKED</span>}
+                          {isDisabled && !isBooked && (
+                            <span style={{ fontSize: 8, fontWeight: 800, color: '#16A34A', background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 5, padding: '1px 6px', textDecoration: 'none', marginTop: 2 }}>↺ Mark Available</span>
+                          )}
+                          {isCustom && !isBooked && !isDisabled && (
+                            <span style={{ fontSize: 8, fontWeight: 800, color: '#10B981', background: '#D1FAE5', borderRadius: 4, padding: '1px 5px', textDecoration: 'none', marginTop: 2 }}>CUSTOM</span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </>
               )}
@@ -1853,29 +1585,31 @@ const MySlotsView: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MASTER TIME RANGES
+// 3. MASTER TIME RANGES
 // ─────────────────────────────────────────────────────────────────────────────
 const MasterSlotsView: React.FC = () => {
   const [masterSlots, setMasterSlots] = useState<MasterSlot[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading,     setLoading]     = useState(false);
   const [masterError, setMasterError] = useState<string | null>(null);
-  const [newRange, setNewRange] = useState('');
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editValue, setEditValue] = useState('');
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [newRange,    setNewRange]    = useState('');
+  const [editingId,   setEditingId]   = useState<number | null>(null);
+  const [editValue,   setEditValue]   = useState('');
+  const [toast,       setToast]       = useState<{ msg: string; ok: boolean } | null>(null);
 
   const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3000); };
 
   const load = async () => {
     setLoading(true); setMasterError(null);
-    try { const data = await getMasterTimeslots(); setMasterSlots(extractArray(data)); }
-    catch (e: any) { setMasterError(e?.message || 'Failed.'); }
+    try {
+      const data = await getMasterTimeslots();
+      setMasterSlots(extractArray(data));
+    } catch (e: any) { setMasterError(e?.message || 'Failed.'); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
 
-  const handleAdd = async () => { if (!newRange.trim()) return; try { await createMasterTimeslot(newRange.trim()); setNewRange(''); await load(); showToast('Added!'); } catch (e: any) { showToast(e?.message || 'Failed.', false); } };
+  const handleAdd    = async () => { if (!newRange.trim()) return; try { await createMasterTimeslot(newRange.trim()); setNewRange(''); await load(); showToast('Added!'); } catch (e: any) { showToast(e?.message || 'Failed.', false); } };
   const handleUpdate = async (id: number) => { if (!editValue.trim()) return; try { await updateMasterTimeslot(id, editValue.trim()); setEditingId(null); await load(); showToast('Updated!'); } catch (e: any) { showToast(e?.message || 'Failed.', false); } };
   const handleDelete = async (id: number) => { if (!window.confirm('Delete this time range?')) return; try { await deleteMasterTimeslot(id); await load(); showToast('Deleted!'); } catch (e: any) { showToast(e?.message || 'Failed.', false); } };
 
@@ -1885,13 +1619,16 @@ const MasterSlotsView: React.FC = () => {
         <h2>Master Time Ranges</h2>
         <span style={{ fontSize: 13, color: '#64748B' }}>{masterSlots.length} defined</span>
       </div>
+
       <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 12, padding: '14px 18px', marginBottom: 24, display: 'flex', gap: 12 }}>
         <span style={{ fontSize: 20 }}>ℹ️</span>
         <div style={{ fontSize: 13, color: '#1E40AF', lineHeight: 1.6 }}>
           <strong>How it works:</strong> These ranges appear in the user booking picker. Add formats like <em>"9 AM – 10 AM"</em>.
         </div>
       </div>
+
       {masterError && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>⚠️ {masterError}</div>}
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: 48, color: '#94A3B8' }}><div style={{ width: 28, height: 28, border: '3px solid #DBEAFE', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />Loading…</div>
       ) : masterSlots.length === 0 ? (
@@ -1907,7 +1644,7 @@ const MasterSlotsView: React.FC = () => {
                     onKeyDown={e => { if (e.key === 'Enter') handleUpdate(ms.id); if (e.key === 'Escape') setEditingId(null); }}
                     style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #2563EB', borderRadius: 8, fontSize: 13, outline: 'none' }} />
                   <button onClick={() => handleUpdate(ms.id)} style={{ padding: '7px 16px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Save</button>
-                  <button onClick={() => setEditingId(null)} style={{ padding: '7px 14px', background: '#F1F5F9', color: '#64748B', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                  <button onClick={() => setEditingId(null)}  style={{ padding: '7px 14px', background: '#F1F5F9', color: '#64748B', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
                 </>
               ) : (
                 <>
@@ -1920,6 +1657,7 @@ const MasterSlotsView: React.FC = () => {
           ))}
         </div>
       )}
+
       <div style={{ background: '#F8FAFC', border: '1.5px dashed #BFDBFE', borderRadius: 14, padding: '20px 22px' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase' }}>+ Add New Time Range</div>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -1932,13 +1670,14 @@ const MasterSlotsView: React.FC = () => {
           </button>
         </div>
       </div>
+
       {toast && <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: toast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', zIndex: 9999 }}>{toast.ok ? '✓' : '✕'} {toast.msg}</div>}
     </div>
   );
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FEEDBACKS VIEW
+// 4. FEEDBACKS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const StarDisplay: React.FC<{ rating: number; size?: number }> = ({ rating, size = 16 }) => (
   <div style={{ display: 'flex', gap: 2 }}>
@@ -1947,7 +1686,7 @@ const StarDisplay: React.FC<{ rating: number; size?: number }> = ({ rating, size
         fill={s <= rating ? '#F59E0B' : '#E2E8F0'}
         stroke={s <= rating ? '#D97706' : '#CBD5E1'}
         strokeWidth="1.5">
-        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
       </svg>
     ))}
   </div>
@@ -1956,24 +1695,28 @@ const StarDisplay: React.FC<{ rating: number; size?: number }> = ({ rating, size
 const ratingLabel = (r: number) => ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'][r] || '';
 
 const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
-  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [feedbacks,    setFeedbacks]    = useState<FeedbackItem[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
   const [filterRating, setFilterRating] = useState<number>(0);
 
   const loadFeedbacks = async () => {
     setLoading(true); setError(null);
     try {
       const data = await apiFetch(`/feedbacks/consultant/${consultantId}`);
-      const arr = extractArray(data);
+      const arr  = extractArray(data);
       if (arr.length === 0) { setFeedbacks([]); return; }
 
       let bookingMap: Record<number, { clientName: string; slotDate: string; timeRange: string }> = {};
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
-        const bArr = extractArray(bData);
+        const bArr  = extractArray(bData);
         bArr.forEach((b: any) => {
-          bookingMap[b.id] = { clientName: deepFindClientName(b), slotDate: deepFindDate(b), timeRange: deepFindTime(b) };
+          bookingMap[b.id] = {
+            clientName: deepFindClientName(b),
+            slotDate:   deepFindDate(b),
+            timeRange:  deepFindTime(b),
+          };
         });
       } catch { /* non-fatal */ }
 
@@ -1983,16 +1726,26 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         if (!clientName && f.userId) {
           try {
             const token = localStorage.getItem('fin_token');
-            const res = await fetch(`/api/users/${f.userId}`, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+            const res   = await fetch(`/api/users/${f.userId}`, {
+              headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            });
             if (res.ok) {
               const u = await res.json();
               const raw = u.name || u.fullName || u.username || u.email || '';
-              clientName = raw.includes('@') ? raw.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : raw;
+              clientName = raw.includes('@')
+                ? raw.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+                : raw;
             }
           } catch { /* skip */ }
         }
         if (!clientName && f.userId) clientName = `User #${f.userId}`;
-        return { ...f, rating: Number(f.rating || 0), clientName: clientName || 'Anonymous', slotDate: ctx?.slotDate || f.createdAt?.split('T')[0] || '', timeRange: ctx?.timeRange || '' };
+        return {
+          ...f,
+          rating:     Number(f.rating || 0),
+          clientName: clientName || 'Anonymous',
+          slotDate:   ctx?.slotDate  || f.createdAt?.split('T')[0] || '',
+          timeRange:  ctx?.timeRange || '',
+        };
       }));
 
       enriched.sort((a, b) => b.id - a.id);
@@ -2004,8 +1757,8 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
 
   useEffect(() => { if (consultantId) loadFeedbacks(); }, [consultantId]);
 
-  const displayed = filterRating === 0 ? feedbacks : feedbacks.filter(f => Math.round(f.rating) === filterRating);
-  const avgRating = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '—';
+  const displayed    = filterRating === 0 ? feedbacks : feedbacks.filter(f => Math.round(f.rating) === filterRating);
+  const avgRating    = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '—';
   const ratingCounts = [5, 4, 3, 2, 1].map(r => ({ r, count: feedbacks.filter(f => Math.round(f.rating) === r).length }));
 
   return (
@@ -2017,6 +1770,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
           <button onClick={loadFeedbacks} style={{ padding: '7px 16px', background: '#EFF6FF', color: '#2563EB', border: '1px solid #BFDBFE', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>🔄 Refresh</button>
         </div>
       </div>
+
       {feedbacks.length > 0 && (
         <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', borderRadius: 16, padding: '22px 24px', marginBottom: 24, display: 'flex', gap: 32, alignItems: 'center', flexWrap: 'wrap', color: '#fff' }}>
           <div style={{ textAlign: 'center' }}>
@@ -2028,7 +1782,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
             {ratingCounts.map(({ r, count }) => (
               <div key={r} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#BFDBFE', width: 6 }}>{r}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="#F59E0B" strokeWidth="0"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="#F59E0B" strokeWidth="0"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                 <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.15)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{ width: `${feedbacks.length ? (count / feedbacks.length) * 100 : 0}%`, height: '100%', background: '#FCD34D', borderRadius: 3 }} />
                 </div>
@@ -2039,6 +1793,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
           <div style={{ textAlign: 'center' }}><div style={{ fontSize: 28, fontWeight: 700 }}>{feedbacks.length}</div><div style={{ fontSize: 12, color: '#93C5FD' }}>Total</div></div>
         </div>
       )}
+
       {feedbacks.length > 0 && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[0, 5, 4, 3, 2, 1].map(r => (
@@ -2048,7 +1803,9 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
           ))}
         </div>
       )}
+
       {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>⚠️ {error}</div>}
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: '#94A3B8' }}><div style={{ width: 32, height: 32, border: '3px solid #E2E8F0', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />Loading…</div>
       ) : displayed.length === 0 ? (
@@ -2074,7 +1831,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
                   </div>
                   {(fb.slotDate || fb.timeRange) && (
                     <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                      {fb.slotDate && <span style={{ fontSize: 12, color: '#64748B', background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '2px 10px', borderRadius: 20 }}>📅 {fb.slotDate}</span>}
+                      {fb.slotDate  && <span style={{ fontSize: 12, color: '#64748B', background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '2px 10px', borderRadius: 20 }}>📅 {fb.slotDate}</span>}
                       {fb.timeRange && <span style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '2px 10px', borderRadius: 20 }}>🕐 {fb.timeRange}</span>}
                     </div>
                   )}
@@ -2093,18 +1850,20 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROFILE VIEW
+// 5. PROFILE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }> = ({ profile, onUpdate }) => {
-  const [isEditing, setIsEditing] = useState(false);
-  const [formData, setFormData] = useState<any>({});
-  const [saving, setSaving] = useState(false);
+  const [isEditing,    setIsEditing]    = useState(false);
+  const [formData,     setFormData]     = useState<any>({});
+  const [saving,       setSaving]       = useState(false);
   const [photoPreview, setPhotoPreview] = useState<string>('');
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [saveToast, setSaveToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [formError, setFormError] = useState<string>('');
+  const [photoFile,    setPhotoFile]    = useState<File | null>(null);
+  const [saveToast,    setSaveToast]    = useState<{ msg: string; ok: boolean } | null>(null);
+  const [formError,    setFormError]    = useState<string>('');
   const [timePickerConfig, setTimePickerConfig] = useState<{
-    isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string;
+    isOpen: boolean;
+    field: 'shiftStart' | 'shiftEnd' | null;
+    value: string;
   }>({ isOpen: false, field: null, value: '' });
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -2117,15 +1876,15 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
   const initForm = (p: any) => {
     const trimTime = (t: string | null | undefined) => t ? String(t).substring(0, 5) : '';
     setFormData({
-      name: p.name || '',
+      name:        p.name        || '',
       designation: p.designation || '',
-      charges: p.charges || '',
-      shiftStart: trimTime(p.shiftStartTime || p.shift_start_time),
-      shiftEnd: trimTime(p.shiftEndTime || p.shift_end_time),
-      skills: Array.isArray(p.skills) ? p.skills.join(', ') : (p.skills || ''),
+      charges:     p.charges     || '',
+      shiftStart:  trimTime(p.shiftStartTime || p.shift_start_time),
+      shiftEnd:    trimTime(p.shiftEndTime   || p.shift_end_time),
+      skills:      Array.isArray(p.skills) ? p.skills.join(', ') : (p.skills || ''),
       description: p.description || p.about || p.bio || '',
-      rating: p.rating || '',
-      email: p.email || '',
+      rating:      p.rating      || '',
+      email:       p.email       || '',
     });
     setPhotoPreview(resolvePhotoUrl(p.profilePhoto || p.photo || ''));
     setPhotoFile(null);
@@ -2149,11 +1908,11 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
 
   const handleSave = async () => {
     if (!profile) return;
-    if (!formData.name?.trim()) { setFormError('Name required.'); return; }
+    if (!formData.name?.trim())        { setFormError('Name required.'); return; }
     if (!formData.designation?.trim()) { setFormError('Designation required.'); return; }
-    if (!formData.charges) { setFormError('Fee required.'); return; }
-    if (!formData.shiftStart) { setFormError('Shift start required.'); return; }
-    if (!formData.shiftEnd) { setFormError('Shift end required.'); return; }
+    if (!formData.charges)             { setFormError('Fee required.'); return; }
+    if (!formData.shiftStart)          { setFormError('Shift start required.'); return; }
+    if (!formData.shiftEnd)            { setFormError('Shift end required.'); return; }
 
     setSaving(true); setFormError('');
     try {
@@ -2162,15 +1921,15 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         : (formData.skills || []);
       const toLocalTime = (t: string) => t.length === 5 ? `${t}:00` : t;
       await updateAdvisor(profile.id, {
-        name: formData.name.trim(),
-        designation: formData.designation.trim(),
-        charges: parseFloat(formData.charges) || 0,
-        email: profile.email,
-        skills: skillsList,
-        description: formData.description?.trim() || '',
-        rating: formData.rating ? parseFloat(formData.rating) : null,
+        name:           formData.name.trim(),
+        designation:    formData.designation.trim(),
+        charges:        parseFloat(formData.charges) || 0,
+        email:          profile.email,
+        skills:         skillsList,
+        description:    formData.description?.trim() || '',
+        rating:         formData.rating ? parseFloat(formData.rating) : null,
         shiftStartTime: toLocalTime(formData.shiftStart),
-        shiftEndTime: toLocalTime(formData.shiftEnd),
+        shiftEndTime:   toLocalTime(formData.shiftEnd),
       }, photoFile ?? undefined);
       await onUpdate();
       setIsEditing(false);
@@ -2203,6 +1962,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
           </div>
         )}
       </div>
+
       {formError && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>⚠️ {formError}</div>}
       {saveToast && <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: saveToast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '12px 24px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.3)', zIndex: 9999 }}>{saveToast.msg}</div>}
 
@@ -2221,7 +1981,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
                 <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 4 }}>{profile.name}</div>
                 <div style={{ fontSize: 14, color: '#BFDBFE', marginBottom: 6 }}>{profile.designation}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profile.rating || 0) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>)}
+                  {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profile.rating || 0) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>)}
                   {profile.rating
                     ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{Number(profile.rating).toFixed(1)}</span>
                     : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>
@@ -2240,17 +2000,17 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             )}
             {profile.skills?.length > 0 && (
               <><div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 10px' }}>Skills</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                  {profile.skills.map((s, i) => <span key={i} style={{ fontSize: 12, padding: '5px 14px', borderRadius: 20, background: '#EFF6FF', color: '#2563EB', fontWeight: 600, border: '1px solid #BFDBFE' }}>{s}</span>)}
-                </div></>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+                {profile.skills.map((s, i) => <span key={i} style={{ fontSize: 12, padding: '5px 14px', borderRadius: 20, background: '#EFF6FF', color: '#2563EB', fontWeight: 600, border: '1px solid #BFDBFE' }}>{s}</span>)}
+              </div></>
             )}
             <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 12px' }}>Details</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 14 }}>
               {[
-                { label: 'Email', value: profile.email, icon: '✉️' },
-                { label: 'Fee', value: profile.charges ? `₹${Number(profile.charges).toLocaleString()}` : null, icon: '💰' },
+                { label: 'Email',       value: profile.email,         icon: '✉️' },
+                { label: 'Fee',         value: profile.charges ? `₹${Number(profile.charges).toLocaleString()}` : null, icon: '💰' },
                 { label: 'Shift Start', value: (profile as any).shiftStartTime ? String((profile as any).shiftStartTime).substring(0, 5) : null, icon: '🕐' },
-                { label: 'Shift End', value: (profile as any).shiftEndTime ? String((profile as any).shiftEndTime).substring(0, 5) : null, icon: '🕕' },
+                { label: 'Shift End',   value: (profile as any).shiftEndTime   ? String((profile as any).shiftEndTime).substring(0, 5)   : null, icon: '🕕' },
               ].filter(i => i.value).map(i => (
                 <div key={i.label} style={{ background: '#F8FAFC', borderRadius: 10, padding: '12px 14px' }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 4 }}>{i.icon} {i.label}</div>
@@ -2277,6 +2037,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               {photoFile && <span style={{ marginLeft: 10, fontSize: 12, color: '#16A34A', fontWeight: 600 }}>{photoFile.name}</span>}
             </div>
           </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 16, marginBottom: 24 }}>
             <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Name *</label><input name="name" value={formData.name || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
             <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Designation *</label><input name="designation" value={formData.designation || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
@@ -2299,6 +2060,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             <div style={{ gridColumn: '1/-1' }}><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Skills (comma separated)</label><input name="skills" value={formData.skills || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
             <div style={{ gridColumn: '1/-1' }}><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Description</label><textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', outline: 'none' }} /></div>
           </div>
+
           <MaterialTimePicker
             isOpen={timePickerConfig.isOpen}
             initialTime={timePickerConfig.value}
@@ -2322,33 +2084,26 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
 // ─────────────────────────────────────────────────────────────────────────────
 export default function AdvisorDashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<
-    'bookings' | 'tickets' | 'analytics' | 'notifications' | 'calendar' | 'master-slots' | 'feedbacks' | 'profile'
-  >('bookings');
-  const [profileData, setProfileData] = useState<Consultant | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [activeTab,       setActiveTab]       = useState<'bookings' | 'calendar' | 'master-slots' | 'feedbacks' | 'tickets' | 'profile'>('bookings');
+  const [profileData,     setProfileData]     = useState<Consultant | null>(null);
+  const [loading,         setLoading]         = useState(true);
+  const [error,           setError]           = useState<string | null>(null);
   const [pendingBookings, setPendingBookings] = useState<any[]>([]);
-  const [ticketCounts, setTicketCounts] = useState({ open: 0, slaRisk: 0 });
-  const [newNotifCount, setNewNotifCount] = useState(0);
+  const [ticketCounts,    setTicketCounts]    = useState({ open: 0, slaRisk: 0 });
 
   useEffect(() => {
     (async () => {
       try {
-        const user = await getCurrentUser();
+        const user      = await getCurrentUser();
         const advisorId = user?.consultantId || user?.advisorId || user?.id;
         if (!advisorId) { setError('No consultant profile linked.'); setLoading(false); return; }
         const consultant = await getAdvisorById(advisorId);
         setProfileData(consultant);
 
-        try {
-          const notifs = JSON.parse(localStorage.getItem(`fin_notifs_CONSULTANT_${advisorId}`) || '[]');
-          setNewNotifCount(notifs.filter((n: any) => !n.read).length);
-        } catch { }
-
+        // Load pending bookings badge
         try {
           const bData = await getBookingsByConsultant(advisorId);
-          const arr = extractArray(bData);
+          const arr   = extractArray(bData);
           const token = localStorage.getItem('fin_token');
           const authH = { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
           const enriched = await Promise.all(arr.map(async (b: any) => {
@@ -2365,11 +2120,12 @@ export default function AdvisorDashboard() {
           setPendingBookings(enriched.filter((b: any) => deepFindStatus(b) === 'PENDING'));
         } catch { /* non-fatal */ }
 
+        // Load ticket badge counts
         try {
           const tData = await getTicketsByConsultant(advisorId);
           const tickets = extractArray(tData);
           setTicketCounts({
-            open: tickets.filter((t: any) => ['NEW', 'OPEN', 'IN_PROGRESS'].includes(t.status)).length,
+            open:    tickets.filter((t: any) => ['NEW','OPEN','IN_PROGRESS'].includes(t.status)).length,
             slaRisk: tickets.filter((t: any) => getSlaInfo(t)?.breached || getSlaInfo(t)?.warning).length,
           });
         } catch { /* non-fatal */ }
@@ -2380,7 +2136,7 @@ export default function AdvisorDashboard() {
     })();
   }, []);
 
-  const handleLogout = () => { logoutUser(); navigate('/'); };
+  const handleLogout   = () => { logoutUser(); navigate('/'); };
   const refreshProfile = async () => {
     if (profileData?.id) {
       const u = await getAdvisorById(profileData.id);
@@ -2392,7 +2148,6 @@ export default function AdvisorDashboard() {
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, color: '#64748B' }}>
       <div style={{ width: 36, height: 36, border: '3px solid #DBEAFE', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
       Loading dashboard…
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 
@@ -2404,143 +2159,60 @@ export default function AdvisorDashboard() {
     </div>
   );
 
-  const ticketBadge = ticketCounts.slaRisk > 0 ? ticketCounts.slaRisk : ticketCounts.open > 0 ? ticketCounts.open : null;
-
   const tabs = [
-    { id: 'bookings' as const, label: 'My Bookings', icon: '📅', badge: pendingBookings.length > 0 ? pendingBookings.length : null, badgeColor: '#2563EB' },
-    { id: 'tickets' as const, label: 'My Tickets', icon: '🎫', badge: ticketBadge, badgeColor: ticketCounts.slaRisk > 0 ? '#DC2626' : '#2563EB' },
-    { id: 'analytics' as const, label: 'Analytics', icon: '📊', badge: null, badgeColor: '#2563EB' },
-    { id: 'notifications' as const, label: 'Notifications', icon: '🔔', badge: newNotifCount > 0 ? newNotifCount : null, badgeColor: '#DC2626' },
-    { id: 'calendar' as const, label: 'My Schedule', icon: '🗓️', badge: null, badgeColor: '#2563EB' },
-    { id: 'master-slots' as const, label: 'Master Time Ranges', icon: '🕐', badge: null, badgeColor: '#2563EB' },
-    { id: 'feedbacks' as const, label: 'Feedbacks', icon: '⭐', badge: null, badgeColor: '#2563EB' },
-    { id: 'profile' as const, label: 'Profile', icon: '👤', badge: null, badgeColor: '#2563EB' },
+    { id: 'bookings'     as const, label: 'My Bookings',        icon: '📅', badge: pendingBookings.length > 0 ? pendingBookings.length : null },
+    { id: 'calendar'     as const, label: 'My Schedule',        icon: '🗓️', badge: null },
+    { id: 'master-slots' as const, label: 'Master Time Ranges', icon: '🕐', badge: null },
+    { id: 'feedbacks'    as const, label: 'Feedbacks',          icon: '⭐', badge: null },
+    { id: 'tickets'      as const, label: 'My Tickets',         icon: '🎫', badge: ticketCounts.slaRisk > 0 ? ticketCounts.slaRisk : ticketCounts.open > 0 ? ticketCounts.open : null },
+    { id: 'profile'      as const, label: 'Profile',            icon: '👤', badge: null },
   ];
 
   return (
     <div className="advisor-layout">
-      {/* ── Top Navbar ── */}
       <header className="advisor-navbar">
         <div className="nav-brand">
           <span className="brand-text">FINADVISE</span>
           <span className="brand-sub">CONSULTANT PORTAL</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {profileData && (
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>
-              {profileData.name}
-            </span>
-          )}
-          {newNotifCount > 0 && (
-            <div onClick={() => setActiveTab('notifications')}
-              style={{ position: 'relative', width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 15 }}
-              title="View notifications">
-              🔔
-              <span style={{ position: 'absolute', top: -4, right: -4, background: '#EF4444', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 9, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #1E3A5F' }}>
-                {newNotifCount > 9 ? '9+' : newNotifCount}
-              </span>
-            </div>
-          )}
-          <div className="nav-profile" onClick={handleLogout}>
-            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>Logout</span>
+          {profileData && <span style={{ fontSize: 13, color: '#374151', fontWeight: 600 }}>{profileData.name}</span>}
+          <div className="nav-profile" onClick={handleLogout} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: '#64748B' }}>Logout</span>
             <div className="avatar-circle-sm">{profileData?.name?.charAt(0).toUpperCase() ?? 'C'}</div>
           </div>
         </div>
       </header>
 
-      {/* ── Banners ── */}
-      {pendingBookings.length > 0 && (
-        <div style={{ background: 'linear-gradient(90deg,#EFF6FF 0%,#DBEAFE 100%)', borderBottom: '1px solid #BFDBFE', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ background: '#2563EB', color: '#fff', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{pendingBookings.length}</div>
-            <div>
-              <span style={{ fontWeight: 700, color: '#1E3A5F', fontSize: 14 }}>Pending Session{pendingBookings.length !== 1 ? 's' : ''} Awaiting Your Attention</span>
-              <div style={{ display: 'flex', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
-                {pendingBookings.slice(0, 3).map((b: any) => (
-                  <span key={b.id} style={{ fontSize: 12, color: '#1E40AF' }}>
-                    <strong>{deepFindClientName(b)}</strong>&nbsp;· {deepFindDate(b) || '—'}
-                  </span>
-                ))}
-                {pendingBookings.length > 3 && <span style={{ fontSize: 12, color: '#2563EB', fontWeight: 600 }}>+{pendingBookings.length - 3} more</span>}
-              </div>
-            </div>
-          </div>
-          <button onClick={() => setActiveTab('bookings')} style={{ padding: '7px 18px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>View Bookings →</button>
-        </div>
-      )}
+      <nav className="advisor-tabs">
+        {tabs.map(t => (
+          <button key={t.id} className={`tab-btn ${activeTab === t.id ? 'active' : ''}`} onClick={() => setActiveTab(t.id)}
+            style={{ position: 'relative' }}>
+            <span style={{ marginRight: 6 }}>{t.icon}</span>{t.label}
+            {t.badge !== null && (
+              <span style={{
+                position: 'absolute', top: 6, right: 6,
+                background: t.id === 'tickets' && ticketCounts.slaRisk > 0 ? '#DC2626' : '#2563EB',
+                color: '#fff', fontSize: 10, fontWeight: 800,
+                minWidth: 16, height: 16, borderRadius: 8,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                padding: '0 4px', lineHeight: 1,
+              }}>
+                {t.badge}
+              </span>
+            )}
+          </button>
+        ))}
+      </nav>
 
-      {ticketCounts.open > 0 && activeTab !== 'tickets' && (
-        <div style={{ background: 'linear-gradient(90deg,#FEF9C3,#FFFBEB)', borderBottom: '1px solid #FCD34D', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 20 }}>📋</span>
-            <span style={{ fontWeight: 700, color: '#92400E', fontSize: 14 }}>
-              {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} — please review and respond.
-              {ticketCounts.slaRisk > 0 && <span style={{ marginLeft: 8, color: '#DC2626' }}>⚠️ {ticketCounts.slaRisk} at SLA risk!</span>}
-            </span>
-          </div>
-          <button onClick={() => setActiveTab('tickets')} style={{ padding: '7px 18px', background: '#D97706', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>View Tickets →</button>
-        </div>
-      )}
-
-      {/* ── Body ── */}
-      <div className="advisor-body">
-        {/* Desktop Sidebar */}
-        <aside className="advisor-sidebar">
-          <div className="sidebar-section-label">Navigation</div>
-          {tabs.map(t => (
-            <button key={t.id} className={`sidebar-nav-btn ${activeTab === t.id ? 'active' : ''}`} onClick={() => setActiveTab(t.id)}>
-              <span className="sidebar-icon">{t.icon}</span>
-              <span className="sidebar-label">{t.label}</span>
-              {t.badge !== null && (
-                <span className="sidebar-badge" style={{ background: t.badgeColor }}>{t.badge}</span>
-              )}
-            </button>
-          ))}
-          <div className="sidebar-divider" />
-          <div className="sidebar-footer">
-            <button className="sidebar-logout-btn" onClick={handleLogout}><span>🚪</span><span>Logout</span></button>
-          </div>
-        </aside>
-
-        {/* Main Content */}
-        <main className="advisor-main" style={{ overflow: activeTab === 'tickets' ? 'hidden' : undefined }}>
-          {activeTab === 'bookings' && profileData && <BookingsView consultantId={profileData.id} />}
-          {activeTab === 'tickets' && profileData && <AdvisorTicketsView consultantId={profileData.id} />}
-          {activeTab === 'analytics' && profileData && (
-            <AnalyticsDashboard tickets={[]} consultants={[]} mode="consultant" consultantId={profileData.id} consultantName={profileData.name} />
-          )}
-          {activeTab === 'notifications' && profileData && <ConsultantNotificationsView consultantId={profileData.id} />}
-          {activeTab === 'calendar' && profileData && (
-            <MySlotsView
-              consultantId={profileData.id}
-              shiftStartTime={profileData.shiftStartTime || ''}
-              shiftEndTime={profileData.shiftEndTime || ''}
-            />
-          )}
-          {activeTab === 'master-slots' && <MasterSlotsView />}
-          {activeTab === 'feedbacks' && profileData && <FeedbacksView consultantId={profileData.id} />}
-          {activeTab === 'profile' && <ProfileView profile={profileData} onUpdate={refreshProfile} />}
-
-          {/* Mobile Bottom Tab Bar */}
-          <nav className="advisor-tabs-mobile">
-            {tabs.map(t => (
-              <button key={t.id} className={`tab-btn ${activeTab === t.id ? 'active' : ''}`} onClick={() => setActiveTab(t.id)} style={{ position: 'relative', flexShrink: 0 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <span style={{ fontSize: 18 }}>{t.icon}</span>
-                  <span style={{ fontSize: 9, fontWeight: 700 }}>{t.label.split(' ')[0]}</span>
-                </div>
-                {t.badge !== null && (
-                  <span style={{ position: 'absolute', top: 4, right: 4, background: t.badgeColor, color: '#fff', fontSize: 9, fontWeight: 800, minWidth: 14, height: 14, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px' }}>
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
-        </main>
-      </div>
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <main className="advisor-main" style={{ overflow: activeTab === 'tickets' ? 'hidden' : undefined }}>
+        {activeTab === 'bookings'     && profileData && <BookingsView     consultantId={profileData.id} />}
+        {activeTab === 'calendar'     && profileData && <MySlotsView      consultantId={profileData.id} shiftStartTime={profileData.shiftStartTime || ''} shiftEndTime={profileData.shiftEndTime || ''} />}
+        {activeTab === 'master-slots' &&                <MasterSlotsView  />}
+        {activeTab === 'feedbacks'    && profileData && <FeedbacksView    consultantId={profileData.id} />}
+        {activeTab === 'tickets'      && profileData && <AdvisorTicketsView consultantId={profileData.id} />}
+        {activeTab === 'profile'      &&                <ProfileView      profile={profileData} onUpdate={refreshProfile} />}
+      </main>
     </div>
   );
 }
