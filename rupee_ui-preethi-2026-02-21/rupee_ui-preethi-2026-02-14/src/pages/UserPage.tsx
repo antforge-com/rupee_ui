@@ -809,7 +809,6 @@ export default function UserPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "notifications" | "settings">("consultants");
   const [userNotifs, setUserNotifs] = useState<AppNotif[]>([]);
-  const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All Consultants");
   const [toast, setToast] = useState("");
@@ -1254,11 +1253,11 @@ export default function UserPage() {
       setBookedSlotSet(prev => { const next = new Set(prev); next.add(`${selectedDay.iso}|${slot24}`); return next; });
       setDbTimeslots(prev => prev.map(s => (s.id === realTimeslotId ? { ...s, status: "BOOKED" } : s)));
       setShowModal(false);
-      showToast(`✅ Booked for ${selectedDay.date} ${selectedDay.month} · ${selectedSlot.label}!`);
       setTab("bookings"); fetchBookings();
       let consultantEmail = selectedConsultant.email || "";
       if (!consultantEmail) { try { const cData = await getConsultantById(selectedConsultant.id); consultantEmail = cData?.email || cData?.emailId || ""; } catch { } }
       await sendBookingEmails({ bookingId: newBookingId, slotDate: selectedDay.iso, timeRange: selectedSlot.label, meetingMode, amount: selectedConsultant.fee, userName: currentUser?.name || "Valued Client", userEmail: currentUser?.email || "", consultantName: selectedConsultant.name, consultantEmail, userNotes: userNotes || "" });
+      showToast("✅ Booking done. Confirmation mail sent.");
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
       if (
@@ -1362,73 +1361,7 @@ export default function UserPage() {
           <div className={styles.logoSub}>CONSULTANT BOOKING</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {/* Notification Bell */}
-          <div style={{ position: "relative" }}>
-            <button onClick={() => setShowNotifPanel(p => !p)} title="Notifications"
-              style={{ position: "relative", width: 36, height: 36, borderRadius: "50%", border: "1.5px solid #BFDBFE", background: "#EFF6FF", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
-              🔔
-              {unreadNotifCount > 0 && (
-                <span style={{ position: "absolute", top: -3, right: -3, background: "#DC2626", color: "#fff", borderRadius: "50%", width: 15, height: 15, fontSize: 8, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #EFF6FF" }}>
-                  {unreadNotifCount > 9 ? "9+" : unreadNotifCount}
-                </span>
-              )}
-            </button>
-            {showNotifPanel && (
-              <div style={{ position: "fixed", top: 60, right: 12, width: "min(340px,calc(100vw - 24px))", maxHeight: 420, background: "#fff", borderRadius: 16, border: "1.5px solid #E2E8F0", boxShadow: "0 20px 60px rgba(0,0,0,0.15)", zIndex: 3000, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                <div style={{ padding: "12px 16px", background: "linear-gradient(135deg,#1E3A5F,#2563EB)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                  <div>
-                    <span style={{ fontWeight: 800, fontSize: 13, color: "#fff" }}>My Notifications</span>
-                    {unreadNotifCount > 0 && <div style={{ fontSize: 10, color: "#BFDBFE", marginTop: 1 }}>{unreadNotifCount} unread</div>}
-                  </div>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    {unreadNotifCount > 0 && (
-                      <button onClick={() => {
-                        const updated = userNotifs.map(n => ({ ...n, read: true }));
-                        setUserNotifs(updated);
-                        if (currentUserId) saveNotifs(currentUserId, updated);
-                      }} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 600, cursor: "pointer" }}>Mark all read</button>
-                    )}
-                    <button onClick={() => setShowNotifPanel(false)} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: "50%", width: 22, height: 22, fontSize: 14, cursor: "pointer" }}>×</button>
-                  </div>
-                </div>
-                <div style={{ overflowY: "auto", flex: 1 }}>
-                  {userNotifs.length === 0 ? (
-                    <div style={{ padding: "30px 20px", textAlign: "center", color: "#94A3B8" }}><div style={{ fontSize: 28, marginBottom: 8 }}>🔔</div><div style={{ fontSize: 12, fontWeight: 600 }}>No notifications yet</div></div>
-                  ) : userNotifs.map(n => {
-                    const cfgMap: Record<string, { color: string; bg: string; icon: string }> = {
-                      info: { color: "#2563EB", bg: "#EFF6FF", icon: "ℹ️" },
-                      success: { color: "#16A34A", bg: "#F0FDF4", icon: "✅" },
-                      warning: { color: "#D97706", bg: "#FFFBEB", icon: "⚠️" },
-                      error: { color: "#DC2626", bg: "#FEF2F2", icon: "🚨" },
-                    };
-                    const c = cfgMap[n.type] || cfgMap.info;
-                    const diff = Math.floor((Date.now() - new Date(n.timestamp).getTime()) / 1000);
-                    const timeStr = diff < 60 ? "just now" : diff < 3600 ? `${Math.floor(diff / 60)}m ago` : `${Math.floor(diff / 3600)}h ago`;
-                    return (
-                      <div key={n.id} style={{ padding: "12px 16px", borderBottom: "1px solid #F8FAFC", background: n.read ? "#fff" : c.bg, display: "flex", gap: 10, alignItems: "flex-start", cursor: n.ticketId ? "pointer" : "default" }}
-                        onClick={() => {
-                          const updated = userNotifs.map(x => x.id === n.id ? { ...x, read: true } : x);
-                          setUserNotifs(updated);
-                          if (currentUserId) saveNotifs(currentUserId, updated);
-                          if (n.ticketId) { setTab("tickets"); setShowNotifPanel(false); }
-                        }}>
-                        <span style={{ fontSize: 16, flexShrink: 0, lineHeight: "1.2" }}>{c.icon}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 12, color: c.color, marginBottom: 2 }}>
-                            {n.title}
-                            {!n.read && <span style={{ marginLeft: 5, width: 5, height: 5, borderRadius: "50%", background: c.color, display: "inline-block", verticalAlign: "middle" }} />}
-                          </div>
-                          <div style={{ fontSize: 11, color: "#374151", lineHeight: 1.5, wordBreak: "break-word" }}>{n.message}</div>
-                          {n.ticketId && <div style={{ fontSize: 10, color: "#2563EB", fontWeight: 600, marginTop: 3 }}>Tap to view ticket →</div>}
-                          <div style={{ fontSize: 9, color: "#94A3B8", marginTop: 4 }}>{timeStr}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Notifications removed as requested */}
           <button onClick={handleGoToProfile} title="My Profile"
             style={{ width: 36, height: 36, borderRadius: "50%", border: "1.5px solid #BFDBFE", background: "linear-gradient(135deg,#1E3A5F,#2563EB)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 2px 8px rgba(37,99,235,0.25)" }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" /></svg>
@@ -1631,7 +1564,7 @@ export default function UserPage() {
         )}
 
         {/* ════ NOTIFICATIONS ════ */}
-        {tab === "notifications" && (
+        {false && tab === "notifications" && (
           <div className={styles.tabPadding}>
             <div style={{ marginBottom: 20 }}>
               <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#0F172A" }}>My Notifications</h2>
@@ -1700,7 +1633,6 @@ export default function UserPage() {
                 <h2 className={styles.sectionTitle}>Settings</h2>
                 <div className={styles.settingsCard}>
                   <div className={styles.settingsItem} onClick={() => setSettingsView("profile")}><span>Account Profile</span><span>›</span></div>
-                  <div className={styles.settingsItem}><span>Notifications</span><span>›</span></div>
                   <div className={styles.settingsItem}><span>Privacy &amp; Security</span><span>›</span></div>
                   <div className={`${styles.settingsItem} ${styles.settingsItemDanger}`} onClick={handleLogout}><span>Log Out</span></div>
                 </div>
@@ -1869,11 +1801,10 @@ export default function UserPage() {
 
       {/* ── Bottom Nav ── */}
       <nav className={styles.bottomNav}>
-        {(["consultants", "bookings", "tickets", "notifications", "settings"] as const).map(t => (
-          <button key={t} onClick={() => { setTab(t); if (t !== "notifications") setShowNotifPanel(false); }}
+        {(["consultants", "bookings", "tickets", "settings"] as const).map(t => (
+          <button key={t} onClick={() => { setTab(t); }}
             className={`${styles.navBtn} ${tab === t ? styles.navBtnActive : ""}`} style={{ position: "relative" }}>
-            <span>{t === "consultants" ? "Find" : t === "bookings" ? "Bookings" : t === "tickets" ? "Tickets" : t === "notifications" ? "Updates" : "Settings"}</span>
-            {t === "notifications" && unreadNotifCount > 0 && <span style={{ position: "absolute", top: 2, right: 2, width: 7, height: 7, borderRadius: "50%", background: "#DC2626", border: "1.5px solid #fff" }} />}
+            <span>{t === "consultants" ? "Find" : t === "bookings" ? "Bookings" : t === "tickets" ? "Tickets" : "Settings"}</span>
           </button>
         ))}
       </nav>
