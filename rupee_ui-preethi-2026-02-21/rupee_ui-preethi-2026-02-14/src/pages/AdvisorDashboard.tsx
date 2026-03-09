@@ -332,6 +332,7 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
 const getStatusColor = (status: string) => {
   switch (status?.toUpperCase()) {
     case 'CONFIRMED': return { bg: '#EFF6FF', color: '#2563EB', border: '#93C5FD' };
+    case 'BOOKED': return { bg: '#EFF6FF', color: '#2563EB', border: '#93C5FD' };
     case 'PENDING': return { bg: '#FFFBEB', color: '#D97706', border: '#FCD34D' };
     case 'COMPLETED': return { bg: '#F0FDF4', color: '#16A34A', border: '#86EFAC' };
     case 'CANCELLED': return { bg: '#FEF2F2', color: '#EF4444', border: '#FCA5A5' };
@@ -1090,12 +1091,16 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
     ? visibleBookings
     : filter === 'HISTORY'
       ? historyBookings
-      : visibleBookings.filter((b: any) => deepFindStatus(b) === filter);
+      : visibleBookings.filter((b: any) => {
+        const st = deepFindStatus(b);
+        if (filter === 'CONFIRMED') return st === 'CONFIRMED' || st === 'BOOKED';
+        return st === filter;
+      });
 
   const counts: Record<string, number> = {
     ALL: activeBookings.length,
     PENDING: activeBookings.filter((b: any) => deepFindStatus(b) === 'PENDING').length,
-    CONFIRMED: activeBookings.filter((b: any) => deepFindStatus(b) === 'CONFIRMED').length,
+    CONFIRMED: activeBookings.filter((b: any) => ['CONFIRMED', 'BOOKED'].includes(deepFindStatus(b))).length,
     COMPLETED: bookings.filter((b: any) => deepFindStatus(b) === 'COMPLETED').length,
     CANCELLED: bookings.filter((b: any) => deepFindStatus(b) === 'CANCELLED').length,
     HISTORY: historyBookings.length,
