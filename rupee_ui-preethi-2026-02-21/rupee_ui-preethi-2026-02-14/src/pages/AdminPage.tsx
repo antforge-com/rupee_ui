@@ -1,0 +1,2664 @@
+import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import AddAdvisor from "../components/AddAdvisor";
+import StatusBadge from "../components/StatusBadge";
+
+import {
+  addHoliday as apiAddHoliday,
+  deleteHoliday as apiDeleteHoliday,
+  apiFetch,
+  assignTicketToConsultant,
+  createCannedResponse,
+  createTicket,
+  createTicketCategory,
+  debugToken,
+  deleteAdvisor,
+  deleteCannedResponse,
+  deleteTicket,
+  escalateTicket,
+  extractArray,
+  getAllAdvisors,
+  getAllBookings,
+  getAllTickets,
+  getAutoResponder,
+  // System Settings
+  getBusinessHours,
+  getCannedResponses,
+  getHolidays,
+  getSlaInfo,
+  getTicketCategories,
+  getTicketComments,
+  postInternalNote,
+  postTicketComment,
+  SLA_HOURS,
+  toggleTicketCategory,
+  updateAutoResponder,
+  updateBusinessHours,
+  updateTicketStatus,
+} from "../services/api";
+import styles from "../styles/AdminPage.module.css";
+import AnalyticsDashboard from "./AnalyticsDashboard";
+import BookingsPage from "./BookingsPage";
+import {
+  EscalationMonitor,
+  NotificationBell,
+  NotificationProvider,
+  ToastContainer,
+  useNotifications,
+} from "./NotificationSystem";
+import TicketSummaryChart from "./TicketSummaryChart";
+
+const BASE_URL = "/api";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOCAL-TIME PARSER
+// ─────────────────────────────────────────────────────────────────────────────
+const parseLocalTime = (t: any): string => {
+  if (!t) return "";
+  if (typeof t === "object" && t.hour !== undefined)
+    return `${String(t.hour).padStart(2, "0")}:${String(t.minute ?? 0).padStart(2, "0")}`;
+  if (typeof t === "string") return t.substring(0, 5);
+  return "";
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+interface Advisor {
+  id: number;
+  name: string;
+  role: string;
+  tags: string[];
+  rating: number;
+  reviews: number;
+  fee: number;
+  exp: string | number;
+  avatar: string;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
+}
+
+type TicketStatus = "NEW" | "OPEN" | "IN_PROGRESS" | "PENDING" | "RESOLVED" | "CLOSED" | "ESCALATED";
+type TicketPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT" | "CRITICAL";
+
+interface TicketComment {
+  id: number;
+  ticketId: number;
+  senderId?: number;
+  authorName?: string;
+  authorRole?: "CUSTOMER" | "AGENT";
+  isConsultantReply?: boolean;
+  message: string;
+  createdAt: string;
+}
+
+interface InternalNote {
+  id: number;
+  ticketId: number;
+  authorId: number;
+  noteText: string;
+  createdAt: string;
+}
+
+interface Ticket {
+  id: number;
+  title?: string;
+  description: string;
+  category: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  createdAt: string;
+  updatedAt?: string;
+  userId?: number;
+  userName?: string;
+  user?: { id?: number; name?: string; username?: string; email?: string } | null;
+  consultantId?: number | null;
+  consultantName?: string;
+  agentName?: string;
+  attachmentUrl?: string;
+  isSlaBreached?: boolean;
+  isEscalated?: boolean;
+  slaRespondBy?: string;
+  slaResolveBy?: string;
+  feedbackRating?: number;
+  feedbackText?: string;
+  notes?: InternalNote[];
+  internalNotes?: InternalNote[];   // backend may return either field name
+  comments?: TicketComment[];
+  // analytics extras (may be absent on live tickets)
+  firstResponseAt?: string | null;
+  resolvedAt?: string | null;
+}
+
+type AdminSectionType =
+  | "dashboard"
+  | "advisors"
+  | "bookings"
+  | "tickets"
+  | "analytics"
+  | "summary"
+  | "support-config"
+  | "settings";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKET STATUS / PRIORITY CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+const TICKET_STATUS_CFG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
+  NEW: { label: "New", color: "#6366F1", bg: "#EEF2FF", border: "#C7D2FE", icon: "✦" },
+  OPEN: { label: "Open", color: "#2563EB", bg: "#EFF6FF", border: "#93C5FD", icon: "◉" },
+  IN_PROGRESS: { label: "In Progress", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", icon: "◔" },
+  PENDING: { label: "Pending", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", icon: "◔" },
+  RESOLVED: { label: "Resolved", color: "#16A34A", bg: "#F0FDF4", border: "#86EFAC", icon: "✓" },
+  CLOSED: { label: "Closed", color: "#64748B", bg: "#F1F5F9", border: "#CBD5E1", icon: "✕" },
+  ESCALATED: { label: "Escalated", color: "#DC2626", bg: "#FEF2F2", border: "#FCA5A5", icon: "🚨" },
+};
+
+const TICKET_PRIORITY_CFG: Record<string, { label: string; color: string; bg: string; border?: string; dot?: string }> = {
+  LOW: { label: "Low", color: "#16A34A", bg: "#F0FDF4", border: "#86EFAC", dot: "#22C55E" },
+  MEDIUM: { label: "Medium", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", dot: "#F59E0B" },
+  HIGH: { label: "High", color: "#EA580C", bg: "#FFF7ED", border: "#FED7AA", dot: "#F97316" },
+  URGENT: { label: "Urgent", color: "#DC2626", bg: "#FEF2F2", border: "#FCA5A5", dot: "#EF4444" },
+  CRITICAL: { label: "Critical", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE", dot: "#8B5CF6" },
+};
+
+// Backend-accepted statuses for status-change buttons (IN_PROGRESS & ESCALATED rejected by API)
+const ALL_TICKET_STATUSES = [
+  "NEW", "OPEN", "PENDING", "RESOLVED", "CLOSED",
+] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED BADGE
+// ─────────────────────────────────────────────────────────────────────────────
+const Badge: React.FC<{ label: string; style: { bg: string; color: string; border: string } }> = ({ label, style }) => (
+  <span style={{
+    padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+    letterSpacing: "0.05em", background: style.bg, color: style.color,
+    border: `1px solid ${style.border}`,
+  }}>
+    {label.replace(/_/g, " ")}
+  </span>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLA STRIP
+// ─────────────────────────────────────────────────────────────────────────────
+const SlaStrip: React.FC<{ ticket: Ticket; compact?: boolean }> = ({ ticket, compact }) => {
+  const sla = getSlaInfo(ticket);
+  if (!sla) return null;
+  return (
+    <div style={{
+      padding: compact ? "8px 16px" : "10px 24px",
+      background: sla.breached ? "#FEF2F2" : sla.warning ? "#FFFBEB" : "#F0FDF4",
+      borderTop: `1px solid ${sla.breached ? "#FECACA" : sla.warning ? "#FDE68A" : "#BBF7D0"}`,
+      display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+    }}>
+      <span>{sla.breached ? "🔴" : sla.warning ? "🟡" : "🟢"}</span>
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: sla.breached ? "#B91C1C" : sla.warning ? "#92400E" : "#15803D" }}>
+          SLA {sla.breached ? "BREACHED" : sla.warning ? "WARNING" : "ON TRACK"}
+          {" · "}{ticket.priority} — {SLA_HOURS[ticket.priority] ?? 24}h window
+        </div>
+        <div style={{ fontSize: 11, color: "#64748B" }}>
+          {sla.breached
+            ? `Overdue by ${Math.abs(sla.minsLeft)} min`
+            : `Due ${sla.deadlineStr} · ${sla.label}`}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKET PROGRESS STEPPER
+// ─────────────────────────────────────────────────────────────────────────────
+const STEPS = [
+  { key: "NEW", label: "Submitted", icon: "📝" },
+  { key: "OPEN", label: "Assigned", icon: "👤" },
+  { key: "IN_PROGRESS", label: "In Progress", icon: "⚙️" },
+  { key: "RESOLVED", label: "Resolved", icon: "✅" },
+  { key: "CLOSED", label: "Closed", icon: "🔒" },
+];
+
+const TicketStepper: React.FC<{ status: string }> = ({ status }) => {
+  const currentIdx = Math.max(STEPS.findIndex(s => s.key === status), 0);
+  return (
+    <div style={{ padding: "14px 0 6px", position: "relative" }}>
+      <div style={{ position: "absolute", top: 30, left: 16, width: "calc(100% - 32px)", height: 2, background: "#E2E8F0", zIndex: 0 }} />
+      <div style={{
+        position: "absolute", top: 30, left: 16,
+        width: `calc((100% - 32px) * ${currentIdx / (STEPS.length - 1)})`,
+        height: 2, background: "#2563EB", zIndex: 1, transition: "width 0.4s ease",
+      }} />
+      <div style={{ display: "flex", position: "relative", zIndex: 2 }}>
+        {STEPS.map((step, idx) => {
+          const done = idx < currentIdx;
+          const current = idx === currentIdx;
+          return (
+            <div key={step.key} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{
+                width: 30, height: 30, borderRadius: "50%",
+                background: done ? "#2563EB" : current ? "#EFF6FF" : "#F8FAFC",
+                border: `2px solid ${done || current ? "#2563EB" : "#CBD5E1"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 13, boxShadow: current ? "0 0 0 4px rgba(37,99,235,0.12)" : "none",
+                transition: "all 0.25s",
+              }}>
+                {done
+                  ? <span style={{ color: "#fff", fontSize: 11, fontWeight: 700 }}>✓</span>
+                  : <span style={{ fontSize: 13 }}>{step.icon}</span>}
+              </div>
+              <span style={{
+                fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: "0.04em", color: done || current ? "#1E40AF" : "#94A3B8",
+                textAlign: "center",
+              }}>
+                {step.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSIGN CONSULTANT MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+interface AssignModalProps {
+  ticket: Ticket;
+  consultants: Advisor[];
+  onClose: () => void;
+  onAssigned: (ticketId: number, consultantId: number, consultantName: string) => void;
+}
+
+const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants, onClose, onAssigned }) => {
+  const { addNotification } = useNotifications();
+  const [selected, setSelected] = useState<number | null>(null);
+  const [assigning, setAssigning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleAssign = async () => {
+    if (!selected) return;
+    setAssigning(true); setError(null);
+    try {
+      await assignTicketToConsultant(ticket.id, selected);
+      const consultant = consultants.find(c => c.id === selected);
+      const consultantName = consultant?.name || `Consultant #${selected}`;
+
+      // Persist notification for consultant's dashboard
+      const assignKey = `fin_notifs_CONSULTANT_${selected}`;
+      const existing = JSON.parse(localStorage.getItem(assignKey) || "[]");
+      const newNotif = {
+        id: `${Date.now()}`,
+        type: "info",
+        title: `📋 New Ticket Assigned — #${ticket.id}`,
+        message: `You have been assigned: "${ticket.title || ticket.category}" (${ticket.category}). Priority: ${ticket.priority}.`,
+        timestamp: new Date().toISOString(),
+        read: false,
+        ticketId: ticket.id,
+      };
+      localStorage.setItem(assignKey, JSON.stringify([newNotif, ...existing].slice(0, 50)));
+
+      addNotification({
+        type: "success",
+        title: `✅ Ticket #${ticket.id} Assigned`,
+        message: `Assigned to ${consultantName}. They have been notified.`,
+        ticketId: ticket.id,
+      });
+
+      onAssigned(ticket.id, selected, consultantName);
+      onClose();
+    } catch (e: any) {
+      setError(e.message || "Assignment failed. Please try again.");
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 2000,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(15,23,42,0.6)", backdropFilter: "blur(4px)",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: 20, width: "min(520px,95vw)",
+        boxShadow: "0 24px 80px rgba(0,0,0,0.2)", overflow: "hidden",
+        animation: "fadeInUp 0.2s ease",
+      }}>
+        <div style={{ background: "linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)", padding: "20px 24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+                Assign Ticket #{ticket.id}
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", marginTop: 4 }}>
+                {ticket.title || ticket.category}
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 18 }}>×</button>
+          </div>
+        </div>
+
+        <div style={{ padding: "20px 24px" }}>
+          <p style={{ margin: "0 0 16px", fontSize: 13, color: "#64748B" }}>
+            Select a consultant to assign this ticket. They will receive an in-app notification immediately.
+          </p>
+
+          {error && (
+            <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 12, marginBottom: 14 }}>
+              ⚠️ {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto", paddingRight: 4 }}>
+            {consultants.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#94A3B8", padding: 24, fontSize: 13 }}>No consultants available.</div>
+            ) : consultants.map(c => (
+              <div
+                key={c.id}
+                onClick={() => setSelected(c.id)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 14,
+                  padding: "12px 16px", borderRadius: 12, cursor: "pointer",
+                  border: `2px solid ${selected === c.id ? "#2563EB" : "#E2E8F0"}`,
+                  background: selected === c.id ? "#EFF6FF" : "#fff",
+                  transition: "all 0.15s",
+                }}
+              >
+                <img src={c.avatar} alt={c.name} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", border: "2px solid #BFDBFE" }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#0F172A" }}>{c.name}</div>
+                  <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>
+                    {c.role}{c.shiftStartTime && ` · ${c.shiftStartTime}–${c.shiftEndTime}`}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
+                    {c.tags.slice(0, 3).map(t => (
+                      <span key={t} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 6, background: "#F1F5F9", color: "#475569", fontWeight: 600 }}>{t}</span>
+                    ))}
+                  </div>
+                </div>
+                {selected === c.id && (
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#2563EB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <span style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>✓</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button onClick={onClose} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button
+              onClick={handleAssign}
+              disabled={!selected || assigning}
+              style={{
+                flex: 2, padding: "11px", borderRadius: 10, border: "none",
+                background: (!selected || assigning) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)",
+                color: (!selected || assigning) ? "#94A3B8" : "#fff",
+                fontSize: 13, fontWeight: 700, cursor: (!selected || assigning) ? "default" : "pointer",
+              }}
+            >
+              {assigning ? "Assigning…" : `Assign to ${consultants.find(c => c.id === selected)?.name || "Consultant"}`}
+            </button>
+          </div>
+        </div>
+      </div>
+      <style>{`@keyframes fadeInUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }`}</style>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKET DETAIL PANEL
+// Merged: doc4 base + doc1's richer conversation thread (role badges, avatars,
+// left/right bubble layout, ADMIN/CUSTOMER labels, sender resolution logic)
+// ─────────────────────────────────────────────────────────────────────────────
+interface TicketDetailProps {
+  ticket: Ticket;
+  consultants: Advisor[];
+  currentAdminId: number;
+  onClose: () => void;
+  onStatusChange: (id: number, status: string) => void;
+  onDeleted: (id: number) => void;
+  onAssigned: (ticketId: number, consultantId: number, consultantName: string) => void;
+}
+
+const TicketDetailPanel: React.FC<TicketDetailProps> = ({
+  ticket, consultants, currentAdminId, onClose, onStatusChange, onDeleted, onAssigned,
+}) => {
+  const { addNotification } = useNotifications();
+
+  // ── Thread ────────────────────────────────────────────────────────────────
+  const [comments, setComments] = useState<TicketComment[]>([]);
+  const [loadingThread, setLoadingThread] = useState(true);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // ── Status ────────────────────────────────────────────────────────────────
+  const [localStatus, setLocalStatus] = useState<TicketStatus>(ticket.status);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  // ── Internal Notes ────────────────────────────────────────────────────────
+  const [notes, setNotes] = useState<InternalNote[]>(ticket.internalNotes ?? ticket.notes ?? []);
+  const [noteText, setNoteText] = useState("");
+  const [postingNote, setPostingNote] = useState(false);
+
+  // ── Assign Consultant Modal ───────────────────────────────────────────────
+  const [showAssign, setShowAssign] = useState(false);
+
+  // ── Escalate ──────────────────────────────────────────────────────────────
+  const [escalating, setEscalating] = useState(false);
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+  const [deleting, setDeleting] = useState(false);
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // ── Load thread + agents ──────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      setLoadingThread(true);
+      try {
+        const data = await getTicketComments(ticket.id);
+        setComments(extractArray(data));
+      } catch { /* non-fatal */ }
+      finally { setLoadingThread(false); }
+    })();
+  }, [ticket.id]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [comments]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleSendReply = async () => {
+    if (!reply.trim()) return;
+    setSending(true);
+    try {
+      const saved = await postTicketComment(ticket.id, reply.trim(), currentAdminId, true);
+      setComments(p => [...p, saved]);
+      setReply("");
+
+      // Notify customer
+      const userId = ticket.userId || ticket.user?.id;
+      if (userId) {
+        const userKey = `fin_notifs_USER_${userId}`;
+        const existing = JSON.parse(localStorage.getItem(userKey) || "[]");
+        const notif = {
+          id: `${Date.now()}`,
+          type: "info",
+          title: `💬 Admin replied on Ticket #${ticket.id}`,
+          message: `Your ticket "${ticket.title || ticket.category}" has a new reply from support.`,
+          timestamp: new Date().toISOString(),
+          read: false,
+          ticketId: ticket.id,
+        };
+        localStorage.setItem(userKey, JSON.stringify([notif, ...existing].slice(0, 50)));
+      }
+
+      if (localStatus === "NEW") {
+        setLocalStatus("OPEN");
+        onStatusChange(ticket.id, "OPEN");
+      }
+    } catch (e: any) { showToast(e.message || "Failed to send.", false); }
+    finally { setSending(false); }
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    setUpdatingStatus(true);
+    try {
+      await updateTicketStatus(ticket.id, newStatus);
+      setLocalStatus(newStatus as TicketStatus);
+      onStatusChange(ticket.id, newStatus);
+
+      // Notify customer
+      const userId = ticket.userId || ticket.user?.id;
+      if (userId) {
+        const userKey = `fin_notifs_USER_${userId}`;
+        const existing = JSON.parse(localStorage.getItem(userKey) || "[]");
+        const cfg = TICKET_STATUS_CFG[newStatus];
+        const notif = {
+          id: `${Date.now()}`,
+          type: newStatus === "RESOLVED" ? "success" : "info",
+          title: `${cfg?.icon || "🔄"} Ticket #${ticket.id} ${cfg?.label || newStatus}`,
+          message: `Your ticket "${ticket.title || ticket.category}" is now ${cfg?.label || newStatus}.`,
+          timestamp: new Date().toISOString(),
+          read: false,
+          ticketId: ticket.id,
+        };
+        localStorage.setItem(userKey, JSON.stringify([notif, ...existing].slice(0, 50)));
+      }
+
+      addNotification({
+        type: newStatus === "RESOLVED" ? "success" : "info",
+        title: `Ticket #${ticket.id} → ${TICKET_STATUS_CFG[newStatus]?.label || newStatus}`,
+        message: `Status updated. Customer has been notified.`,
+        ticketId: ticket.id,
+      });
+      showToast(`Status updated to ${newStatus.replace(/_/g, " ")}`);
+    } catch (e: any) { showToast(e.message || "Failed.", false); }
+    finally { setUpdatingStatus(false); }
+  };
+
+  const handlePostNote = async () => {
+    if (!noteText.trim()) return;
+    setPostingNote(true);
+    try {
+      const saved = await postInternalNote(ticket.id, noteText.trim(), currentAdminId);
+      setNotes(p => [...p, saved]);
+      setNoteText("");
+      showToast("🔒 Note saved");
+    } catch {
+      setNotes(p => [...p, {
+        id: Date.now(), ticketId: ticket.id, authorId: currentAdminId,
+        noteText: noteText.trim(), createdAt: new Date().toISOString(),
+      }]);
+      setNoteText("");
+      showToast("Note saved locally");
+    } finally { setPostingNote(false); }
+  };
+
+  const handleEscalate = async () => {
+    if (localStatus === "ESCALATED") return;
+    setEscalating(true);
+    try {
+      await escalateTicket(ticket.id, "Customer requested urgent attention");
+      setLocalStatus("ESCALATED");
+      onStatusChange(ticket.id, "ESCALATED");
+      addNotification({ type: "warning", title: `🚨 Ticket #${ticket.id} Escalated`, message: `"${ticket.title || ticket.category}" has been escalated.`, ticketId: ticket.id });
+      showToast("🚨 Ticket escalated");
+    } catch (e: any) { showToast(e.message || "Escalation failed.", false); }
+    finally { setEscalating(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Permanently delete ticket #${ticket.id}? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await deleteTicket(ticket.id);
+      onDeleted(ticket.id);
+    } catch (e: any) { showToast(e.message || "Delete failed.", false); setDeleting(false); }
+  };
+
+  const sc = TICKET_STATUS_CFG[localStatus] ?? TICKET_STATUS_CFG.NEW;
+  const pc = TICKET_PRIORITY_CFG[ticket.priority] ?? TICKET_PRIORITY_CFG.MEDIUM;
+
+  const getUserLabel = () =>
+    ticket.user?.name || ticket.user?.username ||
+    (ticket.user?.email ? ticket.user.email.split("@")[0] : null) ||
+    ticket.userName || (ticket.userId ? `User #${ticket.userId}` : "—");
+
+  return (
+    <>
+      {showAssign && (
+        <AssignConsultantModal
+          ticket={ticket}
+          consultants={consultants}
+          onClose={() => setShowAssign(false)}
+          onAssigned={(tid, cid, cname) => { onAssigned(tid, cid, cname); setShowAssign(false); }}
+        />
+      )}
+
+      <div style={{ position: "fixed", inset: 0, zIndex: 1200, display: "flex", alignItems: "stretch", justifyContent: "flex-end" }}>
+        {/* backdrop */}
+        <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(15,23,42,0.5)", backdropFilter: "blur(3px)" }} />
+
+        {/* panel */}
+        <div style={{
+          position: "relative", width: "min(620px, 100vw)", height: "100%",
+          background: "#fff", display: "flex", flexDirection: "column",
+          boxShadow: "-8px 0 40px rgba(0,0,0,0.18)", overflowY: "hidden",
+          animation: "slideInRight 0.22s ease",
+        }}>
+
+          {/* ── Header ──────────────────────────────────────────────────────── */}
+          <div style={{ background: "linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)", padding: "20px 24px", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
+                <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>
+                  Ticket #{ticket.id}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#fff", lineHeight: 1.35, wordBreak: "break-word", marginBottom: 6 }}>
+                  {ticket.title || ticket.category}
+                </div>
+                <div style={{ fontSize: 12, color: "#BFDBFE" }}>
+                  {getUserLabel()} · {ticket.category}
+                  {ticket.agentName && ` · Assigned to ${ticket.agentName}`}
+                  {ticket.consultantName && !ticket.agentName && ` · Assigned to ${ticket.consultantName}`}
+                  {ticket.consultantId && !ticket.agentName && !ticket.consultantName && ` · Agent #${ticket.consultantId}`}
+                </div>
+              </div>
+              <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 18, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+              <span style={{ padding: "4px 12px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 11, fontWeight: 700 }}>
+                {sc.icon} {sc.label}
+              </span>
+              {ticket.isEscalated && (
+                <span style={{ padding: "4px 12px", borderRadius: 20, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontSize: 11, fontWeight: 700 }}>
+                  🚨 Escalated
+                </span>
+              )}
+              <span style={{ padding: "4px 12px", borderRadius: 20, background: pc.bg, color: pc.color, border: `1px solid ${pc.border ?? "#E2E8F0"}`, fontSize: 11, fontWeight: 700 }}>
+                ⚑ {pc.label}
+              </span>
+              <span style={{ padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.15)", color: "#E0F2FE", fontSize: 11, fontWeight: 600 }}>
+                📅 {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+              </span>
+              <button
+                onClick={() => setShowAssign(true)}
+                style={{ padding: "4px 12px", borderRadius: 20, background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", marginLeft: "auto" }}
+              >
+                👤 Assign Consultant
+              </button>
+            </div>
+          </div>
+
+          {/* ── SLA strip ─────────────────────────────────────────────────── */}
+          <SlaStrip ticket={{ ...ticket, status: localStatus }} />
+
+          {/* ── Scrollable body ──────────────────────────────────────────── */}
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+
+            {/* Progress stepper */}
+            <div style={{ padding: "16px 24px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Progress</div>
+              <TicketStepper status={localStatus} />
+            </div>
+
+            {/* Status changer */}
+            <div style={{ padding: "14px 24px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
+                Change Status {updatingStatus && <span style={{ color: "#2563EB" }}>· updating…</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {ALL_TICKET_STATUSES.map(s => {
+                  const cfg = TICKET_STATUS_CFG[s];
+                  const isActive = localStatus === s;
+                  return (
+                    <button key={s} onClick={() => !isActive && handleStatusChange(s)}
+                      disabled={updatingStatus || isActive}
+                      style={{
+                        padding: "5px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                        cursor: isActive ? "default" : "pointer",
+                        background: isActive ? cfg.bg : "#fff",
+                        color: isActive ? cfg.color : "#64748B",
+                        border: `1.5px solid ${isActive ? cfg.border : "#E2E8F0"}`,
+                        opacity: updatingStatus ? 0.6 : 1, transition: "all 0.15s",
+                      }}>
+                      {cfg.icon} {cfg.label}{isActive && " ✓"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 11, color: "#94A3B8" }}>
+                ℹ️ Customer will receive an in-app notification when status changes.
+              </div>
+            </div>
+
+            {/* Description */}
+            <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 8 }}>Description</div>
+              <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.7, background: "#F8FAFC", borderRadius: 10, padding: "10px 14px", borderLeft: "3px solid #BFDBFE" }}>
+                {ticket.description}
+              </p>
+              {ticket.attachmentUrl && (
+                <a href={ticket.attachmentUrl} target="_blank" rel="noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: "#2563EB", fontWeight: 600, textDecoration: "none" }}>
+                  📎 View attachment
+                </a>
+              )}
+            </div>
+
+            {/* ── Conversation thread (rich version from doc1) ─────────────── */}
+            <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9", flex: 1 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>
+                💬 Conversation ({comments.length})
+              </div>
+              {loadingThread ? (
+                <div style={{ textAlign: "center", padding: 24, color: "#94A3B8", fontSize: 13 }}>
+                  <div style={{ width: 20, height: 20, border: "2px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 8px" }} />
+                  Loading thread…
+                </div>
+              ) : comments.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 24, color: "#94A3B8", fontSize: 13, fontStyle: "italic" }}>No messages yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+                  {comments.map(c => {
+                    // ── Determine sender: customer (left/amber) vs agent/admin (right/blue) ──
+                    // isConsultantReply is the canonical flag; fall back to senderId comparison.
+                    const isAgent =
+                      c.isConsultantReply === true ||
+                      c.authorRole === "AGENT" ||
+                      (c.isConsultantReply !== false && c.senderId != null && c.senderId !== ticket.userId);
+
+                    const senderLabel = c.authorName
+                      ? c.authorName
+                      : isAgent
+                        ? (c.senderId === currentAdminId ? "Admin" : "Agent")
+                        : (ticket.userName || (ticket.userId ? `User #${ticket.userId}` : "Customer"));
+
+                    return (
+                      <div key={c.id} style={{ display: "flex", gap: 10, flexDirection: isAgent ? "row-reverse" : "row" }}>
+                        <div style={{
+                          width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                          background: isAgent
+                            ? "linear-gradient(135deg,#1E3A5F,#2563EB)"
+                            : "linear-gradient(135deg,#F59E0B,#D97706)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 12, fontWeight: 700, color: "#fff",
+                        }}>
+                          {senderLabel.charAt(0).toUpperCase()}
+                        </div>
+                        <div style={{ maxWidth: "76%" }}>
+                          <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 3, textAlign: isAgent ? "right" : "left" }}>
+                            <strong style={{ color: "#475569" }}>{senderLabel}</strong>
+                            {isAgent && (
+                              <span style={{ marginLeft: 5, background: "#EFF6FF", color: "#2563EB", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>
+                                {c.senderId === currentAdminId ? "ADMIN" : "AGENT"}
+                              </span>
+                            )}
+                            {!isAgent && (
+                              <span style={{ marginLeft: 5, background: "#FFF7ED", color: "#D97706", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>
+                                CUSTOMER
+                              </span>
+                            )}
+                            {" · "}{new Date(c.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                          </div>
+                          <div style={{
+                            padding: "10px 13px", borderRadius: 12, fontSize: 13, lineHeight: 1.6,
+                            background: isAgent ? "#EFF6FF" : "#FFF7ED",
+                            color: isAgent ? "#1E3A5F" : "#92400E",
+                            border: `1px solid ${isAgent ? "#BFDBFE" : "#FED7AA"}`,
+                            borderTopRightRadius: isAgent ? 4 : 12,
+                            borderTopLeftRadius: isAgent ? 12 : 4,
+                          }}>
+                            {c.message}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={bottomRef} />
+                </div>
+              )}
+            </div>
+
+            {/* Reply box */}
+            <div style={{ padding: "12px 24px", borderBottom: "1px solid #F1F5F9", background: "#F8FAFC", flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Reply to Customer</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <textarea
+                  value={reply} onChange={e => setReply(e.target.value)} rows={2}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendReply(); } }}
+                  placeholder="Type a reply… (Enter to send, customer will be notified)"
+                  style={{ flex: 1, padding: "9px 12px", border: "1.5px solid #BFDBFE", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", background: "#fff" }}
+                />
+                <button onClick={handleSendReply} disabled={!reply.trim() || sending}
+                  style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: !reply.trim() ? "#E2E8F0" : "#2563EB", color: !reply.trim() ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !reply.trim() ? "default" : "pointer", flexShrink: 0, alignSelf: "flex-end" }}>
+                  {sending ? "…" : "Send"}
+                </button>
+              </div>
+            </div>
+
+            {/* Internal Notes */}
+            <div style={{ padding: "16px 24px", borderBottom: "1px solid #FEF9C3", background: "#FFFBEB", flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#92400E", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
+                🔒 Internal Notes <span style={{ fontSize: 10, fontWeight: 500, color: "#B45309", textTransform: "none" }}>(never visible to user)</span>
+              </div>
+              {notes.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                  {notes.map(n => (
+                    <div key={n.id} style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, padding: "9px 12px" }}>
+                      <div style={{ fontSize: 12, color: "#1E293B", lineHeight: 1.55 }}>{n.noteText}</div>
+                      <div style={{ fontSize: 10, color: "#92400E", marginTop: 4 }}>
+                        Agent #{n.authorId} · {new Date(n.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <textarea
+                  value={noteText} onChange={e => setNoteText(e.target.value)} rows={2}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePostNote(); } }}
+                  placeholder="Add a private note… (Enter to save)"
+                  style={{ flex: 1, padding: "9px 12px", border: "1.5px solid #FDE68A", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", background: "#fff" }}
+                />
+                <button onClick={handlePostNote} disabled={!noteText.trim() || postingNote}
+                  style={{ padding: "9px 14px", borderRadius: 10, border: "none", background: !noteText.trim() ? "#F1F5F9" : "#D97706", color: !noteText.trim() ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", alignSelf: "flex-end", flexShrink: 0 }}>
+                  {postingNote ? "…" : "Save"}
+                </button>
+              </div>
+            </div>
+
+            {/* Escalate */}
+            <div style={{ padding: "14px 24px", borderBottom: "1px solid #FED7AA", background: "#FFF7ED", flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#9A3412", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
+                🚨 Escalate Ticket
+              </div>
+              {localStatus === "ESCALATED" ? (
+                <div style={{ fontSize: 12, color: "#B91C1C", fontWeight: 600, padding: "8px 12px", background: "#FEE2E2", borderRadius: 8, border: "1px solid #FECACA" }}>
+                  ⚠️ Already escalated
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ flex: 1, fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
+                    Marks as <strong>ESCALATED</strong> and triggers urgent SLA. Senior agents will be notified.
+                  </div>
+                  <button onClick={handleEscalate} disabled={escalating}
+                    style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+                    {escalating ? "…" : "Escalate"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Danger zone */}
+            <div style={{ padding: "14px 24px 20px", background: "#FEF2F2", flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Danger Zone</div>
+              <button onClick={handleDelete} disabled={deleting}
+                style={{ padding: "9px 18px", borderRadius: 10, border: "1.5px solid #FECACA", background: deleting ? "#FEE2E2" : "#fff", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {deleting ? "Deleting…" : `🗑 Delete Ticket #${ticket.id}`}
+              </button>
+            </div>
+          </div>
+
+          {/* Toast */}
+          {toast && (
+            <div style={{ position: "absolute", bottom: 24, left: "50%", transform: "translateX(-50%)", background: toast.ok ? "#0F172A" : "#7F1D1D", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", zIndex: 9999, whiteSpace: "nowrap" }}>
+              {toast.ok ? "✓" : "✕"} {toast.msg}
+            </div>
+          )}
+        </div>
+
+        <style>{`
+          @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `}</style>
+      </div>
+    </>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREATE TICKET MODAL
+// ─────────────────────────────────────────────────────────────────────────────
+export const CreateTicketModal: React.FC<{
+  currentUserId: number;
+  onCreated: (t: any) => void;
+  onClose: () => void;
+}> = ({ currentUserId, onCreated, onClose }) => {
+  const [form, setForm] = useState({ category: "", description: "", priority: "MEDIUM", consultantId: "" });
+  const [file, setFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async () => {
+    if (!form.category.trim() || !form.description.trim()) { setError("Category and description are required."); return; }
+    setSaving(true); setError("");
+    try {
+      const saved = await createTicket({
+        userId: currentUserId,
+        category: form.category.trim(),
+        description: form.description.trim(),
+        priority: form.priority,
+        consultantId: form.consultantId ? Number(form.consultantId) : null,
+      }, file);
+      onCreated(saved);
+    } catch (e: any) { setError(e.message || "Failed to create ticket."); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: 16, width: 480, maxWidth: "95vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
+        <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "20px 24px" }}>
+          <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 700 }}>🎫 Create New Ticket</h3>
+        </div>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+          {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#B91C1C", fontSize: 13 }}>{error}</div>}
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Category *</label>
+            <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="e.g. Billing, Technical, Account"
+              style={{ width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Description *</label>
+            <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} rows={4} placeholder="Describe the issue in detail…"
+              style={{ width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box" }} />
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Priority</label>
+              <select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}
+                style={{ width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
+                {["LOW", "MEDIUM", "HIGH", "URGENT"].map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Agent ID (optional)</label>
+              <input type="number" value={form.consultantId} onChange={e => setForm({ ...form, consultantId: e.target.value })} placeholder="Assign to agent…"
+                style={{ width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Attachment (optional)</label>
+            <input type="file" onChange={e => setFile(e.target.files?.[0] ?? null)} style={{ fontSize: 13, color: "#374151" }} />
+          </div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button onClick={onClose} style={{ padding: "9px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={handleSubmit} disabled={saving}
+              style={{ padding: "9px 24px", borderRadius: 10, border: "none", background: saving ? "#93C5FD" : "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              {saving ? "Creating…" : "Create Ticket"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKETS SECTION
+// ─────────────────────────────────────────────────────────────────────────────
+interface TicketsSectionProps {
+  consultants: Advisor[];
+  currentAdminId: number;
+  onTicketsLoaded?: (tickets: Ticket[]) => void;
+}
+
+const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdminId, onTicketsLoaded }) => {
+  const { addNotification } = useNotifications();
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState<"ALL" | TicketStatus>("ALL");
+  const [filterPriority, setFilterPriority] = useState<"ALL" | TicketPriority>("ALL");
+  const [searchQ, setSearchQ] = useState("");
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const load = async () => {
+    setLoading(true); setError(null);
+    try {
+      const raw = await getAllTickets();
+      const arr: Ticket[] = Array.isArray(raw) ? raw : extractArray(raw);
+
+      const enriched = await Promise.all(arr.map(async (t: any) => {
+        if (t.user?.name || t.user?.username || t.userName) return t;
+        const uid = t.userId || t.user?.id;
+        if (!uid) return t;
+        try {
+          const u = await apiFetch(`/users/${uid}`);
+          const raw2 = u.name || u.fullName || u.username || u.email || u.identifier || "";
+          const name = raw2.includes("@")
+            ? raw2.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
+            : raw2;
+          return { ...t, userName: name || `User #${uid}` };
+        } catch { return t; }
+      }));
+
+      setTickets(enriched);
+      onTicketsLoaded?.(enriched);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load tickets.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleStatusChange = (id: number, status: string) =>
+    setTickets(prev => prev.map(t => t.id === id ? { ...t, status: status as TicketStatus } : t));
+
+  const handleDeleted = (id: number) => {
+    setTickets(prev => prev.filter(t => t.id !== id));
+    setSelectedTicket(null);
+  };
+
+  const handleAssigned = (ticketId: number, consultantId: number, consultantName: string) => {
+    setTickets(prev => prev.map(t =>
+      t.id === ticketId
+        ? { ...t, consultantId, consultantName, agentName: consultantName, status: "OPEN" as TicketStatus }
+        : t
+    ));
+    if (selectedTicket?.id === ticketId) {
+      setSelectedTicket(p => p ? { ...p, consultantId, consultantName, agentName: consultantName } : p);
+    }
+  };
+
+  const counts = {
+    ALL: tickets.length,
+    NEW: tickets.filter(t => t.status === "NEW").length,
+    OPEN: tickets.filter(t => t.status === "OPEN").length,
+    IN_PROGRESS: tickets.filter(t => t.status === "IN_PROGRESS").length,
+    PENDING: tickets.filter(t => t.status === "PENDING").length,
+    RESOLVED: tickets.filter(t => t.status === "RESOLVED").length,
+    CLOSED: tickets.filter(t => t.status === "CLOSED").length,
+    ESCALATED: tickets.filter(t => t.status === "ESCALATED" || t.isEscalated).length,
+  };
+
+  const openCount = tickets.filter(t => ["OPEN", "NEW", "IN_PROGRESS", "PENDING"].includes(t.status)).length;
+  const resolvedToday = tickets.filter(t =>
+    t.status === "RESOLVED" && t.updatedAt &&
+    new Date(t.updatedAt).toDateString() === new Date().toDateString()
+  ).length;
+
+  const getUserDisplay = (t: Ticket) =>
+    t.user?.name || t.user?.username ||
+    (t.user?.email ? t.user.email.split("@")[0] : null) ||
+    t.userName || (t.userId ? `User #${t.userId}` : "—");
+
+  const visible = tickets.filter(t => {
+    if (filterStatus !== "ALL" && t.status !== filterStatus) return false;
+    if (filterPriority !== "ALL" && t.priority !== filterPriority) return false;
+    if (searchQ.trim()) {
+      const q = searchQ.toLowerCase();
+      const user = getUserDisplay(t).toLowerCase();
+      if (
+        !t.description.toLowerCase().includes(q) &&
+        !(t.title ?? "").toLowerCase().includes(q) &&
+        !t.category.toLowerCase().includes(q) &&
+        !user.includes(q) &&
+        !String(t.id).includes(q)
+      ) return false;
+    }
+    return true;
+  });
+
+  // SLA / escalation config
+  const SLA_HOURS_LOCAL = 2;
+  const overdueTickets = tickets.filter(t => {
+    if (["RESOLVED", "CLOSED"].includes(t.status)) return false;
+    return (Date.now() - new Date(t.createdAt).getTime()) / 3_600_000 >= SLA_HOURS_LOCAL;
+  });
+
+  return (
+    <>
+      {/* Escalation Monitor */}
+      <EscalationMonitor tickets={tickets} slaHours={SLA_HOURS_LOCAL} />
+
+      {selectedTicket && (
+        <TicketDetailPanel
+          ticket={selectedTicket}
+          consultants={consultants}
+          currentAdminId={currentAdminId}
+          onClose={() => setSelectedTicket(null)}
+          onStatusChange={handleStatusChange}
+          onDeleted={handleDeleted}
+          onAssigned={handleAssigned}
+        />
+      )}
+      {showCreate && (
+        <CreateTicketModal
+          currentUserId={currentAdminId}
+          onCreated={t => { setTickets(p => [t, ...p]); setShowCreate(false); }}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>
+          Support Tickets
+          <span style={{ marginLeft: 10, fontSize: 14, fontWeight: 600, color: "#64748B" }}>
+            {loading ? "" : `(${tickets.length} total)`}
+          </span>
+        </h2>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setShowCreate(true)}
+            style={{ padding: "8px 16px", background: "#2563EB", border: "none", color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            + New Ticket
+          </button>
+          <button onClick={load} disabled={loading}
+            style={{ padding: "8px 16px", background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            {loading ? "⏳" : "↻"} Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* SLA breach alert banner */}
+      {overdueTickets.length > 0 && (
+        <div style={{
+          background: "linear-gradient(135deg,#FEF2F2,#FFF5F5)", border: "2px solid #FECACA", borderRadius: 14,
+          padding: "14px 20px", marginBottom: 20, display: "flex", gap: 14, alignItems: "center",
+          animation: "pulse 2s infinite",
+        }}>
+          <div style={{ fontSize: 28, flexShrink: 0 }}>🚨</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#B91C1C" }}>
+              SLA Breach Alert — {overdueTickets.length} Overdue Ticket{overdueTickets.length !== 1 ? "s" : ""}
+            </div>
+            <div style={{ fontSize: 12, color: "#EF4444", marginTop: 4 }}>
+              {overdueTickets.slice(0, 3).map(t => `#${t.id} "${t.title || t.category}"`).join(", ")}
+              {overdueTickets.length > 3 && ` +${overdueTickets.length - 3} more`}
+            </div>
+          </div>
+          <button onClick={() => setFilterStatus("NEW")}
+            style={{ padding: "8px 16px", background: "#DC2626", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", flexShrink: 0 }}>
+            View Overdue
+          </button>
+        </div>
+      )}
+
+      {/* Stats strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 12, marginBottom: 20 }}>
+        {[
+          { label: "Total", value: tickets.length, color: "#2563EB", bg: "#EFF6FF" },
+          { label: "Open / Active", value: openCount, color: "#D97706", bg: "#FFFBEB" },
+          { label: "Overdue (SLA)", value: overdueTickets.length, color: "#DC2626", bg: "#FEF2F2" },
+          { label: "Escalated", value: counts.ESCALATED, color: "#DC2626", bg: "#FEF2F2" },
+          { label: "Resolved", value: counts.RESOLVED, color: "#16A34A", bg: "#F0FDF4" },
+          { label: "Resolved Today", value: resolvedToday, color: "#16A34A", bg: "#F0FDF4" },
+          { label: "Closed", value: counts.CLOSED, color: "#64748B", bg: "#F1F5F9" },
+        ].map(s => (
+          <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "12px 16px" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{loading ? "…" : s.value}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Search + priority filter */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+          <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="14" height="14" fill="none" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2" />
+            <path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search by title, user, category, ID…"
+            style={{ width: "100%", paddingLeft: 32, paddingRight: 12, paddingTop: 9, paddingBottom: 9, border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }} />
+        </div>
+        <select value={filterPriority} onChange={e => setFilterPriority(e.target.value as any)}
+          style={{ padding: "9px 14px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
+          <option value="ALL">All Priorities</option>
+          {(["LOW", "MEDIUM", "HIGH", "URGENT", "CRITICAL"] as TicketPriority[]).map(p => (
+            <option key={p} value={p}>{TICKET_PRIORITY_CFG[p]?.label ?? p}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Status filter pills */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        {(["ALL", ...ALL_TICKET_STATUSES] as const).map(f => (
+          <button key={f} onClick={() => setFilterStatus(f as any)}
+            style={{
+              padding: "5px 14px", borderRadius: 20, border: "1.5px solid",
+              borderColor: filterStatus === f ? "#2563EB" : "#E2E8F0",
+              background: filterStatus === f ? "#2563EB" : "#fff",
+              color: filterStatus === f ? "#fff" : "#64748B",
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}>
+            {f === "ALL" ? "All" : (TICKET_STATUS_CFG[f]?.label ?? f)} ({f === "ALL" ? tickets.length : (counts[f as keyof typeof counts] ?? 0)})
+          </button>
+        ))}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 16px", color: "#B91C1C", fontSize: 13, marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+          ⚠️ {error}
+          <button onClick={load} style={{ marginLeft: "auto", padding: "4px 12px", background: "#B91C1C", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>Retry</button>
+        </div>
+      )}
+
+      {/* Loading / empty */}
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 60, color: "#94A3B8" }}>
+          <div style={{ width: 32, height: 32, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
+          Loading tickets…
+        </div>
+      ) : visible.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 16, color: "#94A3B8" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🎫</div>
+          <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>
+            {tickets.length === 0 ? "No tickets found." : "No tickets match your filters."}
+          </p>
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
+          {/* Table header */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px",
+            padding: "10px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9",
+            fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em",
+          }}>
+            <div>ID</div><div>TITLE / USER</div><div>CATEGORY</div><div>PRIORITY</div>
+            <div>ASSIGNED TO</div><div>STATUS</div><div>CREATED</div>
+            <div style={{ textAlign: "right" }}>ACTION</div>
+          </div>
+
+          {visible.map((ticket, idx) => {
+            const sc = TICKET_STATUS_CFG[ticket.status] ?? TICKET_STATUS_CFG.NEW;
+            const pc = TICKET_PRIORITY_CFG[ticket.priority] ?? TICKET_PRIORITY_CFG.MEDIUM;
+            const sla = getSlaInfo(ticket);
+            const hoursOpen = (Date.now() - new Date(ticket.createdAt).getTime()) / 3_600_000;
+            const isOverdue = !["RESOLVED", "CLOSED"].includes(ticket.status) && hoursOpen >= SLA_HOURS_LOCAL;
+            return (
+              <div key={ticket.id}
+                style={{
+                  display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px",
+                  padding: "14px 20px",
+                  borderBottom: idx < visible.length - 1 ? "1px solid #F8FAFC" : "none",
+                  borderLeft: `3px solid ${isOverdue ? "#DC2626" : sla?.breached ? "#EF4444" : sla?.warning ? "#F59E0B" : "transparent"}`,
+                  background: isOverdue ? "#FFF8F8" : "transparent",
+                  transition: "background 0.1s", cursor: "pointer", alignItems: "center",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = "#FAFBFF")}
+                onMouseLeave={e => (e.currentTarget.style.background = isOverdue ? "#FFF8F8" : "transparent")}
+                onClick={() => setSelectedTicket(ticket)}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isOverdue ? "#DC2626" : "#94A3B8", fontFamily: "monospace" }}>
+                  #{ticket.id}
+                  {isOverdue && <div style={{ fontSize: 9, color: "#DC2626", fontWeight: 800 }}>⏰ SLA</div>}
+                </div>
+                <div style={{ minWidth: 0, paddingRight: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {ticket.title || ticket.category}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>👤 {getUserDisplay(ticket)}</div>
+                  {sla && (
+                    <div style={{ fontSize: 10, color: sla.breached ? "#DC2626" : sla.warning ? "#D97706" : "#16A34A", fontWeight: 700, marginTop: 2 }}>
+                      {sla.breached ? "⏰ SLA BREACHED" : sla.warning ? `⚠️ ${sla.label}` : `✓ ${sla.label}`}
+                    </div>
+                  )}
+                </div>
+                <div><span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "#F1F5F9", color: "#475569", fontWeight: 600 }}>{ticket.category}</span></div>
+                <div><span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: pc.bg, color: pc.color, fontWeight: 700 }}>⚑ {pc.label}</span></div>
+                <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {ticket.consultantName || ticket.agentName || (
+                    <span style={{ color: "#DC2626", fontWeight: 600 }}>Unassigned</span>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700 }}>
+                    {sc.icon} {sc.label}
+                  </span>
+                  {ticket.isEscalated && (
+                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 700 }}>
+                      🚨 Escalated
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "#94A3B8" }}>
+                  {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                  {isOverdue && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.floor(hoursOpen)}h open</div>}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button onClick={e => { e.stopPropagation(); setSelectedTicket(ticket); }}
+                    style={{ padding: "5px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                    Open →
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.15); }
+          50%       { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
+        }
+      `}</style>
+    </>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  SUPPORT CONFIG PANEL
+// ══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Shared micro-styles ────────────────────────────────────────────────────
+const sc_styles: Record<string, React.CSSProperties> = {
+  panelWrap: { padding: "0 0 40px" },
+  panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 },
+  panelTitle: { margin: 0, fontSize: 20, fontWeight: 800, color: "#0F172A" },
+  panelSub: { margin: "4px 0 0", fontSize: 13, color: "#64748B" },
+  filterPill: { padding: "5px 14px", borderRadius: 20, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" },
+  filterPillActive: { borderColor: "#2563EB", background: "#2563EB", color: "#fff" },
+  primaryBtn: { padding: "9px 18px", borderRadius: 10, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" },
+  ghostBtn: { padding: "9px 16px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" },
+  iconBtn: { background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "4px 6px", borderRadius: 6 },
+  input: { width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit", background: "#fff", color: "#0F172A" },
+  select: { width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer" },
+  label: { fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 },
+  badge: { fontSize: 10, padding: "2px 8px", borderRadius: 20, fontWeight: 700 },
+  ticketRow: { display: "flex", alignItems: "center", gap: 14, padding: "13px 16px", border: "1px solid #F1F5F9", borderRadius: 12, cursor: "pointer", transition: "all 0.15s" },
+  agentCard: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: "1.5px solid #E2E8F0", borderRadius: 12, background: "#fff", transition: "all 0.15s" },
+  cannedCard: { background: "#fff", border: "1px solid #F1F5F9", borderRadius: 12, padding: "14px 16px" },
+  editorCard: { background: "#F8FAFC", border: "1.5px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" },
+  chartCard: { background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, padding: "16px 20px" },
+  chartTitle: { fontSize: 12, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 },
+  emptyState: { padding: "40px 20px", textAlign: "center", color: "#94A3B8", fontSize: 13, background: "#F8FAFC", borderRadius: 12 },
+  sectionLabel: { fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 },
+};
+
+// SLA map for the config panel
+const CFG_SLA_HOURS: Record<string, number> = { LOW: 72, MEDIUM: 24, HIGH: 8, URGENT: 4, CRITICAL: 2 };
+const CFG_PRIORITY_CFG: Record<string, { color: string; bg: string }> = {
+  LOW: { color: "#16A34A", bg: "#F0FDF4" },
+  MEDIUM: { color: "#D97706", bg: "#FFFBEB" },
+  HIGH: { color: "#EA580C", bg: "#FFF7ED" },
+  URGENT: { color: "#DC2626", bg: "#FEF2F2" },
+  CRITICAL: { color: "#7C3AED", bg: "#F5F3FF" },
+};
+
+// ── helpers ────────────────────────────────────────────────────────────────
+const cfgHoursAgo = (iso: string | null | undefined) => iso ? Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000) : null;
+const cfgCalcResponse = (t: Ticket) => t.firstResponseAt && t.createdAt ? Math.round((new Date(t.firstResponseAt).getTime() - new Date(t.createdAt).getTime()) / 60_000) : null;
+const cfgCalcResolution = (t: Ticket) => t.resolvedAt && t.createdAt ? Math.round((new Date(t.resolvedAt).getTime() - new Date(t.createdAt).getTime()) / 3_600_000 * 10) / 10 : null;
+const cfgIsSlaBreached = (t: Ticket) => {
+  if (["RESOLVED", "CLOSED"].includes(t.status)) return false;
+  const h = cfgHoursAgo(t.createdAt);
+  return h !== null && h > (CFG_SLA_HOURS[t.priority] || 24);
+};
+
+// ── Inline toast for config sections ──────────────────────────────────────
+const MiniToast: React.FC<{ msg: string; ok?: boolean }> = ({ msg, ok = true }) => (
+  <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: ok ? "#0F172A" : "#7F1D1D", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", zIndex: 9999, whiteSpace: "nowrap" }}>
+    {ok ? "✓" : "✕"} {msg}
+  </div>
+);
+
+// ── mini bar helper ────────────────────────────────────────────────────────
+const MiniBar: React.FC<{ val: number; max: number; color: string }> = ({ val, max, color }) => {
+  const pct = Math.min((val / Math.max(max, 1)) * 100, 100);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+      <div style={{ flex: 1, height: 6, background: "#F1F5F9", borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 4, transition: "width 0.5s ease" }} />
+      </div>
+      <span style={{ fontSize: 11, fontFamily: "monospace", color: "#64748B", minWidth: 24, textAlign: "right" }}>{val}</span>
+    </div>
+  );
+};
+
+// ── 1. Manual Assignment ───────────────────────────────────────────────────
+interface AgentInfo { id: number; name: string; load: number; avatar: string; }
+
+const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssign: (ticketId: number, agent: AgentInfo) => void }> = ({ tickets, agents, onAssign }) => {
+  const [selTicket, setSelTicket] = useState<Ticket | null>(null);
+  const [filter, setFilter] = useState("unassigned");
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+  const filtered = tickets.filter(t => {
+    if (filter === "unassigned") return !t.agentName && !["RESOLVED", "CLOSED"].includes(t.status);
+    if (filter === "all") return !["RESOLVED", "CLOSED"].includes(t.status);
+    if (filter === "escalated") return t.status === "ESCALATED" || !!t.isEscalated;
+    return true;
+  });
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Manual Assignment</h3>
+          <p style={sc_styles.panelSub}>Select a ticket then click an agent to assign instantly</p>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["unassigned", "all", "escalated"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{ ...sc_styles.filterPill, ...(filter === f ? sc_styles.filterPillActive : {}) }}>
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 20 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {filtered.length === 0 && <div style={sc_styles.emptyState}>✅ All tickets assigned for this filter.</div>}
+          {filtered.map(t => {
+            const tsc = TICKET_STATUS_CFG[t.status] || TICKET_STATUS_CFG.NEW;
+            const tpc = TICKET_PRIORITY_CFG[t.priority] || TICKET_PRIORITY_CFG.MEDIUM;
+            const breached = cfgIsSlaBreached(t);
+            const selected = selTicket?.id === t.id;
+            return (
+              <div key={t.id} onClick={() => setSelTicket(selected ? null : t)}
+                style={{ ...sc_styles.ticketRow, borderLeft: `4px solid ${breached ? "#DC2626" : tsc.color}`, background: selected ? "#EFF6FF" : breached ? "#FFF8F8" : "#fff", outline: selected ? "2px solid #2563EB" : "none" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 11, color: "#94A3B8" }}>#{t.id}</span>
+                    <span style={{ ...sc_styles.badge, background: tpc.bg, color: tpc.color }}>{t.priority}</span>
+                    <span style={{ ...sc_styles.badge, background: tsc.bg, color: tsc.color }}>{tsc.label}</span>
+                    {breached && <span style={{ ...sc_styles.badge, background: "#FEF2F2", color: "#DC2626" }}>⏰ SLA</span>}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", marginBottom: 2 }}>{t.title || t.category}</div>
+                  <div style={{ fontSize: 11, color: "#94A3B8" }}>👤 {t.userName || `User #${t.userId}`} · {t.category}</div>
+                </div>
+                <div style={{ flexShrink: 0 }}>
+                  {t.agentName
+                    ? <span style={{ fontSize: 11, color: "#16A34A", fontWeight: 600, background: "#F0FDF4", padding: "3px 8px", borderRadius: 6 }}>✓ {t.agentName}</span>
+                    : <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>Unassigned</span>}
+                  {selected && <div style={{ fontSize: 10, color: "#2563EB", fontWeight: 700, marginTop: 4 }}>← Click agent</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Agents</div>
+          {agents.map(a => (
+            <div key={a.id} onClick={() => {
+              if (!selTicket) return;
+              onAssign(selTicket.id, a);
+              showToast(`#${selTicket.id} assigned to ${a.name}`);
+              setSelTicket(null);
+            }} style={{ ...sc_styles.agentCard, cursor: selTicket ? "pointer" : "default", opacity: selTicket ? 1 : 0.7 }}>
+              <img src={a.avatar} alt={a.name} style={{ width: 36, height: 36, borderRadius: "50%", flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{a.name}</div>
+                <div style={{ fontSize: 11, color: "#64748B" }}>{a.load} active tickets</div>
+              </div>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.load <= 3 ? "#22C55E" : a.load <= 5 ? "#F59E0B" : "#EF4444", flexShrink: 0 }} />
+            </div>
+          ))}
+          {selTicket && <div style={{ fontSize: 11, color: "#2563EB", textAlign: "center", fontWeight: 600, padding: "8px 0" }}>Click agent to assign Ticket #{selTicket.id}</div>}
+        </div>
+      </div>
+      {toast && <MiniToast msg={toast} />}
+    </div>
+  );
+};
+
+// ── 2. Canned Responses ────────────────────────────────────────────────────
+interface CannedResponse { id: number; title: string; category: string; body: string; }
+
+const CannedResponses: React.FC<{}> = () => {
+  const [responses, setResponses] = useState<CannedResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [form, setForm] = useState<Omit<CannedResponse, "id">>({ title: "", category: "General", body: "" });
+  const [search, setSearch] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
+
+  useEffect(() => {
+    setLoading(true);
+    getCannedResponses()
+      .then(arr => setResponses(
+        arr.map((r: any) => ({
+          id: r.id,
+          title: r.title,
+          category: r.category || "General",
+          body: r.content || r.body || "",   // backend stores as 'content'
+          shortcut: r.shortcut || "",
+        }))
+      ))
+      .catch(() => showToast("Failed to load canned responses"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = responses.filter(r =>
+    r.title.toLowerCase().includes(search.toLowerCase()) ||
+    r.body.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const save = async () => {
+    if (!form.title.trim() || !form.body.trim()) return;
+    try {
+      if (editing !== null) {
+        // No PUT endpoint in AdminConfigController — optimistic local update only
+        setResponses(p => p.map(r => r.id === editing ? { ...r, ...form } : r));
+        showToast("Response updated");
+      } else {
+        // POST: backend expects { title, content, category } — map body → content
+        const created = await createCannedResponse({ title: form.title, content: form.body, category: form.category });
+        setResponses(p => [...p, { ...form, id: created.id ?? Date.now() }]);
+        showToast("Response created");
+      }
+    } catch (e: any) { showToast(e?.message || "Save failed"); }
+  };
+
+  const deleteResponse = async (id: number) => {
+    try {
+      await deleteCannedResponse(id);
+      setResponses(p => p.filter(x => x.id !== id));
+      showToast("Deleted");
+    } catch { showToast("Delete failed"); }
+  };
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Canned Responses</h3>
+          <p style={sc_styles.panelSub}>Predefined replies · use shortcuts while typing in ticket replies</p>
+        </div>
+        <button onClick={() => { setEditing(null); setForm({ title: "", category: "General", body: "" }); }} style={sc_styles.primaryBtn}>+ New Response</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 20 }}>
+        <div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search responses…" style={sc_styles.input} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+            {loading ? (
+              <div style={{ textAlign: "center", color: "#94A3B8", fontSize: 13, padding: 32 }}>Loading…</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#94A3B8", fontSize: 13, padding: 32 }}>No canned responses found</div>
+            ) : filtered.map(r => (
+              <div key={r.id} style={sc_styles.cannedCard}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                  <div>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>{r.title}</span>
+                    <span style={{ marginLeft: 8, fontSize: 11, background: "#EFF6FF", color: "#2563EB", padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>{r.category}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => deleteResponse(r.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626" }}>🗑</button>
+                  </div>
+                </div>
+                <p style={{ fontSize: 12, color: "#64748B", margin: 0, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box" as any, WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any }}>{r.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={sc_styles.editorCard}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#64748B", marginBottom: 14, textTransform: "uppercase", letterSpacing: "0.06em" }}>{editing !== null ? "Edit Response" : "New Response"}</div>
+          <label style={sc_styles.label}>Title</label>
+          <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Billing Refund" style={sc_styles.input} />
+          <label style={{ ...sc_styles.label, marginTop: 10 }}>Category</label>
+          <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={sc_styles.select}>
+            {["General", "Billing", "Technical", "Escalation", "Advisory", "Compliance"].map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <label style={{ ...sc_styles.label, marginTop: 10 }}>Body</label>
+          <textarea value={form.body} onChange={e => setForm({ ...form, body: e.target.value })} rows={6} placeholder="Use #{ticket_id}, #{user_name}" style={{ ...sc_styles.input, resize: "vertical" as any }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button onClick={save} style={{ ...sc_styles.primaryBtn, flex: 1 }}>{editing !== null ? "Save Changes" : "Create"}</button>
+          </div>
+        </div>
+      </div>
+      {toast && <MiniToast msg={toast} />}
+    </div>
+  );
+};
+
+// ── 3. Categories & Priorities ─────────────────────────────────────────────
+interface TicketCategory { id: number; name: string; color: string; icon: string; slaOverride: number | null; defaultPriority: string; }
+
+const CategoriesConfig: React.FC<{}> = () => {
+  const [cats, setCats] = useState<TicketCategory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newCat, setNewCat] = useState({ name: "", color: "#2563EB", icon: "📌", slaOverride: "", defaultPriority: "MEDIUM" });
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
+  const PRIOS = ["LOW", "MEDIUM", "HIGH", "URGENT", "CRITICAL"];
+
+  useEffect(() => {
+    setLoading(true);
+    getTicketCategories()
+      .then(arr => setCats(arr.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        color: c.color || "#2563EB",
+        icon: c.icon || "📌",
+        slaOverride: c.slaOverride ?? null,
+        defaultPriority: c.defaultPriority || "MEDIUM",
+      }))))
+      .catch(() => showToast("Failed to load categories"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const updateCat = (id: number, changes: Partial<TicketCategory>) => {
+    // No PUT endpoint — optimistic local update only
+    setCats(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
+  };
+
+  const deleteCat = async (id: number) => {
+    try {
+      // Backend exposes PATCH /:id/toggle (no DELETE endpoint)
+      await toggleTicketCategory(id);
+      setCats(p => p.filter(x => x.id !== id));
+      showToast("Category toggled/removed");
+    } catch { showToast("Toggle failed"); }
+  };
+
+  const addCat = async () => {
+    if (!newCat.name.trim()) return;
+    try {
+      // POST expects { name, description } per AdminConfigController
+      const created = await createTicketCategory({ name: newCat.name, description: newCat.defaultPriority });
+      setCats(p => [...p, {
+        id: created.id ?? Date.now(),
+        name: newCat.name,
+        color: newCat.color,
+        icon: newCat.icon,
+        slaOverride: newCat.slaOverride ? Number(newCat.slaOverride) : null,
+        defaultPriority: newCat.defaultPriority,
+      }]);
+      setNewCat({ name: "", color: "#2563EB", icon: "📌", slaOverride: "", defaultPriority: "MEDIUM" });
+      showToast("Category added");
+    } catch (e: any) { showToast(e?.message || "Failed to add category"); }
+  };
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Categories & Priorities</h3>
+          <p style={sc_styles.panelSub}>Configure categories, default priorities, and per-category SLA overrides</p>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 28 }}>
+        <div style={sc_styles.sectionLabel}>Global SLA Targets (hours)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+          {PRIOS.map(p => {
+            const pc = CFG_PRIORITY_CFG[p];
+            return (
+              <div key={p} style={{ background: pc.bg, border: `1px solid ${pc.color}33`, borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: pc.color }}>{p}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
+                  <input type="number" defaultValue={CFG_SLA_HOURS[p]} min={1} max={168}
+                    style={{ width: 52, padding: "4px 6px", border: `1px solid ${pc.color}44`, borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "#fff", color: "#0F172A", outline: "none" }} />
+                  <span style={{ fontSize: 11, color: pc.color, fontWeight: 600 }}>h</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={sc_styles.sectionLabel}>Ticket Categories</div>
+      <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 130px 120px 80px", padding: "10px 16px", background: "#F8FAFC", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <div>Icon</div><div>Category</div><div>Color</div><div>Default Priority</div><div>SLA Override</div><div></div>
+        </div>
+        {loading ? (
+          <div style={{ textAlign: "center", color: "#94A3B8", fontSize: 13, padding: 24 }}>Loading…</div>
+        ) : cats.map((c, i) => (
+          <div key={c.id} style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 130px 120px 80px", padding: "12px 16px", borderTop: i > 0 ? "1px solid #F8FAFC" : "none", alignItems: "center" }}>
+            <span style={{ fontSize: 18 }}>{c.icon}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{c.name}</span>
+            <div style={{ width: 24, height: 24, borderRadius: "50%", background: c.color, border: "2px solid #E2E8F0" }} />
+            <select value={c.defaultPriority} onChange={e => updateCat(c.id, { defaultPriority: e.target.value })} style={{ ...sc_styles.select, fontSize: 11, padding: "4px 8px" }}>
+              {PRIOS.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <input type="number" value={c.slaOverride ?? ""} onChange={e => updateCat(c.id, { slaOverride: e.target.value ? Number(e.target.value) : null })}
+              placeholder="Global" style={{ ...sc_styles.input, fontSize: 11, padding: "4px 8px", width: 80, fontFamily: "monospace" }} />
+            <button onClick={() => deleteCat(c.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626" }}>🗑</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...sc_styles.editorCard, display: "grid", gridTemplateColumns: "60px 1fr 80px 130px 100px auto", gap: 10, alignItems: "flex-end" }}>
+        <div><label style={sc_styles.label}>Icon</label><input value={newCat.icon} onChange={e => setNewCat({ ...newCat, icon: e.target.value })} style={{ ...sc_styles.input, textAlign: "center", fontSize: 18 }} /></div>
+        <div><label style={sc_styles.label}>Name</label><input value={newCat.name} onChange={e => setNewCat({ ...newCat, name: e.target.value })} placeholder="Category name" style={sc_styles.input} /></div>
+        <div><label style={sc_styles.label}>Color</label><input type="color" value={newCat.color} onChange={e => setNewCat({ ...newCat, color: e.target.value })} style={{ width: "100%", height: 36, border: "1.5px solid #E2E8F0", borderRadius: 8, cursor: "pointer", padding: 2 }} /></div>
+        <div><label style={sc_styles.label}>Priority</label>
+          <select value={newCat.defaultPriority} onChange={e => setNewCat({ ...newCat, defaultPriority: e.target.value })} style={sc_styles.select}>
+            {PRIOS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div><label style={sc_styles.label}>SLA (h)</label><input type="number" value={newCat.slaOverride} onChange={e => setNewCat({ ...newCat, slaOverride: e.target.value })} placeholder="—" style={{ ...sc_styles.input, fontFamily: "monospace" }} /></div>
+        <button onClick={addCat} style={{ ...sc_styles.primaryBtn, alignSelf: "flex-end" }}>+ Add</button>
+      </div>
+      {toast && <MiniToast msg={toast} />}
+    </div>
+  );
+};
+
+// ── 4. Reports & Analytics ─────────────────────────────────────────────────
+const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
+  const [range, setRange] = useState("7d");
+
+  const total = tickets.length;
+  const resolved = tickets.filter(t => t.status === "RESOLVED").length;
+  const breached = tickets.filter(cfgIsSlaBreached).length;
+  const escalated = tickets.filter(t => t.status === "ESCALATED" || t.isEscalated).length;
+  const resTimes = tickets.map(cfgCalcResolution).filter((x): x is number => x !== null);
+  const respTimes = tickets.map(cfgCalcResponse).filter((x): x is number => x !== null);
+  const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "—";
+  const avgResp = respTimes.length ? Math.round(respTimes.reduce((a, b) => a + b, 0) / respTimes.length) : "—";
+
+  const catCounts: Record<string, number> = {};
+  tickets.forEach(t => { catCounts[t.category] = (catCounts[t.category] || 0) + 1; });
+  const catMax = Math.max(...Object.values(catCounts), 1);
+
+  const priCounts: Record<string, number> = {};
+  tickets.forEach(t => { priCounts[t.priority] = (priCounts[t.priority] || 0) + 1; });
+
+  const agentStats: Record<string, { assigned: number; resolved: number; totalRes: number; resCount: number }> = {};
+  tickets.forEach(t => {
+    const name = t.agentName || t.consultantName;
+    if (name) {
+      if (!agentStats[name]) agentStats[name] = { assigned: 0, resolved: 0, totalRes: 0, resCount: 0 };
+      agentStats[name].assigned++;
+      if (t.status === "RESOLVED") {
+        agentStats[name].resolved++;
+        const rt = cfgCalcResolution(t);
+        if (rt) { agentStats[name].totalRes += rt; agentStats[name].resCount++; }
+      }
+    }
+  });
+
+  const kpis = [
+    { label: "Total Tickets", value: total, color: "#2563EB", icon: "🎫" },
+    { label: "Resolved", value: resolved, color: "#16A34A", icon: "✅", sub: `${total ? Math.round(resolved / total * 100) : 0}% rate` },
+    { label: "SLA Breaches", value: breached, color: "#DC2626", icon: "🚨" },
+    { label: "Escalated", value: escalated, color: "#D97706", icon: "⬆️" },
+    { label: "Avg First Response", value: avgResp === "—" ? "—" : `${avgResp}m`, color: "#7C3AED", icon: "⚡" },
+    { label: "Avg Resolution", value: avgRes === "—" ? "—" : `${avgRes}h`, color: "#059669", icon: "⏱️" },
+  ];
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Reports & Analytics</h3>
+          <p style={sc_styles.panelSub}>Response time, resolution time, SLA compliance, agent performance</p>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["7d", "30d", "90d"] as const).map(r => (
+            <button key={r} onClick={() => setRange(r)} style={{ ...sc_styles.filterPill, ...(range === r ? sc_styles.filterPillActive : {}) }}>{r}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12, marginBottom: 24 }}>
+        {kpis.map(k => (
+          <div key={k.label} style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+            <div style={{ fontSize: 20, marginBottom: 6 }}>{k.icon}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: k.color, fontFamily: "monospace" }}>{k.value}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 2 }}>{k.label}</div>
+            {k.sub && <div style={{ fontSize: 10, color: k.color, marginTop: 2 }}>{k.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+        <div style={sc_styles.chartCard}>
+          <div style={sc_styles.chartTitle}>By Category</div>
+          {Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
+            <div key={cat} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, marginBottom: 4, fontWeight: 600, color: "#374151" }}>{cat}</div>
+              <MiniBar val={count} max={catMax} color="#2563EB" />
+            </div>
+          ))}
+          {Object.keys(catCounts).length === 0 && <div style={{ color: "#94A3B8", fontSize: 12 }}>No data yet.</div>}
+        </div>
+        <div style={sc_styles.chartCard}>
+          <div style={sc_styles.chartTitle}>By Priority</div>
+          {Object.entries(priCounts).map(([p, count]) => {
+            const pc = CFG_PRIORITY_CFG[p] || CFG_PRIORITY_CFG.MEDIUM;
+            return (
+              <div key={p} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: pc.color, marginBottom: 4 }}>{p}</div>
+                <MiniBar val={count} max={total} color={pc.color} />
+              </div>
+            );
+          })}
+        </div>
+        <div style={sc_styles.chartCard}>
+          <div style={sc_styles.chartTitle}>Agent Performance</div>
+          {Object.keys(agentStats).length === 0 && <div style={{ color: "#94A3B8", fontSize: 12 }}>No assigned tickets yet.</div>}
+          {Object.entries(agentStats).map(([agent, s]) => (
+            <div key={agent} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #F1F5F9" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{agent}</div>
+              <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#64748B" }}>
+                <span>📥 {s.assigned}</span><span>✅ {s.resolved}</span>
+              </div>
+              {s.resCount > 0 && <div style={{ fontSize: 11, color: "#059669", marginTop: 2 }}>⏱ Avg {(s.totalRes / s.resCount).toFixed(1)}h</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ ...sc_styles.chartCard, marginTop: 16 }}>
+        <div style={sc_styles.chartTitle}>🚨 SLA Breach Details</div>
+        {tickets.filter(cfgIsSlaBreached).length === 0
+          ? <div style={{ color: "#16A34A", fontSize: 12, fontWeight: 600 }}>✅ No SLA breaches currently!</div>
+          : tickets.filter(cfgIsSlaBreached).map(t => {
+            const h = cfgHoursAgo(t.createdAt);
+            const overdue = h !== null ? h - (CFG_SLA_HOURS[t.priority] || 24) : 0;
+            const pc = CFG_PRIORITY_CFG[t.priority] || CFG_PRIORITY_CFG.MEDIUM;
+            return (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 8 }}>
+                <span style={{ fontFamily: "monospace", fontSize: 12, color: "#DC2626", fontWeight: 700 }}>#{t.id}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{t.title || t.category}</span>
+                <span style={{ fontSize: 11, color: "#DC2626" }}>Overdue {overdue}h</span>
+                <span style={{ ...sc_styles.badge, background: pc.bg, color: pc.color }}>{t.priority}</span>
+                <span style={{ fontSize: 11, color: "#64748B" }}>{t.agentName || t.consultantName || "Unassigned"}</span>
+              </div>
+            );
+          })}
+      </div>
+    </div>
+  );
+};
+
+// ── 5. Business Hours & Auto-Responders ───────────────────────────────────
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DAY_TO_JAVA: Record<string, string> = {
+  Monday: "MONDAY", Tuesday: "TUESDAY", Wednesday: "WEDNESDAY",
+  Thursday: "THURSDAY", Friday: "FRIDAY", Saturday: "SATURDAY", Sunday: "SUNDAY",
+};
+
+interface BusinessHour { day: string; enabled: boolean; start: string; end: string; }
+interface Holiday { id: number; name: string; date: string; }
+
+const BusinessSettings: React.FC<{}> = () => {
+  const DEFAULT_HOURS: BusinessHour[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    .map((d, i) => ({ day: d, enabled: i < 5, start: "09:00", end: "18:00" }));
+
+  const [hours, setHours] = useState<BusinessHour[]>(DEFAULT_HOURS);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [newHoliday, setNewHoliday] = useState({ name: "", date: "" });
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
+
+  // ── Load from real backend on mount ─────────────────────────────────────
+  const [loadingInit, setLoadingInit] = useState(true);
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [autoMessage, setAutoMessage] = useState("Thank you for reaching out! We will review your ticket shortly.");
+
+  useEffect(() => {
+    (async () => {
+      setLoadingInit(true);
+      try {
+        const bhData = await getBusinessHours();
+        if (bhData.length > 0) {
+          setHours(DAYS.map(d => {
+            const found = bhData.find((b: any) => b.dayOfWeek === DAY_TO_JAVA[d]);
+            return found
+              ? { day: d, enabled: found.isWorkingDay, start: parseLocalTime(found.startTime) || "09:00", end: parseLocalTime(found.endTime) || "18:00" }
+              : DEFAULT_HOURS.find(x => x.day === d)!;
+          }));
+        }
+      } catch { /* use defaults */ }
+      try {
+        const hData = await getHolidays();
+        setHolidays(hData.map((h: any) => ({ id: h.id, name: h.name, date: h.holidayDate })));
+      } catch { /* non-fatal */ }
+      try {
+        const arData = await getAutoResponder();
+        setAutoEnabled(arData.enabled);
+        if (arData.message) setAutoMessage(arData.message);
+      } catch { /* non-fatal */ }
+      setLoadingInit(false);
+    })();
+  }, []);
+
+  const saveAll = async () => {
+    setSaving(true);
+    let saved = 0, failed = 0;
+    try {
+      await updateBusinessHours(hours.map(h => ({
+        dayOfWeek: DAY_TO_JAVA[h.day], startTime: h.start + ":00",
+        endTime: h.end + ":00", workingDay: h.enabled,
+      })));
+      saved++;
+    } catch { failed++; }
+    try {
+      await updateAutoResponder({ enabled: autoEnabled, message: autoMessage });
+      saved++;
+    } catch { failed++; }
+    setSaving(false);
+    showToast(failed === 0 ? "Settings saved" : `${saved} saved, ${failed} failed`);
+  };
+
+  const addHoliday = async () => {
+    if (!newHoliday.name || !newHoliday.date) return;
+    try {
+      const created = await apiAddHoliday({ name: newHoliday.name, holidayDate: newHoliday.date });
+      setHolidays(p => [...p, { id: created.id, name: created.name, date: created.holidayDate }]);
+      setNewHoliday({ name: "", date: "" });
+      showToast("Holiday added");
+    } catch { showToast("Failed to add holiday"); }
+  };
+
+  const deleteHoliday = async (id: number) => {
+    try {
+      await apiDeleteHoliday(id);
+      setHolidays(p => p.filter(x => x.id !== id));
+      showToast("Holiday removed");
+    } catch { showToast("Failed to remove holiday"); }
+  };
+
+  const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
+    <label style={{ position: "relative", display: "inline-block", width: 44, height: 24, cursor: "pointer", flexShrink: 0 }}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+      <span style={{ position: "absolute", inset: 0, background: checked ? "#2563EB" : "#CBD5E1", borderRadius: 24, transition: "0.2s" }}>
+        <span style={{ position: "absolute", left: checked ? 22 : 2, top: 2, width: 20, height: 20, background: "#fff", borderRadius: "50%", transition: "0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+      </span>
+    </label>
+  );
+
+  if (loadingInit) {
+    return (
+      <div style={{ textAlign: "center", padding: 48, color: "#94A3B8" }}>
+        <div style={{ width: 28, height: 28, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
+        Loading settings...
+      </div>
+    );
+  }
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      {/* Header */}
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Business Hours & Auto-Responders</h3>
+          <p style={sc_styles.panelSub}>Define when your team is available and set automated replies for off-hours</p>
+        </div>
+        <button onClick={saveAll} disabled={saving}
+          style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
+          {saving ? "Saving..." : "Save All Settings"}
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 24, alignItems: "start" }}>
+
+        {/* Left — Weekly Schedule */}
+        <div>
+          <div style={sc_styles.sectionLabel}>Weekly Schedule</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {hours.map((h, i) => (
+              <div key={h.day} style={{
+                display: "flex", alignItems: "center", gap: 16,
+                padding: "14px 18px", background: "#fff",
+                border: "1px solid " + (h.enabled ? "#E2E8F0" : "#F1F5F9"),
+                borderRadius: 12, opacity: h.enabled ? 1 : 0.6,
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: h.enabled ? "#0F172A" : "#94A3B8", width: 90 }}>{h.day}</span>
+                <Toggle checked={h.enabled} onChange={v => setHours(p => p.map((x, j) => j === i ? { ...x, enabled: v } : x))} />
+                {h.enabled ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1 }}>
+                    <input type="time" value={h.start}
+                      onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, start: e.target.value } : x))}
+                      style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
+                    <span style={{ color: "#94A3B8", fontSize: 12, fontWeight: 500 }}>to</span>
+                    <input type="time" value={h.end}
+                      onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, end: e.target.value } : x))}
+                      style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12, color: "#CBD5E1", fontStyle: "italic", flex: 1 }}>Closed</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right column — Auto-Responder + Holidays stacked */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+          {/* Auto-Responder panel — PUT /api/system/auto-responder */}
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: autoEnabled ? 14 : 0 }}>
+              <div style={sc_styles.sectionLabel} >Auto-Responder</div>
+              <Toggle checked={autoEnabled} onChange={v => { setAutoEnabled(v); }} />
+            </div>
+            {autoEnabled && (
+              <>
+                <textarea
+                  value={autoMessage}
+                  onChange={e => setAutoMessage(e.target.value)}
+                  rows={4}
+                  style={{ ...sc_styles.input, resize: "vertical" as any, fontSize: 12, lineHeight: 1.5 }}
+                  placeholder="Thank you for reaching out! We will review your ticket shortly."
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await updateAutoResponder({ enabled: autoEnabled, message: autoMessage });
+                        showToast("Auto-responder saved");
+                      } catch { showToast("Failed to save auto-responder"); }
+                    }}
+                    style={{ ...sc_styles.primaryBtn, fontSize: 12, padding: "6px 14px" }}>
+                    Save
+                  </button>
+                  <span style={{ fontSize: 11, color: "#94A3B8" }}>Sent automatically to new tickets outside business hours.</span>
+                </div>
+              </>
+            )}
+            {!autoEnabled && (
+              <p style={{ fontSize: 12, color: "#94A3B8", margin: "10px 0 0", fontStyle: "italic" }}>
+                Enable to send an automated reply when a new ticket is submitted.
+              </p>
+            )}
+          </div>
+
+          {/* Public Holidays — POST/DELETE /api/system/holidays */}
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
+            <div style={sc_styles.sectionLabel}>Public Holidays</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, minHeight: 32 }}>
+              {holidays.length === 0
+                ? <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic", textAlign: "center", padding: "8px 0" }}>No holidays added</div>
+                : holidays.map(h => (
+                  <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#F8FAFC", borderRadius: 8 }}>
+                    <span style={{ fontSize: 14 }}>🗓</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{h.name}</div>
+                      <div style={{ fontSize: 11, color: "#94A3B8", fontFamily: "monospace" }}>{h.date}</div>
+                    </div>
+                    <button onClick={() => deleteHoliday(h.id)}
+                      style={{ ...sc_styles.iconBtn, color: "#DC2626", fontSize: 13 }}>✕</button>
+                  </div>
+                ))
+              }
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6, alignItems: "center" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Name</div>
+                  <input value={newHoliday.name}
+                    onChange={e => setNewHoliday({ ...newHoliday, name: e.target.value })}
+                    placeholder="Diwali"
+                    style={{ ...sc_styles.input, fontSize: 12 }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Date</div>
+                  <input type="date" value={newHoliday.date}
+                    onChange={e => setNewHoliday({ ...newHoliday, date: e.target.value })}
+                    style={{ ...sc_styles.input, fontSize: 12, fontFamily: "monospace" }} />
+                </div>
+              </div>
+              <button onClick={addHoliday}
+                style={{ ...sc_styles.primaryBtn, alignSelf: "flex-end", padding: "7px 14px", fontSize: 13 }}>+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {toast && <MiniToast msg={toast} />}
+    </div>
+  );
+};
+
+// ── Support Config root (tabbed) ───────────────────────────────────────────
+type ConfigTab = "canned" | "categories" | "reports" | "bizHours";
+
+interface SupportConfigProps {
+  tickets: Ticket[];
+  advisors: Advisor[];
+  onAssign: (ticketId: number, agentName: string) => void;
+}
+
+const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
+  { id: "canned", label: "Canned Responses", icon: "💬" },
+  { id: "categories", label: "Categories", icon: "🏷️" },
+  { id: "reports", label: "Reports", icon: "📊" },
+  { id: "bizHours", label: "Business Hours", icon: "⏰" },
+];
+
+const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, onAssign }) => {
+  const [tab, setTab] = useState<ConfigTab>("canned");
+
+  const handleAssign = (ticketId: number, agent: AgentInfo) => onAssign(ticketId, agent.name);
+
+  return (
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Support Configuration</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#64748B" }}>Manage canned responses, categories, analytics, and business hours</p>
+      </div>
+
+      {/* Sub-tabs */}
+      <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", marginBottom: 24 }}>
+        <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", overflowX: "auto" }}>
+          {SUPPORT_CONFIG_TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{ padding: "13px 20px", border: "none", background: "none", cursor: "pointer", fontSize: 13, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? "#2563EB" : "#64748B", borderBottom: tab === t.id ? "2px solid #2563EB" : "2px solid transparent", display: "flex", alignItems: "center", gap: 7, transition: "all 0.15s", whiteSpace: "nowrap", fontFamily: "inherit" }}>
+              <span>{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding: "24px" }}>
+          {tab === "canned" && <CannedResponses />}
+          {tab === "categories" && <CategoriesConfig />}
+          {tab === "reports" && <ReportsAnalytics tickets={tickets} />}
+          {tab === "bizHours" && <BusinessSettings />}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INNER ADMIN PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+function AdminPageInner() {
+  const navigate = useNavigate();
+  const { addNotification } = useNotifications();
+
+  const [activeSection, setActiveSection] = useState<AdminSectionType>("dashboard");
+  const [showModal, setShowModal] = useState(false);
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
+  const [dashBookings, setDashBookings] = useState<any[]>([]);
+  const [totalBookingsCount, setTotalBookingsCount] = useState(0);
+  const [totalRevenue, setTotalRevenue] = useState(0);
+  const [ticketCount, setTicketCount] = useState(0);
+  const [allTickets, setAllTickets] = useState<Ticket[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<"online" | "offline" | "error" | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [bookingChartData, setBookingChartData] = useState<{ day: string; bookings: number }[]>([
+    { day: "Mon", bookings: 0 }, { day: "Tue", bookings: 0 }, { day: "Wed", bookings: 0 },
+    { day: "Thu", bookings: 0 }, { day: "Fri", bookings: 0 }, { day: "Sat", bookings: 0 }, { day: "Sun", bookings: 0 },
+  ]);
+
+  const currentAdminId = Number(localStorage.getItem("fin_user_id") ?? 0);
+
+  useEffect(() => { debugToken(); }, []);
+
+  const extractUserName = (b: any): string =>
+    b.user?.name || b.user?.username || b.user?.fullName ||
+    b.user?.firstName || b.client?.name || b.bookedBy?.name ||
+    b.customer?.name || b.userName || b.clientName ||
+    b.userFullName || b.bookedByName ||
+    (b.user?.email ? b.user.email.split("@")[0] : null) ||
+    (b.userId ? `User #${b.userId}` : null) ||
+    (b.clientId ? `User #${b.clientId}` : null) ||
+    `User #${b.id}`;
+
+  const fetchDashboardData = async () => {
+    setLoading(true);
+
+    // ── Consultants ──────────────────────────────────────────────────────────
+    try {
+      const advData = await getAllAdvisors();
+      if (Array.isArray(advData) && advData.length > 0) {
+        setAdvisors(advData.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          role: a.designation || "Financial Consultant",
+          tags: Array.isArray(a.skills) ? a.skills : [],
+          rating: Number(a.rating || 4.5),
+          reviews: Number(a.reviewCount || 0),
+          fee: Number(a.charges || 0),
+          exp: a.experience || "5+ Years",
+          shiftStartTime: parseLocalTime(a.shiftStartTime),
+          shiftEndTime: parseLocalTime(a.shiftEndTime),
+          avatar:
+            a.profilePhoto || a.photo || a.avatarUrl ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
+        })));
+        setBackendStatus("online");
+      }
+    } catch (err: any) {
+      console.error("[Admin] Consultants failed:", err?.message);
+      setBackendStatus(err?.message?.includes("403") ? "error" : "offline");
+    }
+
+    // ── Bookings ─────────────────────────────────────────────────────────────
+    try {
+      const bookingsArr: any[] = await getAllBookings();
+      if (bookingsArr.length > 0) {
+        const masterMap: Record<number, string> = {};
+        try {
+          const mData = await apiFetch("/master-timeslots");
+          (Array.isArray(mData) ? mData : mData?.content || [])
+            .forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
+        } catch { }
+
+        const uniqueSlotIds = [...new Set(bookingsArr.map((b: any) => b.timeSlotId).filter(Boolean))] as number[];
+        const slotMap: Record<number, any> = {};
+        await Promise.all(uniqueSlotIds.map(id =>
+          apiFetch(`/timeslots/${id}`).then(s => { slotMap[id] = s; }).catch(() => { })
+        ));
+
+        const uniqueConsultantIds = [...new Set(bookingsArr.map((b: any) => b.consultantId).filter(Boolean))] as number[];
+        const consultantNameMap: Record<number, string> = {};
+        await Promise.all(uniqueConsultantIds.map(id =>
+          apiFetch(`/consultants/${id}`)
+            .then(c => {
+              consultantNameMap[id] = c?.name || c?.username || `Consultant #${id}`;
+            })
+            .catch(() => {
+              consultantNameMap[id] = `Deleted Consultant (#${id})`;
+            })
+        ));
+
+        const mapped = bookingsArr.map((b: any) => {
+          const slot = slotMap[b.timeSlotId];
+          const slotDate = slot?.slotDate || b.slotDate || b.bookingDate || b.date || "N/A";
+          const slotTime = slot?.slotTime || b.slotTime || b.bookingTime || "";
+          const masterKey = slot?.masterTimeSlotId || slot?.masterSlotId;
+          const timeRange = (masterKey && masterMap[masterKey]) || b.timeRange || (slotTime ? slotTime.substring(0, 5) : "N/A");
+
+          // Use the consultantNameMap which now contains safety fallbacks
+          const advisorName = b.consultant?.name || b.consultantName || consultantNameMap[b.consultantId] || `Deleted Consultant (#${b.consultantId})`;
+
+          return {
+            id: b.id,
+            user: extractUserName(b),
+            advisor: advisorName,
+            time: `${slotDate} • ${timeRange}`,
+            status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(),
+            amount: Number(b.amount || b.charges || b.fee || 0),
+          };
+        });
+
+        setTotalBookingsCount(mapped.length);
+        setTotalRevenue(mapped.filter(b => b.status === "COMPLETED").reduce((s: number, b: any) => s + b.amount, 0));
+        setDashBookings(mapped.slice(0, 5));
+
+        // Build real booking chart data from actual bookings (doc4 improvement)
+        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const dayCounts: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+        bookingsArr.forEach((b: any) => {
+          const raw = b.slotDate || b.bookingDate || b.date || b.createdAt;
+          if (raw) { const d = new Date(raw); if (!isNaN(d.getTime())) { const k = dayNames[d.getDay()]; dayCounts[k] = (dayCounts[k] || 0) + 1; } }
+        });
+        setBookingChartData([
+          { day: "Mon", bookings: dayCounts.Mon }, { day: "Tue", bookings: dayCounts.Tue },
+          { day: "Wed", bookings: dayCounts.Wed }, { day: "Thu", bookings: dayCounts.Thu },
+          { day: "Fri", bookings: dayCounts.Fri }, { day: "Sat", bookings: dayCounts.Sat },
+          { day: "Sun", bookings: dayCounts.Sun },
+        ]);
+      }
+    } catch (err: any) {
+      console.warn("[Admin] Bookings failed (non-fatal):", err?.message);
+    }
+
+    // ── Tickets ──────────────────────────────────────────────────────────────
+    try {
+      const tdata = await getAllTickets();
+      const tarr: Ticket[] = Array.isArray(tdata) ? tdata : extractArray(tdata);
+      setTicketCount(tarr.filter((t: any) => ["NEW", "OPEN", "IN_PROGRESS", "PENDING"].includes(t.status)).length);
+      setAllTickets(tarr);
+    } catch (err) {
+      console.warn("[Admin] Tickets failed (non-fatal):", err);
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchDashboardData(); }, []);
+
+  const handleDeleteAdvisor = async (id: number) => {
+    if (!window.confirm("Delete this consultant?")) return;
+    setDeletingId(id);
+    try { await deleteAdvisor(id); fetchDashboardData(); }
+    catch { alert("Failed to delete consultant"); }
+    finally { setDeletingId(null); }
+  };
+
+  // Handle assignment from SupportConfigPanel
+  const handleSupportAssign = (ticketId: number, agentName: string) => {
+    setAllTickets(prev => prev.map(t => t.id === ticketId ? { ...t, agentName, status: "OPEN" as TicketStatus } : t));
+    addNotification({ type: "success", title: `Ticket #${ticketId} Assigned`, message: `Assigned to ${agentName}.`, ticketId });
+  };
+
+  const handleNavClick = (id: AdminSectionType) => {
+    setActiveSection(id);
+    setIsMobileMenuOpen(false);
+  };
+
+  const navItems: { id: AdminSectionType; label: string; icon: React.ReactNode; badge?: number }[] = [
+    {
+      id: "dashboard", label: "Dashboard",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /></svg>,
+    },
+    {
+      id: "advisors", label: "Consultants",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
+    },
+    {
+      id: "bookings", label: "Bookings",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
+      badge: totalBookingsCount,
+    },
+    {
+      id: "tickets", label: "Tickets",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>,
+      badge: ticketCount,
+    },
+    {
+      id: "analytics", label: "Analytics",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M3 3v18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M7 16l4-4 4 4 4-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>,
+    },
+    {
+      id: "summary", label: "Reports",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
+    },
+    {
+      id: "support-config", label: "Support Config",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
+    },
+    {
+      id: "settings", label: "Settings",
+      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg>,
+    },
+  ];
+
+  const stats = [
+    { label: "TOTAL BOOKINGS", value: loading ? "…" : String(totalBookingsCount), change: "+12.5%", positive: true, color: "#2563EB", bg: "#EFF6FF" },
+    { label: "ACTIVE CONSULTANTS", value: loading ? "…" : String(advisors.length), change: "+2", positive: true, color: "#7C3AED", bg: "#F5F3FF" },
+    { label: "TOTAL REVENUE", value: loading ? "…" : `₹${totalRevenue.toLocaleString()}`, change: "+8.2%", positive: true, color: "#059669", bg: "#F0FDF4" },
+  ];
+
+  const consultantNameMap: Record<number, string> = {};
+  advisors.forEach(a => { consultantNameMap[a.id] = a.name; });
+
+  return (
+    <div className={styles.page}>
+      <ToastContainer />
+
+      {showModal && <AddAdvisor onClose={() => setShowModal(false)} onSave={() => { fetchDashboardData(); setShowModal(false); }} />}
+      {isMobileMenuOpen && <div className={styles.mobileOverlay} onClick={() => setIsMobileMenuOpen(false)} />}
+
+      {/* Sidebar */}
+      <div className={`${styles.sidebar} ${isMobileMenuOpen ? styles.sidebarOpen : ""}`}>
+        <div className={styles.sidebarLogo}>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <span className={styles.logoText}>FINADVISE</span>
+            <span className={styles.adminBadge}>ADMIN</span>
+          </div>
+          <button className={styles.closeMenuBtn} onClick={() => setIsMobileMenuOpen(false)}>×</button>
+        </div>
+        <nav className={styles.nav}>
+          {navItems.map(n => (
+            <button key={n.id} onClick={() => handleNavClick(n.id)}
+              className={`${styles.navBtn} ${activeSection === n.id ? styles.navBtnActive : ""}`}>
+              <span className={styles.navIcon}>{n.icon}</span>
+              {n.label}
+              {n.badge != null && n.badge > 0 && (
+                <span style={{
+                  marginLeft: "auto", background: n.id === "tickets" ? "#DC2626" : "#2563EB",
+                  color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700,
+                  padding: "1px 7px", minWidth: 18, textAlign: "center",
+                }}>{n.badge}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className={styles.sidebarBottom}>
+          <button onClick={() => navigate("/")} className={styles.sidebarActionBtn}>
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+              <path d="M19 12H5M5 12l7 7M5 12l7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Back to Login
+          </button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className={styles.main}>
+        <div className={styles.topBar}>
+          <button className={styles.hamburgerBtn} onClick={() => setIsMobileMenuOpen(true)}>
+            <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="#0F172A" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <div className={styles.searchWrapper}>
+            <svg className={styles.searchIcon} width="16" height="16" fill="none" viewBox="0 0 24 24">
+              <circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2" />
+              <path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input placeholder="Search..." className={styles.searchInput} />
+          </div>
+          <NotificationBell onTicketClick={() => setActiveSection("tickets")} />
+          <button className={styles.addBtn} onClick={() => setShowModal(true)}>+ Add New Consultant</button>
+        </div>
+
+        {backendStatus === "offline" && (
+          <div className={styles.alertWarning}>⚠️ Backend offline. Showing zero data. Please start the server.</div>
+        )}
+        {backendStatus === "error" && (
+          <div className={styles.alertWarning} style={{ background: "#FEF2F2", borderColor: "#FECACA", color: "#B91C1C" }}>
+            🚫 403 Forbidden — check the browser console for token debug info.
+          </div>
+        )}
+
+        {/* ════ DASHBOARD ════ */}
+        {activeSection === "dashboard" && (
+          <>
+            <div className={styles.statsGrid}>
+              {stats.map((s, i) => (
+                <div key={i} className={styles.statCard}>
+                  <div className={styles.statLabel}>{s.label}</div>
+                  <div className={styles.statRow}>
+                    <div>
+                      <div className={styles.statValue}>{s.value}</div>
+                      <div className={`${styles.statChange} ${s.positive ? styles.positive : styles.negative}`}>{s.change}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className={styles.chartGrid}>
+              <div className={styles.card}>
+                <h3 className={styles.cardTitle}>Bookings This Week</h3>
+                <div style={{ width: "100%", height: 200 }}>
+                  <ResponsiveContainer>
+                    {/* Uses real computed chart data (doc4 improvement) */}
+                    <BarChart data={bookingChartData}>
+                      <XAxis dataKey="day" stroke="#94A3B8" style={{ fontSize: 12 }} />
+                      <YAxis stroke="#94A3B8" style={{ fontSize: 12 }} />
+                      <Tooltip cursor={{ fill: "rgba(37,99,235,0.05)" }} />
+                      <Bar dataKey="bookings" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className={styles.card}>
+                <h3 className={styles.cardTitle}>Top Consultants</h3>
+                {advisors.slice(0, 3).map(a => (
+                  <div key={a.id} className={styles.advisorRow}>
+                    <img src={a.avatar} alt={a.name} className={styles.advisorAvatar} />
+                    <div>
+                      <div className={styles.advisorName}>{a.name}</div>
+                      <div className={styles.advisorRating}>★ {a.rating}
+                        {(a.shiftStartTime || a.shiftEndTime) && (
+                          <span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>{a.shiftStartTime} – {a.shiftEndTime}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {ticketCount > 0 && (
+              <div className={`${styles.card} ${styles.mt16}`}
+                style={{ background: "linear-gradient(135deg,#FEF2F2,#FFF7F7)", border: "1px solid #FECACA", cursor: "pointer" }}
+                onClick={() => setActiveSection("tickets")}>
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🎫</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: "#B91C1C" }}>{ticketCount} open ticket{ticketCount !== 1 ? "s" : ""} need attention</div>
+                    <div style={{ fontSize: 12, color: "#EF4444", marginTop: 2 }}>Click to view and manage all support tickets →</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className={`${styles.card} ${styles.mt16}`} style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "16px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 className={styles.cardTitle} style={{ margin: 0 }}>Ticket Analytics</h3>
+                <button onClick={() => setActiveSection("support-config")}
+                  style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>
+                  Full Reports →
+                </button>
+              </div>
+              <div style={{ padding: "8px 16px 16px" }}>
+                <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />
+              </div>
+            </div>
+
+            <div className={`${styles.card} ${styles.mt16}`}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <h3 className={styles.cardTitle} style={{ margin: 0 }}>Recent Bookings</h3>
+                <span style={{ background: "#EFF6FF", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 20, fontSize: 12, fontWeight: 700, padding: "3px 12px" }}>
+                  {loading ? "Loading…" : `${totalBookingsCount} total`}
+                </span>
+              </div>
+              <div className={styles.tableResponsive}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr className={styles.tableHead}>
+                      <td className={styles.th}>USER</td><td className={styles.th}>CONSULTANT</td>
+                      <td className={styles.th}>TIME</td><td className={styles.th}>STATUS</td>
+                      <td className={styles.th}>AMOUNT</td><td className={styles.th}></td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: "#94A3B8" }}>
+                        <div style={{ display: "inline-block", width: 20, height: 20, border: "2px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", marginRight: 8, verticalAlign: "middle" }} />
+                        Fetching bookings…
+                      </td></tr>
+                    ) : dashBookings.length > 0 ? dashBookings.map((b, i) => (
+                      <tr key={i} className={styles.tableRow}>
+                        <td className={styles.tdUser}>{b.user}</td>
+                        <td className={styles.tdAdvisor}>{b.advisor}</td>
+                        <td className={styles.tdTime}>{b.time}</td>
+                        <td><StatusBadge status={b.status} /></td>
+                        <td className={styles.tdAmount}>₹{b.amount.toLocaleString()}</td>
+                        <td className={styles.tdMore}>⋮</td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", color: "#94A3B8" }}>No bookings found.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {totalBookingsCount > 5 && (
+                <div style={{ textAlign: "center", padding: "12px 0 4px" }}>
+                  <button onClick={() => setActiveSection("bookings")}
+                    style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                    View all {totalBookingsCount} bookings →
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ════ CONSULTANTS ════ */}
+        {activeSection === "advisors" && (
+          <div>
+            <h2 className={styles.pageTitle}>Consultants {loading && "…"}</h2>
+            <div className={styles.advisorsGrid}>
+              {advisors.length > 0 ? advisors.map(a => (
+                <div key={a.id} className={styles.card}>
+                  <div className={styles.advisorCardRow}>
+                    <img src={a.avatar} alt={a.name} className={styles.advisorAvatarLg} />
+                    <div style={{ flex: 1 }}>
+                      <div className={styles.advisorNameLg}>{a.name}</div>
+                      <div className={styles.advisorRole}>{a.role}</div>
+                      {(a.shiftStartTime || a.shiftEndTime) && (
+                        <div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 {a.shiftStartTime} – {a.shiftEndTime}</div>
+                      )}
+                      <div className={styles.tagRow}>
+                        {a.tags.map(t => <span key={t} className={styles.tag}>{t}</span>)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={styles.advisorCardFooter}>
+                    <span>★ {a.rating} ({a.reviews})</span>
+                    <span className={styles.advisorFee}>₹{a.fee.toLocaleString()}</span>
+                  </div>
+                  <button onClick={() => handleDeleteAdvisor(a.id)} className={styles.deleteBtn} disabled={deletingId === a.id}>
+                    {deletingId === a.id ? "Deleting…" : "Delete Consultant"}
+                  </button>
+                </div>
+              )) : (
+                <div style={{ gridColumn: "1/-1", textAlign: "center", color: "#94A3B8", padding: 40 }}>No consultants found.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ════ BOOKINGS ════ */}
+        {activeSection === "bookings" && <BookingsPage isAdmin={true} />}
+
+        {/* ════ TICKETS ════ */}
+        {activeSection === "tickets" && (
+          <TicketsSection
+            consultants={advisors}
+            currentAdminId={currentAdminId}
+            onTicketsLoaded={(ts) => {
+              setAllTickets(ts);
+              setTicketCount(ts.filter(t => ["NEW", "OPEN", "IN_PROGRESS", "PENDING"].includes(t.status)).length);
+            }}
+          />
+        )}
+
+        {/* ════ ANALYTICS ════ */}
+        {activeSection === "analytics" && (
+          <AnalyticsDashboard tickets={allTickets} consultants={advisors} mode="admin" />
+        )}
+
+        {/* ════ REPORTS ════ */}
+        {activeSection === "summary" && (
+          <div>
+            <div style={{ marginBottom: 24 }}>
+              <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>📊 Ticket Reports & Analytics</h2>
+              <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>
+                Daily and weekly breakdowns of tickets by category, consultant, status, and priority.
+              </p>
+            </div>
+            {allTickets.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 20, color: "#94A3B8" }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No ticket data available yet</div>
+                <p style={{ margin: 0, fontSize: 13 }}>Navigate to the Tickets tab to load data, then come back here.</p>
+                <button onClick={() => setActiveSection("tickets")}
+                  style={{ marginTop: 16, padding: "10px 24px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+                  Go to Tickets →
+                </button>
+              </div>
+            ) : (
+              <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />
+            )}
+          </div>
+        )}
+
+        {/* ════ SUPPORT CONFIG ════ */}
+        {activeSection === "support-config" && (
+          <SupportConfigPanel
+            tickets={allTickets}
+            advisors={advisors}
+            onAssign={handleSupportAssign}
+          />
+        )}
+
+        {/* ════ SETTINGS ════ */}
+        {activeSection === "settings" && (
+          <div>
+            <h2 className={styles.pageTitle}>Settings</h2>
+            <div className={styles.card}>
+              {["General Profile", "Notifications", "Security", "Logout"].map(item => (
+                <div key={item} className={styles.settingsRow}>
+                  <span className={styles.settingsLabel}>{item}</span>
+                  <span>›</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORT — wrapped with NotificationProvider
+// ─────────────────────────────────────────────────────────────────────────────
+export default function AdminPage() {
+  return (
+    <NotificationProvider>
+      <AdminPageInner />
+    </NotificationProvider>
+  );
+}
