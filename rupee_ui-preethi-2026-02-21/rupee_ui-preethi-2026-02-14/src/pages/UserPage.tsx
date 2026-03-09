@@ -1261,7 +1261,14 @@ export default function UserPage() {
       await sendBookingEmails({ bookingId: newBookingId, slotDate: selectedDay.iso, timeRange: selectedSlot.label, meetingMode, amount: selectedConsultant.fee, userName: currentUser?.name || "Valued Client", userEmail: currentUser?.email || "", consultantName: selectedConsultant.name, consultantEmail, userNotes: userNotes || "" });
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
-      if (msg.includes("rollback") || msg.includes("already booked") || msg.includes("conflict") || msg.includes("409")) {
+      if (
+        msg.includes("rollback") ||
+        msg.includes("already booked") ||
+        msg.includes("conflict") ||
+        msg.includes("409") ||
+        msg.includes("no longer available") ||
+        msg.includes("slot is no longer available")
+      ) {
         showToast("⚠️ That slot is no longer available. Please choose another slot.");
         setBookedSlotSet(prev => {
           const next = new Set(prev);
