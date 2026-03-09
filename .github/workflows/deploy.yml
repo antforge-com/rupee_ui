@@ -1,0 +1,32 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - finadvice
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: rupee_ui-preethi-2026-02-21/rupee_ui-preethi-2026-02-14
+
+      - name: Build
+        run: npm run build
+        working-directory: rupee_ui-preethi-2026-02-21/rupee_ui-preethi-2026-02-14
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: rupee_ui-preethi-2026-02-21/rupee_ui-preethi-2026-02-14/dist
