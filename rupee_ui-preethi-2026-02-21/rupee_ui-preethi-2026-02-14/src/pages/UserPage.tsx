@@ -235,12 +235,6 @@ const slotTimeKeyFromRecord = (s: any): string => {
   }
   return normalise24(s?.timeRange || "");
 };
-const firstNonEmpty = (...values: any[]): string => {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-};
 const bookingSlotDate = (b: any, slotById?: Record<number, any>): string => {
   const candidates = [
     b?.slotDate,
@@ -967,15 +961,7 @@ export default function UserPage() {
       dbTimeslots.forEach((s: any) => {
         const st = (s.status || "").toUpperCase();
         if (st === "AVAILABLE" || st === "BOOKED") return;
-        const rawTime = (s as any).slotTime;
-        let timeKey = "";
-        if (typeof rawTime === "object" && rawTime?.hour !== undefined) {
-          timeKey = `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`;
-        } else if (typeof rawTime === "string" && rawTime.length >= 5) {
-          timeKey = rawTime.substring(0, 5);
-        } else {
-          timeKey = normalise24((s as any).timeRange || "");
-        }
+        const timeKey = slotTimeKeyFromRecord(s);
         if (s.slotDate === slotDate && timeKey) {
           unavailSet.add(`${s.slotDate}|${timeKey}`);
         }
@@ -1031,7 +1017,7 @@ export default function UserPage() {
       const mapped = bookingRows.map((b: any) => {
         const slotDetail = slotDetailMap[b.timeSlotId || b.timeslotId || b.slotId];
         const slotDate = slotDetail?.slotDate || b.bookingDate || b.slotDate || b.date || "";
-        const slotTime = (slotDetail?.slotTime || b.slotTime || "").substring(0, 5);
+        const slotTime = parseLocalTime(slotDetail?.slotTime || b.slotTime || "");
         const masterIdCandidates = [slotDetail?.masterTimeSlotId, b.masterTimeslotId, b.masterSlotId, b.timeSlotId].filter(v => v != null);
         let timeRange = "";
         for (const c of masterIdCandidates) { if (masterMap[String(c)]) { timeRange = masterMap[String(c)]; break; } }
@@ -1238,8 +1224,7 @@ const refreshSlotAvailability = async (consultantId: number) => {
       });
       allTimeSlots.forEach((s) => {
         if ((s.status || "").toUpperCase() !== "BOOKED") return;
-        const rawTime = (s as any).slotTime;
-        let timeKey = typeof rawTime === "object" && rawTime?.hour !== undefined ? `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}` : typeof rawTime === "string" && rawTime.length >= 5 ? rawTime.substring(0, 5) : normalise24((s as any).timeRange || "");
+        const timeKey = slotTimeKeyFromRecord(s);
         if (s.slotDate && timeKey) bSet.add(`${s.slotDate}|${timeKey}`);
       });
       setBookedSlotSet(bSet);
@@ -1247,13 +1232,7 @@ const refreshSlotAvailability = async (consultantId: number) => {
       allTimeSlots.forEach((s: any) => {
         const st = (s.status || "").toUpperCase();
         if (!["UNAVAILABLE", "BLOCKED", "DISABLED"].includes(st)) return;
-        const rawTime = (s as any).slotTime;
-        const timeKey =
-          typeof rawTime === "object" && rawTime?.hour !== undefined
-            ? `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`
-            : typeof rawTime === "string" && rawTime.length >= 5
-              ? rawTime.substring(0, 5)
-              : normalise24((s as any).timeRange || "");
+        const timeKey = slotTimeKeyFromRecord(s);
         if (s.slotDate && timeKey) unavailSet.add(`${s.slotDate}|${timeKey}`);
       });
       setUnavailSlotSet(unavailSet);
