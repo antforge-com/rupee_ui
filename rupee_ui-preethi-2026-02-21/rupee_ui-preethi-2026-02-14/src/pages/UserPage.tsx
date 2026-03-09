@@ -1044,7 +1044,7 @@ export default function UserPage() {
     finally { setLoading(p => ({ ...p, tickets: false })); }
   };
 
-const refreshSlotAvailability = async (consultantId: number) => {
+  const refreshSlotAvailability = async (consultantId: number): Promise<{ booked: Set<string>; unavailable: Set<string> }> => {
     const [bookingsRaw, tsWindowRaw, tsAllRaw] = await Promise.all([
       apiFetch(`${BASE_URL}/bookings/consultant/${consultantId}`).catch(() => []),
       apiFetch(`${BASE_URL}/timeslots/consultant/${consultantId}/window`).catch(() => []),
@@ -1089,6 +1089,7 @@ const refreshSlotAvailability = async (consultantId: number) => {
       if (s.slotDate && timeKey) nextUnavail.add(`${s.slotDate}|${timeKey}`);
     });
     setUnavailSlotSet(nextUnavail);
+    return { booked: nextBooked, unavailable: nextUnavail };
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1245,6 +1246,7 @@ const refreshSlotAvailability = async (consultantId: number) => {
     if (confirmingRef.current) return;
     const slot24 = selectedSlot.start24h;
     const slotKey = `${selectedDay.iso}|${slot24}`;
+    let shouldClearSelection = false;
     confirmingRef.current = true; setConfirming(true);
     try {
       const slotTimeFull = slot24.length === 5 ? `${slot24}:00` : slot24;
@@ -1341,30 +1343,31 @@ const refreshSlotAvailability = async (consultantId: number) => {
       fetchBookings();
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
-      if (
-        msg.includes("rollback") ||
+      const looksLikeConflict =
         msg.includes("already booked") ||
         msg.includes("conflict") ||
         msg.includes("409") ||
         msg.includes("no longer available") ||
-        msg.includes("slot is no longer available")
-      ) {
-        showToast("⚠️ That slot is no longer available. Please choose another slot.");
-        setBookedSlotSet(prev => {
-          const next = new Set(prev);
-          next.add(slotKey);
-          return next;
-        });
-        setSelectedSlot(null);
+        msg.includes("slot is no longer available");
+
+      if (looksLikeConflict) {
         try {
-          await refreshSlotAvailability(selectedConsultant.id);
+          const latest = await refreshSlotAvailability(selectedConsultant.id);
+          const trulyBooked = latest.booked.has(slotKey);
+          if (trulyBooked) {
+            showToast("⚠️ That slot is no longer available. Please choose another slot.");
+            shouldClearSelection = true;
+          } else {
+            showToast("❌ Booking was not completed. Please try again.");
+          }
         } catch {
-          // best-effort refresh; optimistic mark above still blocks stale slot
+          showToast("❌ Booking was not completed. Please try again.");
         }
       }
-      else if (msg.includes("500")) showToast("❌ Server error. Please try a different time slot.");
+      else if (msg.includes("rollback")) showToast("❌ Booking was not completed. Please try again.");
+      else if (msg.includes("500")) showToast("❌ Server error. Please try again.");
       else showToast(`❌ Booking failed: ${err.message}`);
-      setSelectedSlot(null);
+      if (shouldClearSelection) setSelectedSlot(null);
     } finally { confirmingRef.current = false; setConfirming(false); }
   };
 
