@@ -184,16 +184,54 @@ const parseLocalTime = (t: any): string => {
   if (!t) return "";
   if (typeof t === "object" && t.hour !== undefined)
     return `${String(t.hour).padStart(2, "0")}:${String(t.minute ?? 0).padStart(2, "0")}`;
-  if (typeof t === "string") return t.substring(0, 5);
+  if (typeof t === "string") {
+    const normalized = normalise24(t);
+    if (normalized) return normalized;
+    const hhmm = t.match(/(\d{1,2}):(\d{2})/);
+    if (hhmm) return `${String(parseInt(hhmm[1], 10)).padStart(2, "0")}:${hhmm[2]}`;
+  }
   return "";
 };
+
+const normalizeDateValue = (value: any): string => {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : "";
+  }
+  if (Array.isArray(value) && value.length >= 3) {
+    const [y, m, d] = value;
+    if ([y, m, d].every((v) => Number.isFinite(Number(v)))) {
+      return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+  if (typeof value === "object") {
+    const y = value.year;
+    const m = value.monthValue ?? value.month;
+    const d = value.dayOfMonth ?? value.day;
+    if ([y, m, d].every((v) => Number.isFinite(Number(v)))) {
+      return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    }
+  }
+  return "";
+};
+
+const bookingTimeSlotId = (b: any): number | null => {
+  const raw = b?.timeSlotId ?? b?.timeslotId ?? b?.slotId ?? b?.time_slot_id ?? b?.timeSlot?.id ?? b?.timeslot?.id ?? b?.slot?.id;
+  const idNum = Number(raw);
+  return Number.isFinite(idNum) && idNum > 0 ? idNum : null;
+};
+
 const slotTimeKeyFromRecord = (s: any): string => {
   const rawTime = s?.slotTime;
   if (typeof rawTime === "object" && rawTime?.hour !== undefined) {
     return `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`;
   }
-  if (typeof rawTime === "string" && rawTime.length >= 5) {
-    return rawTime.substring(0, 5);
+  if (typeof rawTime === "string") {
+    const normalized = normalise24(rawTime);
+    if (normalized) return normalized;
+    const hhmm = rawTime.match(/(\d{1,2}):(\d{2})/);
+    if (hhmm) return `${String(parseInt(hhmm[1], 10)).padStart(2, "0")}:${hhmm[2]}`;
   }
   return normalise24(s?.timeRange || "");
 };
@@ -203,8 +241,8 @@ const firstNonEmpty = (...values: any[]): string => {
   }
   return "";
 };
-const bookingSlotDate = (b: any): string =>
-  firstNonEmpty(
+const bookingSlotDate = (b: any, slotById?: Record<number, any>): string => {
+  const candidates = [
     b?.slotDate,
     b?.bookingDate,
     b?.date,
@@ -213,8 +251,18 @@ const bookingSlotDate = (b: any): string =>
     b?.timeslot?.slotDate,
     b?.timeslot?.date,
     b?.slot?.slotDate,
-    b?.slot?.date
-  );
+    b?.slot?.date,
+  ];
+  for (const c of candidates) {
+    const normalized = normalizeDateValue(c);
+    if (normalized) return normalized;
+  }
+  const id = bookingTimeSlotId(b);
+  if (id && slotById?.[id]) {
+    return normalizeDateValue(slotById[id]?.slotDate || slotById[id]?.date);
+  }
+  return "";
+};
 const bookingSlotTime = (b: any): string => {
   const rawSlotTime = parseLocalTime(
     b?.slotTime ||
@@ -1010,7 +1058,7 @@ export default function UserPage() {
     finally { setLoading(p => ({ ...p, tickets: false })); }
   };
 
-  const refreshSlotAvailability = async (consultantId: number) => {
+const refreshSlotAvailability = async (consultantId: number) => {
     const [bookingsRaw, tsWindowRaw, tsAllRaw] = await Promise.all([
       apiFetch(`${BASE_URL}/bookings/consultant/${consultantId}`).catch(() => []),
       apiFetch(`${BASE_URL}/timeslots/consultant/${consultantId}/window`).catch(() => []),
@@ -1024,13 +1072,20 @@ export default function UserPage() {
 
     const bookingsArr: any[] = Array.isArray(bookingsRaw) ? bookingsRaw : bookingsRaw?.content || [];
     const allTimeSlots: any[] = [...tsRecords, ...tsAllRecords];
+    const slotById: Record<number, any> = {};
+    allTimeSlots.forEach((s: any) => {
+      if (s?.id != null) slotById[Number(s.id)] = s;
+    });
 
     const nextBooked = new Set<string>();
     bookingsArr.forEach((b: any) => {
       const st = (b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase();
       if (["CANCELLED", "REJECTED", "FAILED", "EXPIRED"].includes(st)) return;
-      const date = bookingSlotDate(b);
-      const timeKey = bookingSlotTime(b);
+      const date = bookingSlotDate(b, slotById);
+      const fromBooking = bookingSlotTime(b);
+      const slotId = bookingTimeSlotId(b);
+      const fromSlot = slotId && slotById[slotId] ? slotTimeKeyFromRecord(slotById[slotId]) : "";
+      const timeKey = fromBooking || fromSlot;
       if (date && timeKey) nextBooked.add(`${date}|${timeKey}`);
     });
     allTimeSlots.forEach((s: any) => {
@@ -1166,14 +1221,21 @@ export default function UserPage() {
       setDbTimeslots(tsRecords);
       const bSet = new Set<string>();
       const bArr = Array.isArray(bookingsRaw) ? bookingsRaw : bookingsRaw?.content || [];
+      const allTimeSlots = [...tsRecords, ...tsAllRecords];
+      const slotById: Record<number, any> = {};
+      allTimeSlots.forEach((s: any) => {
+        if (s?.id != null) slotById[Number(s.id)] = s;
+      });
       bArr.forEach((b: any) => {
         const st = (b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase();
         if (["CANCELLED", "REJECTED", "FAILED", "EXPIRED"].includes(st)) return;
-        const date = bookingSlotDate(b);
-        const timeKey = bookingSlotTime(b);
+        const date = bookingSlotDate(b, slotById);
+        const fromBooking = bookingSlotTime(b);
+        const slotId = bookingTimeSlotId(b);
+        const fromSlot = slotId && slotById[slotId] ? slotTimeKeyFromRecord(slotById[slotId]) : "";
+        const timeKey = fromBooking || fromSlot;
         if (date && timeKey) bSet.add(`${date}|${timeKey}`);
       });
-      const allTimeSlots = [...tsRecords, ...tsAllRecords];
       allTimeSlots.forEach((s) => {
         if ((s.status || "").toUpperCase() !== "BOOKED") return;
         const rawTime = (s as any).slotTime;
@@ -1211,7 +1273,10 @@ export default function UserPage() {
       const normalizeTime = (raw: any): string => {
         if (!raw) return "";
         if (typeof raw === "object" && raw.hour !== undefined) return `${String(raw.hour).padStart(2, "0")}:${String(raw.minute ?? 0).padStart(2, "0")}`;
-        return String(raw).substring(0, 5);
+        const normalized = normalise24(String(raw));
+        if (normalized) return normalized;
+        const hhmm = String(raw).match(/(\d{1,2}):(\d{2})/);
+        return hhmm ? `${String(parseInt(hhmm[1], 10)).padStart(2, "0")}:${hhmm[2]}` : "";
       };
       if (!realTimeslotId) {
         const localMatch = dbTimeslots.find(s => s.slotDate === selectedDay.iso && normalizeTime(s.slotTime) === slot24 && (s.status || "").toUpperCase() !== "BOOKED") ?? dbTimeslots.find(s => s.slotDate === selectedDay.iso && (s.status || "").toUpperCase() !== "BOOKED");
@@ -1792,7 +1857,7 @@ export default function UserPage() {
                         const endStr = `${String(endH).padStart(2, "0")}:${slotStart.split(":")[1]}`;
                         const label = `${fmt24to12(slotStart)} - ${fmt24to12(endStr)}`;
                         const matchedMaster = masterSlots.find(ms => normalise24(ms.timeRange) === slotStart);
-                        const matchedTs = dbTimeslots.find(ts => ts.slotDate === selectedDay.iso && (ts.slotTime || "").substring(0, 5) === slotStart);
+                        const matchedTs = dbTimeslots.find(ts => ts.slotDate === selectedDay.iso && slotTimeKeyFromRecord(ts) === slotStart);
                         return renderSlotButton(slotStart, label, slotStart, selectedDay.iso, matchedMaster?.id ?? 0, matchedTs?.id, false);
                       })}
                     </div>
