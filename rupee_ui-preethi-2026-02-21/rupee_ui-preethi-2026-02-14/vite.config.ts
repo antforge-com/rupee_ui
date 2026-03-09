@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 const SPRING_BACKEND = 'http://52.55.178.31:8081'
 
 export default defineConfig({
+  base: '/rupee_ui/',
   plugins: [react()],
   server: {
     proxy: {

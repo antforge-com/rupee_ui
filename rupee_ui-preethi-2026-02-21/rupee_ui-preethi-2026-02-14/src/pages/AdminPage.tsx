@@ -1,3 +1,10 @@
+/**
+ * AdminPage.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Consolidated file — types.ts and data.ts have been removed and merged here.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -22,7 +29,6 @@ import {
   getAllBookings,
   getAllTickets,
   getAutoResponder,
-  // System Settings
   getBusinessHours,
   getCannedResponses,
   getHolidays,
@@ -52,6 +58,22 @@ import TicketSummaryChart from "./TicketSummaryChart";
 const BASE_URL = "/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TYPES  (previously in types.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BookingStatus = "CONFIRMED" | "PENDING" | "COMPLETED";
+
+export interface Booking {
+  id: number;
+  userName: string;
+  userAvatar?: string;
+  date: string;
+  time: string;
+  status: BookingStatus;
+  meetingLink: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // LOCAL-TIME PARSER
 // ─────────────────────────────────────────────────────────────────────────────
 const parseLocalTime = (t: any): string => {
@@ -63,7 +85,7 @@ const parseLocalTime = (t: any): string => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPES
+// INTERNAL TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 interface Advisor {
   id: number;
@@ -124,9 +146,8 @@ interface Ticket {
   feedbackRating?: number;
   feedbackText?: string;
   notes?: InternalNote[];
-  internalNotes?: InternalNote[];   // backend may return either field name
+  internalNotes?: InternalNote[];
   comments?: TicketComment[];
-  // analytics extras (may be absent on live tickets)
   firstResponseAt?: string | null;
   resolvedAt?: string | null;
 }
@@ -162,10 +183,7 @@ const TICKET_PRIORITY_CFG: Record<string, { label: string; color: string; bg: st
   CRITICAL: { label: "Critical", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE", dot: "#8B5CF6" },
 };
 
-// Backend-accepted statuses for status-change buttons (IN_PROGRESS & ESCALATED rejected by API)
-const ALL_TICKET_STATUSES = [
-  "NEW", "OPEN", "PENDING", "RESOLVED", "CLOSED",
-] as const;
+const ALL_TICKET_STATUSES = ["NEW", "OPEN", "PENDING", "RESOLVED", "CLOSED"] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED BADGE
@@ -287,7 +305,6 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
       const consultant = consultants.find(c => c.id === selected);
       const consultantName = consultant?.name || `Consultant #${selected}`;
 
-      // Persist notification for consultant's dashboard
       const assignKey = `fin_notifs_CONSULTANT_${selected}`;
       const existing = JSON.parse(localStorage.getItem(assignKey) || "[]");
       const newNotif = {
@@ -413,8 +430,6 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TICKET DETAIL PANEL
-// Merged: doc4 base + doc1's richer conversation thread (role badges, avatars,
-// left/right bubble layout, ADMIN/CUSTOMER labels, sender resolution logic)
 // ─────────────────────────────────────────────────────────────────────────────
 interface TicketDetailProps {
   ticket: Ticket;
@@ -431,46 +446,36 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
 }) => {
   const { addNotification } = useNotifications();
 
-  // ── Thread ────────────────────────────────────────────────────────────────
   const [comments, setComments] = useState<TicketComment[]>([]);
   const [loadingThread, setLoadingThread] = useState(true);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // ── Status ────────────────────────────────────────────────────────────────
   const [localStatus, setLocalStatus] = useState<TicketStatus>(ticket.status);
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
-  // ── Internal Notes ────────────────────────────────────────────────────────
   const [notes, setNotes] = useState<InternalNote[]>(ticket.internalNotes ?? ticket.notes ?? []);
   const [noteText, setNoteText] = useState("");
   const [postingNote, setPostingNote] = useState(false);
 
-  // ── Assign Consultant Modal ───────────────────────────────────────────────
   const [showAssign, setShowAssign] = useState(false);
-
-  // ── Escalate ──────────────────────────────────────────────────────────────
   const [escalating, setEscalating] = useState(false);
-
-  // ── Delete ────────────────────────────────────────────────────────────────
   const [deleting, setDeleting] = useState(false);
 
-  // ── Toast ─────────────────────────────────────────────────────────────────
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // ── Load thread + agents ──────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       setLoadingThread(true);
       try {
         const data = await getTicketComments(ticket.id);
         setComments(extractArray(data));
-      } catch { /* non-fatal */ }
+      } catch { }
       finally { setLoadingThread(false); }
     })();
   }, [ticket.id]);
@@ -479,7 +484,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [comments]);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleSendReply = async () => {
     if (!reply.trim()) return;
     setSending(true);
@@ -488,7 +492,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
       setComments(p => [...p, saved]);
       setReply("");
 
-      // Notify customer
       const userId = ticket.userId || ticket.user?.id;
       if (userId) {
         const userKey = `fin_notifs_USER_${userId}`;
@@ -520,7 +523,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
       setLocalStatus(newStatus as TicketStatus);
       onStatusChange(ticket.id, newStatus);
 
-      // Notify customer
       const userId = ticket.userId || ticket.user?.id;
       if (userId) {
         const userKey = `fin_notifs_USER_${userId}`;
@@ -609,18 +611,15 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
       )}
 
       <div style={{ position: "fixed", inset: 0, zIndex: 1200, display: "flex", alignItems: "stretch", justifyContent: "flex-end" }}>
-        {/* backdrop */}
         <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(15,23,42,0.5)", backdropFilter: "blur(3px)" }} />
 
-        {/* panel */}
         <div style={{
           position: "relative", width: "min(620px, 100vw)", height: "100%",
           background: "#fff", display: "flex", flexDirection: "column",
           boxShadow: "-8px 0 40px rgba(0,0,0,0.18)", overflowY: "hidden",
           animation: "slideInRight 0.22s ease",
         }}>
-
-          {/* ── Header ──────────────────────────────────────────────────────── */}
+          {/* Header */}
           <div style={{ background: "linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)", padding: "20px 24px", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
               <div style={{ flex: 1, minWidth: 0, paddingRight: 12 }}>
@@ -664,10 +663,10 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
             </div>
           </div>
 
-          {/* ── SLA strip ─────────────────────────────────────────────────── */}
+          {/* SLA strip */}
           <SlaStrip ticket={{ ...ticket, status: localStatus }} />
 
-          {/* ── Scrollable body ──────────────────────────────────────────── */}
+          {/* Scrollable body */}
           <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
 
             {/* Progress stepper */}
@@ -720,7 +719,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               )}
             </div>
 
-            {/* ── Conversation thread (rich version from doc1) ─────────────── */}
+            {/* Conversation thread */}
             <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9", flex: 1 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>
                 💬 Conversation ({comments.length})
@@ -735,8 +734,6 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
                   {comments.map(c => {
-                    // ── Determine sender: customer (left/amber) vs agent/admin (right/blue) ──
-                    // isConsultantReply is the canonical flag; fall back to senderId comparison.
                     const isAgent =
                       c.isConsultantReply === true ||
                       c.authorRole === "AGENT" ||
@@ -1078,7 +1075,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
     return true;
   });
 
-  // SLA / escalation config
   const SLA_HOURS_LOCAL = 2;
   const overdueTickets = tickets.filter(t => {
     if (["RESOLVED", "CLOSED"].includes(t.status)) return false;
@@ -1087,7 +1083,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
 
   return (
     <>
-      {/* Escalation Monitor */}
       <EscalationMonitor tickets={tickets} slaHours={SLA_HOURS_LOCAL} />
 
       {selectedTicket && (
@@ -1318,12 +1313,8 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ══════════════════════════════════════════════════════════════════════════════
-//  SUPPORT CONFIG PANEL
-// ══════════════════════════════════════════════════════════════════════════════
+// SUPPORT CONFIG PANEL
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Shared micro-styles ────────────────────────────────────────────────────
 const sc_styles: Record<string, React.CSSProperties> = {
   panelWrap: { padding: "0 0 40px" },
   panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 },
@@ -1348,7 +1339,6 @@ const sc_styles: Record<string, React.CSSProperties> = {
   sectionLabel: { fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 },
 };
 
-// SLA map for the config panel
 const CFG_SLA_HOURS: Record<string, number> = { LOW: 72, MEDIUM: 24, HIGH: 8, URGENT: 4, CRITICAL: 2 };
 const CFG_PRIORITY_CFG: Record<string, { color: string; bg: string }> = {
   LOW: { color: "#16A34A", bg: "#F0FDF4" },
@@ -1358,7 +1348,6 @@ const CFG_PRIORITY_CFG: Record<string, { color: string; bg: string }> = {
   CRITICAL: { color: "#7C3AED", bg: "#F5F3FF" },
 };
 
-// ── helpers ────────────────────────────────────────────────────────────────
 const cfgHoursAgo = (iso: string | null | undefined) => iso ? Math.round((Date.now() - new Date(iso).getTime()) / 3_600_000) : null;
 const cfgCalcResponse = (t: Ticket) => t.firstResponseAt && t.createdAt ? Math.round((new Date(t.firstResponseAt).getTime() - new Date(t.createdAt).getTime()) / 60_000) : null;
 const cfgCalcResolution = (t: Ticket) => t.resolvedAt && t.createdAt ? Math.round((new Date(t.resolvedAt).getTime() - new Date(t.createdAt).getTime()) / 3_600_000 * 10) / 10 : null;
@@ -1368,14 +1357,12 @@ const cfgIsSlaBreached = (t: Ticket) => {
   return h !== null && h > (CFG_SLA_HOURS[t.priority] || 24);
 };
 
-// ── Inline toast for config sections ──────────────────────────────────────
 const MiniToast: React.FC<{ msg: string; ok?: boolean }> = ({ msg, ok = true }) => (
   <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: ok ? "#0F172A" : "#7F1D1D", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", zIndex: 9999, whiteSpace: "nowrap" }}>
     {ok ? "✓" : "✕"} {msg}
   </div>
 );
 
-// ── mini bar helper ────────────────────────────────────────────────────────
 const MiniBar: React.FC<{ val: number; max: number; color: string }> = ({ val, max, color }) => {
   const pct = Math.min((val / Math.max(max, 1)) * 100, 100);
   return (
@@ -1388,7 +1375,7 @@ const MiniBar: React.FC<{ val: number; max: number; color: string }> = ({ val, m
   );
 };
 
-// ── 1. Manual Assignment ───────────────────────────────────────────────────
+// ── Assignment Panel ───────────────────────────────────────────────────────
 interface AgentInfo { id: number; name: string; load: number; avatar: string; }
 
 const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssign: (ticketId: number, agent: AgentInfo) => void }> = ({ tickets, agents, onAssign }) => {
@@ -1475,7 +1462,7 @@ const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssi
   );
 };
 
-// ── 2. Canned Responses ────────────────────────────────────────────────────
+// ── Canned Responses ───────────────────────────────────────────────────────
 interface CannedResponse { id: number; title: string; category: string; body: string; }
 
 const CannedResponses: React.FC<{}> = () => {
@@ -1495,7 +1482,7 @@ const CannedResponses: React.FC<{}> = () => {
           id: r.id,
           title: r.title,
           category: r.category || "General",
-          body: r.content || r.body || "",   // backend stores as 'content'
+          body: r.content || r.body || "",
           shortcut: r.shortcut || "",
         }))
       ))
@@ -1512,11 +1499,9 @@ const CannedResponses: React.FC<{}> = () => {
     if (!form.title.trim() || !form.body.trim()) return;
     try {
       if (editing !== null) {
-        // No PUT endpoint in AdminConfigController — optimistic local update only
         setResponses(p => p.map(r => r.id === editing ? { ...r, ...form } : r));
         showToast("Response updated");
       } else {
-        // POST: backend expects { title, content, category } — map body → content
         const created = await createCannedResponse({ title: form.title, content: form.body, category: form.category });
         setResponses(p => [...p, { ...form, id: created.id ?? Date.now() }]);
         showToast("Response created");
@@ -1585,7 +1570,7 @@ const CannedResponses: React.FC<{}> = () => {
   );
 };
 
-// ── 3. Categories & Priorities ─────────────────────────────────────────────
+// ── Categories Config ──────────────────────────────────────────────────────
 interface TicketCategory { id: number; name: string; color: string; icon: string; slaOverride: number | null; defaultPriority: string; }
 
 const CategoriesConfig: React.FC<{}> = () => {
@@ -1600,25 +1585,18 @@ const CategoriesConfig: React.FC<{}> = () => {
     setLoading(true);
     getTicketCategories()
       .then(arr => setCats(arr.map((c: any) => ({
-        id: c.id,
-        name: c.name,
-        color: c.color || "#2563EB",
-        icon: c.icon || "📌",
-        slaOverride: c.slaOverride ?? null,
-        defaultPriority: c.defaultPriority || "MEDIUM",
+        id: c.id, name: c.name, color: c.color || "#2563EB", icon: c.icon || "📌",
+        slaOverride: c.slaOverride ?? null, defaultPriority: c.defaultPriority || "MEDIUM",
       }))))
       .catch(() => showToast("Failed to load categories"))
       .finally(() => setLoading(false));
   }, []);
 
-  const updateCat = (id: number, changes: Partial<TicketCategory>) => {
-    // No PUT endpoint — optimistic local update only
+  const updateCat = (id: number, changes: Partial<TicketCategory>) =>
     setCats(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
-  };
 
   const deleteCat = async (id: number) => {
     try {
-      // Backend exposes PATCH /:id/toggle (no DELETE endpoint)
       await toggleTicketCategory(id);
       setCats(p => p.filter(x => x.id !== id));
       showToast("Category toggled/removed");
@@ -1628,15 +1606,10 @@ const CategoriesConfig: React.FC<{}> = () => {
   const addCat = async () => {
     if (!newCat.name.trim()) return;
     try {
-      // POST expects { name, description } per AdminConfigController
       const created = await createTicketCategory({ name: newCat.name, description: newCat.defaultPriority });
       setCats(p => [...p, {
-        id: created.id ?? Date.now(),
-        name: newCat.name,
-        color: newCat.color,
-        icon: newCat.icon,
-        slaOverride: newCat.slaOverride ? Number(newCat.slaOverride) : null,
-        defaultPriority: newCat.defaultPriority,
+        id: created.id ?? Date.now(), name: newCat.name, color: newCat.color, icon: newCat.icon,
+        slaOverride: newCat.slaOverride ? Number(newCat.slaOverride) : null, defaultPriority: newCat.defaultPriority,
       }]);
       setNewCat({ name: "", color: "#2563EB", icon: "📌", slaOverride: "", defaultPriority: "MEDIUM" });
       showToast("Category added");
@@ -1710,7 +1683,7 @@ const CategoriesConfig: React.FC<{}> = () => {
   );
 };
 
-// ── 4. Reports & Analytics ─────────────────────────────────────────────────
+// ── Reports & Analytics ────────────────────────────────────────────────────
 const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
   const [range, setRange] = useState("7d");
 
@@ -1773,7 +1746,7 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
             <div style={{ fontSize: 20, marginBottom: 6 }}>{k.icon}</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: k.color, fontFamily: "monospace" }}>{k.value}</div>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 2 }}>{k.label}</div>
-            {k.sub && <div style={{ fontSize: 10, color: k.color, marginTop: 2 }}>{k.sub}</div>}
+            {(k as any).sub && <div style={{ fontSize: 10, color: k.color, marginTop: 2 }}>{(k as any).sub}</div>}
           </div>
         ))}
       </div>
@@ -1839,7 +1812,7 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
   );
 };
 
-// ── 5. Business Hours & Auto-Responders ───────────────────────────────────
+// ── Business Hours ─────────────────────────────────────────────────────────
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_TO_JAVA: Record<string, string> = {
   Monday: "MONDAY", Tuesday: "TUESDAY", Wednesday: "WEDNESDAY",
@@ -1850,8 +1823,7 @@ interface BusinessHour { day: string; enabled: boolean; start: string; end: stri
 interface Holiday { id: number; name: string; date: string; }
 
 const BusinessSettings: React.FC<{}> = () => {
-  const DEFAULT_HOURS: BusinessHour[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    .map((d, i) => ({ day: d, enabled: i < 5, start: "09:00", end: "18:00" }));
+  const DEFAULT_HOURS: BusinessHour[] = DAYS.map((d, i) => ({ day: d, enabled: i < 5, start: "09:00", end: "18:00" }));
 
   const [hours, setHours] = useState<BusinessHour[]>(DEFAULT_HOURS);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -1859,8 +1831,6 @@ const BusinessSettings: React.FC<{}> = () => {
   const [newHoliday, setNewHoliday] = useState({ name: "", date: "" });
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
-
-  // ── Load from real backend on mount ─────────────────────────────────────
   const [loadingInit, setLoadingInit] = useState(true);
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoMessage, setAutoMessage] = useState("Thank you for reaching out! We will review your ticket shortly.");
@@ -1878,16 +1848,16 @@ const BusinessSettings: React.FC<{}> = () => {
               : DEFAULT_HOURS.find(x => x.day === d)!;
           }));
         }
-      } catch { /* use defaults */ }
+      } catch { }
       try {
         const hData = await getHolidays();
         setHolidays(hData.map((h: any) => ({ id: h.id, name: h.name, date: h.holidayDate })));
-      } catch { /* non-fatal */ }
+      } catch { }
       try {
         const arData = await getAutoResponder();
         setAutoEnabled(arData.enabled);
         if (arData.message) setAutoMessage(arData.message);
-      } catch { /* non-fatal */ }
+      } catch { }
       setLoadingInit(false);
     })();
   }, []);
@@ -1948,41 +1918,33 @@ const BusinessSettings: React.FC<{}> = () => {
 
   return (
     <div style={sc_styles.panelWrap}>
-      {/* Header */}
       <div style={sc_styles.panelHeader}>
         <div>
           <h3 style={sc_styles.panelTitle}>Business Hours & Auto-Responders</h3>
           <p style={sc_styles.panelSub}>Define when your team is available and set automated replies for off-hours</p>
         </div>
-        <button onClick={saveAll} disabled={saving}
-          style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
+        <button onClick={saveAll} disabled={saving} style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
           {saving ? "Saving..." : "Save All Settings"}
         </button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 24, alignItems: "start" }}>
-
-        {/* Left — Weekly Schedule */}
         <div>
           <div style={sc_styles.sectionLabel}>Weekly Schedule</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {hours.map((h, i) => (
               <div key={h.day} style={{
-                display: "flex", alignItems: "center", gap: 16,
-                padding: "14px 18px", background: "#fff",
-                border: "1px solid " + (h.enabled ? "#E2E8F0" : "#F1F5F9"),
-                borderRadius: 12, opacity: h.enabled ? 1 : 0.6,
+                display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", background: "#fff",
+                border: "1px solid " + (h.enabled ? "#E2E8F0" : "#F1F5F9"), borderRadius: 12, opacity: h.enabled ? 1 : 0.6,
               }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: h.enabled ? "#0F172A" : "#94A3B8", width: 90 }}>{h.day}</span>
                 <Toggle checked={h.enabled} onChange={v => setHours(p => p.map((x, j) => j === i ? { ...x, enabled: v } : x))} />
                 {h.enabled ? (
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1 }}>
-                    <input type="time" value={h.start}
-                      onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, start: e.target.value } : x))}
+                    <input type="time" value={h.start} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, start: e.target.value } : x))}
                       style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
-                    <span style={{ color: "#94A3B8", fontSize: 12, fontWeight: 500 }}>to</span>
-                    <input type="time" value={h.end}
-                      onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, end: e.target.value } : x))}
+                    <span style={{ color: "#94A3B8", fontSize: 12 }}>to</span>
+                    <input type="time" value={h.end} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, end: e.target.value } : x))}
                       style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
                   </div>
                 ) : (
@@ -1993,47 +1955,29 @@ const BusinessSettings: React.FC<{}> = () => {
           </div>
         </div>
 
-        {/* Right column — Auto-Responder + Holidays stacked */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-
-          {/* Auto-Responder panel — PUT /api/system/auto-responder */}
           <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: autoEnabled ? 14 : 0 }}>
-              <div style={sc_styles.sectionLabel} >Auto-Responder</div>
-              <Toggle checked={autoEnabled} onChange={v => { setAutoEnabled(v); }} />
+              <div style={sc_styles.sectionLabel}>Auto-Responder</div>
+              <Toggle checked={autoEnabled} onChange={v => setAutoEnabled(v)} />
             </div>
             {autoEnabled && (
               <>
-                <textarea
-                  value={autoMessage}
-                  onChange={e => setAutoMessage(e.target.value)}
-                  rows={4}
+                <textarea value={autoMessage} onChange={e => setAutoMessage(e.target.value)} rows={4}
                   style={{ ...sc_styles.input, resize: "vertical" as any, fontSize: 12, lineHeight: 1.5 }}
-                  placeholder="Thank you for reaching out! We will review your ticket shortly."
-                />
+                  placeholder="Thank you for reaching out! We will review your ticket shortly." />
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await updateAutoResponder({ enabled: autoEnabled, message: autoMessage });
-                        showToast("Auto-responder saved");
-                      } catch { showToast("Failed to save auto-responder"); }
-                    }}
-                    style={{ ...sc_styles.primaryBtn, fontSize: 12, padding: "6px 14px" }}>
-                    Save
-                  </button>
+                  <button onClick={async () => {
+                    try { await updateAutoResponder({ enabled: autoEnabled, message: autoMessage }); showToast("Auto-responder saved"); }
+                    catch { showToast("Failed to save auto-responder"); }
+                  }} style={{ ...sc_styles.primaryBtn, fontSize: 12, padding: "6px 14px" }}>Save</button>
                   <span style={{ fontSize: 11, color: "#94A3B8" }}>Sent automatically to new tickets outside business hours.</span>
                 </div>
               </>
             )}
-            {!autoEnabled && (
-              <p style={{ fontSize: 12, color: "#94A3B8", margin: "10px 0 0", fontStyle: "italic" }}>
-                Enable to send an automated reply when a new ticket is submitted.
-              </p>
-            )}
+            {!autoEnabled && <p style={{ fontSize: 12, color: "#94A3B8", margin: "10px 0 0", fontStyle: "italic" }}>Enable to send an automated reply when a new ticket is submitted.</p>}
           </div>
 
-          {/* Public Holidays — POST/DELETE /api/system/holidays */}
           <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
             <div style={sc_styles.sectionLabel}>Public Holidays</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, minHeight: 32 }}>
@@ -2046,8 +1990,7 @@ const BusinessSettings: React.FC<{}> = () => {
                       <div style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{h.name}</div>
                       <div style={{ fontSize: 11, color: "#94A3B8", fontFamily: "monospace" }}>{h.date}</div>
                     </div>
-                    <button onClick={() => deleteHoliday(h.id)}
-                      style={{ ...sc_styles.iconBtn, color: "#DC2626", fontSize: 13 }}>✕</button>
+                    <button onClick={() => deleteHoliday(h.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626", fontSize: 13 }}>✕</button>
                   </div>
                 ))
               }
@@ -2056,20 +1999,14 @@ const BusinessSettings: React.FC<{}> = () => {
               <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
                 <div>
                   <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Name</div>
-                  <input value={newHoliday.name}
-                    onChange={e => setNewHoliday({ ...newHoliday, name: e.target.value })}
-                    placeholder="Diwali"
-                    style={{ ...sc_styles.input, fontSize: 12 }} />
+                  <input value={newHoliday.name} onChange={e => setNewHoliday({ ...newHoliday, name: e.target.value })} placeholder="Diwali" style={{ ...sc_styles.input, fontSize: 12 }} />
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Date</div>
-                  <input type="date" value={newHoliday.date}
-                    onChange={e => setNewHoliday({ ...newHoliday, date: e.target.value })}
-                    style={{ ...sc_styles.input, fontSize: 12, fontFamily: "monospace" }} />
+                  <input type="date" value={newHoliday.date} onChange={e => setNewHoliday({ ...newHoliday, date: e.target.value })} style={{ ...sc_styles.input, fontSize: 12, fontFamily: "monospace" }} />
                 </div>
               </div>
-              <button onClick={addHoliday}
-                style={{ ...sc_styles.primaryBtn, alignSelf: "flex-end", padding: "7px 14px", fontSize: 13 }}>+</button>
+              <button onClick={addHoliday} style={{ ...sc_styles.primaryBtn, alignSelf: "flex-end", padding: "7px 14px", fontSize: 13 }}>+</button>
             </div>
           </div>
         </div>
@@ -2098,16 +2035,12 @@ const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
 const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, onAssign }) => {
   const [tab, setTab] = useState<ConfigTab>("canned");
 
-  const handleAssign = (ticketId: number, agent: AgentInfo) => onAssign(ticketId, agent.name);
-
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Support Configuration</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#64748B" }}>Manage canned responses, categories, analytics, and business hours</p>
       </div>
-
-      {/* Sub-tabs */}
       <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden", marginBottom: 24 }}>
         <div style={{ display: "flex", borderBottom: "1px solid #E2E8F0", overflowX: "auto" }}>
           {SUPPORT_CONFIG_TABS.map(t => (
@@ -2139,6 +2072,7 @@ function AdminPageInner() {
   const [showModal, setShowModal] = useState(false);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [dashBookings, setDashBookings] = useState<any[]>([]);
+  const [allBookings, setAllBookings] = useState<any[]>([]);   // ← full booking list for analytics
   const [totalBookingsCount, setTotalBookingsCount] = useState(0);
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [ticketCount, setTicketCount] = useState(0);
@@ -2216,12 +2150,8 @@ function AdminPageInner() {
         const consultantNameMap: Record<number, string> = {};
         await Promise.all(uniqueConsultantIds.map(id =>
           apiFetch(`/consultants/${id}`)
-            .then(c => {
-              consultantNameMap[id] = c?.name || c?.username || `Consultant #${id}`;
-            })
-            .catch(() => {
-              consultantNameMap[id] = `Deleted Consultant (#${id})`;
-            })
+            .then(c => { consultantNameMap[id] = c?.name || c?.username || `Consultant #${id}`; })
+            .catch(() => { consultantNameMap[id] = `Deleted Consultant (#${id})`; })
         ));
 
         const mapped = bookingsArr.map((b: any) => {
@@ -2230,8 +2160,6 @@ function AdminPageInner() {
           const slotTime = slot?.slotTime || b.slotTime || b.bookingTime || "";
           const masterKey = slot?.masterTimeSlotId || slot?.masterSlotId;
           const timeRange = (masterKey && masterMap[masterKey]) || b.timeRange || (slotTime ? slotTime.substring(0, 5) : "N/A");
-
-          // Use the consultantNameMap which now contains safety fallbacks
           const advisorName = b.consultant?.name || b.consultantName || consultantNameMap[b.consultantId] || `Deleted Consultant (#${b.consultantId})`;
 
           return {
@@ -2244,17 +2172,40 @@ function AdminPageInner() {
           };
         });
 
+        // ── Save full list for analytics ──────────────────────────────────
+        setAllBookings(mapped);
         setTotalBookingsCount(mapped.length);
         setTotalRevenue(mapped.filter(b => b.status === "COMPLETED").reduce((s: number, b: any) => s + b.amount, 0));
         setDashBookings(mapped.slice(0, 5));
 
-        // Build real booking chart data from actual bookings (doc4 improvement)
+        // Build chart data from actual bookings
+        // Build chart data from mapped bookings (uses resolved date field)
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const dayCounts: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
-        bookingsArr.forEach((b: any) => {
-          const raw = b.slotDate || b.bookingDate || b.date || b.createdAt;
-          if (raw) { const d = new Date(raw); if (!isNaN(d.getTime())) { const k = dayNames[d.getDay()]; dayCounts[k] = (dayCounts[k] || 0) + 1; } }
+
+        // Get the current week's Monday–Sunday range
+        const now = new Date();
+        const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        monday.setHours(0, 0, 0, 0);
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6);
+        sunday.setHours(23, 59, 59, 999);
+
+        mapped.forEach((b: any) => {
+          // b.time looks like "2026-03-06 • 09:00 - 10:00" — extract date part
+          const datePart = b.time?.split(" • ")[0]?.trim();
+          if (!datePart || datePart === "N/A") return;
+          const d = new Date(datePart);
+          if (isNaN(d.getTime())) return;
+          // Only count bookings within current week
+          if (d >= monday && d <= sunday) {
+            const k = dayNames[d.getDay()];
+            dayCounts[k] = (dayCounts[k] || 0) + 1;
+          }
         });
+
         setBookingChartData([
           { day: "Mon", bookings: dayCounts.Mon }, { day: "Tue", bookings: dayCounts.Tue },
           { day: "Wed", bookings: dayCounts.Wed }, { day: "Thu", bookings: dayCounts.Thu },
@@ -2289,7 +2240,6 @@ function AdminPageInner() {
     finally { setDeletingId(null); }
   };
 
-  // Handle assignment from SupportConfigPanel
   const handleSupportAssign = (ticketId: number, agentName: string) => {
     setAllTickets(prev => prev.map(t => t.id === ticketId ? { ...t, agentName, status: "OPEN" as TicketStatus } : t));
     addNotification({ type: "success", title: `Ticket #${ticketId} Assigned`, message: `Assigned to ${agentName}.`, ticketId });
@@ -2438,7 +2388,6 @@ function AdminPageInner() {
                 <h3 className={styles.cardTitle}>Bookings This Week</h3>
                 <div style={{ width: "100%", height: 200 }}>
                   <ResponsiveContainer>
-                    {/* Uses real computed chart data (doc4 improvement) */}
                     <BarChart data={bookingChartData}>
                       <XAxis dataKey="day" stroke="#94A3B8" style={{ fontSize: 12 }} />
                       <YAxis stroke="#94A3B8" style={{ fontSize: 12 }} />
@@ -2594,7 +2543,12 @@ function AdminPageInner() {
 
         {/* ════ ANALYTICS ════ */}
         {activeSection === "analytics" && (
-          <AnalyticsDashboard tickets={allTickets} consultants={advisors} mode="admin" />
+          <AnalyticsDashboard
+            tickets={allTickets}
+            consultants={advisors}
+            bookings={allBookings}
+            mode="admin"
+          />
         )}
 
         {/* ════ REPORTS ════ */}
