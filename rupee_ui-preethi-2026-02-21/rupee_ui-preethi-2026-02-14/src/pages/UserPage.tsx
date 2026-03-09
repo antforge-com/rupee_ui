@@ -187,6 +187,16 @@ const parseLocalTime = (t: any): string => {
   if (typeof t === "string") return t.substring(0, 5);
   return "";
 };
+const slotTimeKeyFromRecord = (s: any): string => {
+  const rawTime = s?.slotTime;
+  if (typeof rawTime === "object" && rawTime?.hour !== undefined) {
+    return `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`;
+  }
+  if (typeof rawTime === "string" && rawTime.length >= 5) {
+    return rawTime.substring(0, 5);
+  }
+  return normalise24(s?.timeRange || "");
+};
 const firstNonEmpty = (...values: any[]): string => {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -987,6 +997,46 @@ export default function UserPage() {
     finally { setLoading(p => ({ ...p, tickets: false })); }
   };
 
+  const refreshSlotAvailability = async (consultantId: number) => {
+    const [bookingsRaw, tsWindowRaw, tsAllRaw] = await Promise.all([
+      apiFetch(`${BASE_URL}/bookings/consultant/${consultantId}`).catch(() => []),
+      apiFetch(`${BASE_URL}/timeslots/consultant/${consultantId}/window`).catch(() => []),
+      apiFetch(`${BASE_URL}/timeslots/consultant/${consultantId}`).catch(() => []),
+    ]);
+
+    const tsWindowRecords: TimeSlotRecord[] = Array.isArray(tsWindowRaw) ? tsWindowRaw : tsWindowRaw?.content || [];
+    const tsAllRecords: TimeSlotRecord[] = Array.isArray(tsAllRaw) ? tsAllRaw : tsAllRaw?.content || [];
+    const tsRecords = tsWindowRecords.length > 0 ? tsWindowRecords : tsAllRecords;
+    setDbTimeslots(tsRecords);
+
+    const bookingsArr: any[] = Array.isArray(bookingsRaw) ? bookingsRaw : bookingsRaw?.content || [];
+    const allTimeSlots: any[] = [...tsRecords, ...tsAllRecords];
+
+    const nextBooked = new Set<string>();
+    bookingsArr.forEach((b: any) => {
+      const st = (b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase();
+      if (["CANCELLED", "REJECTED", "FAILED", "EXPIRED"].includes(st)) return;
+      const date = bookingSlotDate(b);
+      const timeKey = bookingSlotTime(b);
+      if (date && timeKey) nextBooked.add(`${date}|${timeKey}`);
+    });
+    allTimeSlots.forEach((s: any) => {
+      if ((s.status || "").toUpperCase() !== "BOOKED") return;
+      const timeKey = slotTimeKeyFromRecord(s);
+      if (s.slotDate && timeKey) nextBooked.add(`${s.slotDate}|${timeKey}`);
+    });
+    setBookedSlotSet(nextBooked);
+
+    const nextUnavail = new Set<string>();
+    allTimeSlots.forEach((s: any) => {
+      const st = (s.status || "").toUpperCase();
+      if (!["UNAVAILABLE", "BLOCKED", "DISABLED"].includes(st)) return;
+      const timeKey = slotTimeKeyFromRecord(s);
+      if (s.slotDate && timeKey) nextUnavail.add(`${s.slotDate}|${timeKey}`);
+    });
+    setUnavailSlotSet(nextUnavail);
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // INIT
   // ─────────────────────────────────────────────────────────────────────────
@@ -1139,9 +1189,10 @@ export default function UserPage() {
   const handleConfirm = async () => {
     if (!selectedSlot || !selectedConsultant) return;
     if (confirmingRef.current) return;
+    const slot24 = selectedSlot.start24h;
+    const slotKey = `${selectedDay.iso}|${slot24}`;
     confirmingRef.current = true; setConfirming(true);
     try {
-      const slot24 = selectedSlot.start24h;
       const slotTimeFull = slot24.length === 5 ? `${slot24}:00` : slot24;
       let realTimeslotId: number | null = selectedSlot.timeslotId ?? null;
       const normalizeTime = (raw: any): string => {
@@ -1210,7 +1261,20 @@ export default function UserPage() {
       await sendBookingEmails({ bookingId: newBookingId, slotDate: selectedDay.iso, timeRange: selectedSlot.label, meetingMode, amount: selectedConsultant.fee, userName: currentUser?.name || "Valued Client", userEmail: currentUser?.email || "", consultantName: selectedConsultant.name, consultantEmail, userNotes: userNotes || "" });
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
-      if (msg.includes("rollback") || msg.includes("already booked") || msg.includes("conflict") || msg.includes("409")) showToast("⚠️ That slot is no longer available.");
+      if (msg.includes("rollback") || msg.includes("already booked") || msg.includes("conflict") || msg.includes("409")) {
+        showToast("⚠️ That slot is no longer available. Please choose another slot.");
+        setBookedSlotSet(prev => {
+          const next = new Set(prev);
+          next.add(slotKey);
+          return next;
+        });
+        setSelectedSlot(null);
+        try {
+          await refreshSlotAvailability(selectedConsultant.id);
+        } catch {
+          // best-effort refresh; optimistic mark above still blocks stale slot
+        }
+      }
       else if (msg.includes("500")) showToast("❌ Server error. Please try a different time slot.");
       else showToast(`❌ Booking failed: ${err.message}`);
       setSelectedSlot(null);
