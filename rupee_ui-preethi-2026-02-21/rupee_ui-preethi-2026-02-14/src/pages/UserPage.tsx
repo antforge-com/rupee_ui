@@ -807,7 +807,7 @@ const useTicketPolling = (
 // ─────────────────────────────────────────────────────────────────────────────
 export default function UserPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "notifications" | "settings">("consultants");
+  const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "updates" | "settings">("consultants");
   const [userNotifs, setUserNotifs] = useState<AppNotif[]>([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All Consultants");
@@ -885,6 +885,19 @@ export default function UserPage() {
   const saveNotifs = (uid: number, list: AppNotif[]) => {
     try { localStorage.setItem(`fin_notifs_USER_${uid}`, JSON.stringify(list.slice(0, 50))); } catch { }
   };
+  const addUpdate = (payload: Omit<AppNotif, "id" | "timestamp" | "read">) => {
+    const next: AppNotif = {
+      ...payload,
+      id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      timestamp: new Date().toISOString(),
+      read: false,
+    };
+    setUserNotifs(prev => {
+      const updated = [next, ...prev].slice(0, 50);
+      if (currentUserId) saveNotifs(currentUserId, updated);
+      return updated;
+    });
+  };
 
   // ── Inline ticket polling (no NotificationContext needed) ─────────────────
   useTicketPolling(currentUserId, (n) => {
@@ -960,14 +973,15 @@ export default function UserPage() {
     setLoading(p => ({ ...p, bookings: true }));
     try {
       const [raw, masters] = await Promise.all([getMyBookings(), fetchMasterTimeslots()]);
-      if (!Array.isArray(raw)) { setBookings([]); return; }
+      const bookingRows = extractArray(raw);
+      if (!Array.isArray(bookingRows) || bookingRows.length === 0) { setBookings([]); return; }
       const masterMap: Record<string, string> = {};
       masters.forEach((ms: any) => { masterMap[String(ms.id)] = ms.timeRange; });
-      const uniqueSlotIds = [...new Set(raw.map((b: any) => b.timeSlotId).filter(Boolean))] as number[];
+      const uniqueSlotIds = [...new Set(bookingRows.map((b: any) => b.timeSlotId || b.timeslotId || b.slotId).filter(Boolean))] as number[];
       const slotDetailMap: Record<number, TimeSlotRecord> = {};
       await Promise.all(uniqueSlotIds.map(id => apiFetch(`${BASE_URL}/timeslots/${id}`).then((s: any) => { slotDetailMap[id] = s; }).catch(() => { })));
-      const mapped = raw.map((b: any) => {
-        const slotDetail = slotDetailMap[b.timeSlotId];
+      const mapped = bookingRows.map((b: any) => {
+        const slotDetail = slotDetailMap[b.timeSlotId || b.timeslotId || b.slotId];
         const slotDate = slotDetail?.slotDate || b.bookingDate || b.slotDate || b.date || "";
         const slotTime = (slotDetail?.slotTime || b.slotTime || "").substring(0, 5);
         const masterIdCandidates = [slotDetail?.masterTimeSlotId, b.masterTimeslotId, b.masterSlotId, b.timeSlotId].filter(v => v != null);
@@ -1063,7 +1077,7 @@ export default function UserPage() {
 
   // ── Reload notifs from storage when tab becomes active ───────────────────
   useEffect(() => {
-    if (tab === "notifications" && currentUserId) setUserNotifs(loadNotifs(currentUserId));
+    if (tab === "updates" && currentUserId) setUserNotifs(loadNotifs(currentUserId));
     if (tab === "bookings") fetchBookings();
     if (tab === "tickets") fetchTickets();
     if (tab === "settings") setSettingsView("menu");
@@ -1252,12 +1266,35 @@ export default function UserPage() {
       const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
       setBookedSlotSet(prev => { const next = new Set(prev); next.add(`${selectedDay.iso}|${slot24}`); return next; });
       setDbTimeslots(prev => prev.map(s => (s.id === realTimeslotId ? { ...s, status: "BOOKED" } : s)));
+      const optimisticBooking: Booking = {
+        id: newBookingId,
+        consultantId: selectedConsultant.id,
+        timeSlotId: realTimeslotId,
+        amount: selectedConsultant.fee,
+        BookingStatus: "BOOKED",
+        paymentStatus: "PENDING",
+        consultantName: selectedConsultant.name,
+        slotDate: selectedDay.iso,
+        slotTime: slot24,
+        timeRange: selectedSlot.label,
+        meetingMode,
+      };
+      setBookings(prev => {
+        const filtered = prev.filter(b => b.id !== newBookingId);
+        return [optimisticBooking, ...filtered];
+      });
       setShowModal(false);
-      setTab("bookings"); fetchBookings();
+      setTab("bookings");
       let consultantEmail = selectedConsultant.email || "";
       if (!consultantEmail) { try { const cData = await getConsultantById(selectedConsultant.id); consultantEmail = cData?.email || cData?.emailId || ""; } catch { } }
       await sendBookingEmails({ bookingId: newBookingId, slotDate: selectedDay.iso, timeRange: selectedSlot.label, meetingMode, amount: selectedConsultant.fee, userName: currentUser?.name || "Valued Client", userEmail: currentUser?.email || "", consultantName: selectedConsultant.name, consultantEmail, userNotes: userNotes || "" });
+      addUpdate({
+        type: "success",
+        title: "Booking Confirmed",
+        message: `Session booked with ${selectedConsultant.name} on ${selectedDay.iso} at ${selectedSlot.label}. Confirmation email sent.`,
+      });
       showToast("✅ Booking done. Confirmation mail sent.");
+      fetchBookings();
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
       if (
@@ -1563,11 +1600,11 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ NOTIFICATIONS ════ */}
-        {false && tab === "notifications" && (
+        {/* ════ UPDATES ════ */}
+        {tab === "updates" && (
           <div className={styles.tabPadding}>
             <div style={{ marginBottom: 20 }}>
-              <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#0F172A" }}>My Notifications</h2>
+              <h2 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#0F172A" }}>My Updates</h2>
               <p style={{ margin: 0, fontSize: 13, color: "#64748B" }}>Updates about your tickets and bookings.</p>
             </div>
             {unreadNotifCount > 0 && (
@@ -1584,8 +1621,8 @@ export default function UserPage() {
             {userNotifs.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 20, color: "#94A3B8" }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>🔔</div>
-                <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No notifications yet</div>
-                <p style={{ margin: 0, fontSize: 13 }}>When your ticket is updated or a consultant replies, you'll be notified here.</p>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No updates yet</div>
+                <p style={{ margin: 0, fontSize: 13 }}>Booking confirmations, ticket updates, and important account updates will appear here.</p>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1801,10 +1838,11 @@ export default function UserPage() {
 
       {/* ── Bottom Nav ── */}
       <nav className={styles.bottomNav}>
-        {(["consultants", "bookings", "tickets", "settings"] as const).map(t => (
+        {(["consultants", "bookings", "tickets", "updates", "settings"] as const).map(t => (
           <button key={t} onClick={() => { setTab(t); }}
             className={`${styles.navBtn} ${tab === t ? styles.navBtnActive : ""}`} style={{ position: "relative" }}>
-            <span>{t === "consultants" ? "Find" : t === "bookings" ? "Bookings" : t === "tickets" ? "Tickets" : "Settings"}</span>
+            <span>{t === "consultants" ? "Find" : t === "bookings" ? "Bookings" : t === "tickets" ? "Tickets" : t === "updates" ? "Updates" : "Settings"}</span>
+            {t === "updates" && unreadNotifCount > 0 && <span style={{ position: "absolute", top: 2, right: 2, width: 7, height: 7, borderRadius: "50%", background: "#DC2626", border: "1.5px solid #fff" }} />}
           </button>
         ))}
       </nav>
