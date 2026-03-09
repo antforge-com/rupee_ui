@@ -187,6 +187,42 @@ const parseLocalTime = (t: any): string => {
   if (typeof t === "string") return t.substring(0, 5);
   return "";
 };
+const firstNonEmpty = (...values: any[]): string => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+};
+const bookingSlotDate = (b: any): string =>
+  firstNonEmpty(
+    b?.slotDate,
+    b?.bookingDate,
+    b?.date,
+    b?.timeSlot?.slotDate,
+    b?.timeSlot?.date,
+    b?.timeslot?.slotDate,
+    b?.timeslot?.date,
+    b?.slot?.slotDate,
+    b?.slot?.date
+  );
+const bookingSlotTime = (b: any): string => {
+  const rawSlotTime = parseLocalTime(
+    b?.slotTime ||
+    b?.timeSlot?.slotTime ||
+    b?.timeslot?.slotTime ||
+    b?.slot?.slotTime
+  );
+  if (rawSlotTime) return rawSlotTime.substring(0, 5);
+  return normalise24(
+    b?.timeRange ||
+    b?.timeSlot?.timeRange ||
+    b?.timeslot?.timeRange ||
+    b?.slot?.timeRange ||
+    b?.timeSlot?.masterTimeSlot?.timeRange ||
+    b?.masterTimeSlot?.timeRange ||
+    ""
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATE CAROUSEL
@@ -854,21 +890,27 @@ export default function UserPage() {
   });
 
   // ── Fetch unavailable slots for the selected consultant + day ─────────────
-  const fetchUnavailableSlots = async (consultantId: number, slotDate: string) => {
+  const fetchUnavailableSlots = async (_consultantId: number, slotDate: string) => {
     try {
-      const res = await fetch(`${BASE_URL}/slots/unavailable?consultantId=${consultantId}&slotDate=${slotDate}`, {
-        headers: { Accept: "application/json", ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+      // Derive unavailable slots from timeslot statuses instead of /slots/unavailable.
+      const unavailSet = new Set<string>();
+      dbTimeslots.forEach((s: any) => {
+        const st = (s.status || "").toUpperCase();
+        if (st === "AVAILABLE" || st === "BOOKED") return;
+        const rawTime = (s as any).slotTime;
+        let timeKey = "";
+        if (typeof rawTime === "object" && rawTime?.hour !== undefined) {
+          timeKey = `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`;
+        } else if (typeof rawTime === "string" && rawTime.length >= 5) {
+          timeKey = rawTime.substring(0, 5);
+        } else {
+          timeKey = normalise24((s as any).timeRange || "");
+        }
+        if (s.slotDate === slotDate && timeKey) {
+          unavailSet.add(`${s.slotDate}|${timeKey}`);
+        }
       });
-      if (!res.ok) { setUnavailSlotSet(new Set()); return; }
-      const data = await res.json();
-      const set = new Set<string>(
-        extractArray(data).map((u: any) => {
-          const d = u.slotDate || u.date || slotDate;
-          const t = (u.slotTime || u.time || "").substring(0, 5);
-          return `${d}|${t}`;
-        })
-      );
-      setUnavailSlotSet(set);
+      setUnavailSlotSet(unavailSet);
     } catch { setUnavailSlotSet(new Set()); }
   };
 
@@ -878,7 +920,7 @@ export default function UserPage() {
       setSelectedSlot(null);
       fetchUnavailableSlots(selectedConsultant.id, selectedDay.iso);
     }
-  }, [selectedDay.iso, selectedConsultant?.id, showModal]);
+  }, [selectedDay.iso, selectedConsultant?.id, showModal, dbTimeslots]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // MAP CONSULTANT
@@ -1047,28 +1089,49 @@ export default function UserPage() {
     try {
       const [masters, bookingsRaw] = await Promise.all([fetchMasterTimeslots(), apiFetch(`${BASE_URL}/bookings/consultant/${c.id}`).catch(() => [])]);
       setMasterSlots(Array.isArray(masters) ? masters : []);
-      let tsRecords: TimeSlotRecord[] = [];
-      try { const wd = await apiFetch(`${BASE_URL}/timeslots/consultant/${c.id}/window`); tsRecords = Array.isArray(wd) ? wd : wd?.content || []; }
-      catch { try { const td = await apiFetch(`${BASE_URL}/timeslots/consultant/${c.id}`); tsRecords = Array.isArray(td) ? td : td?.content || []; } catch { } }
+      let tsWindowRecords: TimeSlotRecord[] = [];
+      let tsAllRecords: TimeSlotRecord[] = [];
+      try {
+        const wd = await apiFetch(`${BASE_URL}/timeslots/consultant/${c.id}/window`);
+        tsWindowRecords = Array.isArray(wd) ? wd : wd?.content || [];
+      } catch { }
+      try {
+        const td = await apiFetch(`${BASE_URL}/timeslots/consultant/${c.id}`);
+        tsAllRecords = Array.isArray(td) ? td : td?.content || [];
+      } catch { }
+      const tsRecords = tsWindowRecords.length > 0 ? tsWindowRecords : tsAllRecords;
       setDbTimeslots(tsRecords);
       const bSet = new Set<string>();
       const bArr = Array.isArray(bookingsRaw) ? bookingsRaw : bookingsRaw?.content || [];
       bArr.forEach((b: any) => {
         const st = (b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase();
-        if (st === "CANCELLED") return;
-        const date = b.slotDate || b.bookingDate || b.date || "";
-        let timeKey = b.slotTime ? b.slotTime.substring(0, 5) : normalise24(b.timeSlot?.masterTimeSlot?.timeRange || b.masterTimeSlot?.timeRange || b.timeRange || "");
+        if (["CANCELLED", "REJECTED", "FAILED", "EXPIRED"].includes(st)) return;
+        const date = bookingSlotDate(b);
+        const timeKey = bookingSlotTime(b);
         if (date && timeKey) bSet.add(`${date}|${timeKey}`);
       });
-      tsRecords.forEach((s) => {
+      const allTimeSlots = [...tsRecords, ...tsAllRecords];
+      allTimeSlots.forEach((s) => {
         if ((s.status || "").toUpperCase() !== "BOOKED") return;
         const rawTime = (s as any).slotTime;
         let timeKey = typeof rawTime === "object" && rawTime?.hour !== undefined ? `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}` : typeof rawTime === "string" && rawTime.length >= 5 ? rawTime.substring(0, 5) : normalise24((s as any).timeRange || "");
         if (s.slotDate && timeKey) bSet.add(`${s.slotDate}|${timeKey}`);
       });
       setBookedSlotSet(bSet);
-      // Fetch unavailable slots for default day
-      await fetchUnavailableSlots(c.id, DEFAULT_DAY.iso);
+      const unavailSet = new Set<string>();
+      allTimeSlots.forEach((s: any) => {
+        const st = (s.status || "").toUpperCase();
+        if (!["UNAVAILABLE", "BLOCKED", "DISABLED"].includes(st)) return;
+        const rawTime = (s as any).slotTime;
+        const timeKey =
+          typeof rawTime === "object" && rawTime?.hour !== undefined
+            ? `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`
+            : typeof rawTime === "string" && rawTime.length >= 5
+              ? rawTime.substring(0, 5)
+              : normalise24((s as any).timeRange || "");
+        if (s.slotDate && timeKey) unavailSet.add(`${s.slotDate}|${timeKey}`);
+      });
+      setUnavailSlotSet(unavailSet);
     } catch (e) { console.error("Modal load failed:", e); }
     finally { setLoading(p => ({ ...p, slots: false })); }
   };
@@ -1188,8 +1251,8 @@ export default function UserPage() {
     isMasterGrid?: boolean
   ) => {
     const isBooked = bookedSlotSet.has(`${dayIso}|${slotStart}`);
-    const isAdvisorBlocked = unavailSlotSet.has(`${dayIso}|${slotStart}`);
-    const isPast = isSlotPast(slotStart, dayIso);
+    const isAdvisorBlocked = !isBooked && unavailSlotSet.has(`${dayIso}|${slotStart}`);
+    const isPast = !isBooked && !isAdvisorBlocked && isSlotPast(slotStart, dayIso);
     const isUnavail = isBooked || isAdvisorBlocked || isPast;
     const isSel = !isUnavail && (isMasterGrid ? selectedSlot?.masterId === masterId : selectedSlot?.start24h === slotStart);
 

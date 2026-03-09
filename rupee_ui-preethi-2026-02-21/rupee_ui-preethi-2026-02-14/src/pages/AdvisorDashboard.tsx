@@ -377,6 +377,16 @@ const normaliseTimeKey = (raw: string): string => {
   }
   return '';
 };
+const parseSlotTimeKey = (raw: any, fallbackRange?: string): string => {
+  if (!raw && !fallbackRange) return '';
+  if (typeof raw === 'object' && raw?.hour !== undefined) {
+    return `${String(raw.hour).padStart(2, '0')}:${String(raw.minute ?? 0).padStart(2, '0')}`;
+  }
+  if (typeof raw === 'string' && raw.length >= 5) {
+    return raw.substring(0, 5);
+  }
+  return normaliseTimeKey(fallbackRange || '');
+};
 
 // ── Shared Badge ──────────────────────────────────────────────────────────────
 const Badge: React.FC<{ label: string; style: { bg: string; color: string; border: string } }> = ({ label, style }) => (
@@ -1263,24 +1273,59 @@ const MySlotsView: React.FC<{
   };
 
   // ── PATCH A – mark unavailable / restore ───────────────────────────────────
-  const handleMarkUnavailable = async (slotDate: string, slotTime: string) => {
-    const key = `${slotDate}|${slotTime}`;
+  // ── PATCH A – mark unavailable using existing /timeslots endpoint ───────────
+  const handleMarkUnavailable = async (slotDate: string, slotStart: string) => {
+    const key = `${slotDate}|${slotStart}`;
     setActionLoading(key);
     try {
-      const token = localStorage.getItem('fin_token');
-      const res = await fetch('/api/slots/unavailable', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ consultantId, slotDate, slotTime }),
+      const slotTimeFull = slotStart.length === 5 ? `${slotStart}:00` : slotStart;
+
+      // Find matching master slot
+      const matchedMaster = masterSlots.find(ms => {
+        const startPart = ms.timeRange.split(/[-–]/)[0].trim();
+        return normaliseTimeKey(startPart) === slotStart;
       });
-      if (!res.ok) throw new Error(await res.text());
+
+      // Check if a timeslot record already exists for this date+time
+      const existing = dbSlots.find(s => {
+        if (s.slotDate !== slotDate) return false;
+        const dbSlotTime = (s as any).slotTime
+          ? String((s as any).slotTime).substring(0, 5)
+          : '';
+        if (dbSlotTime && dbSlotTime === slotStart) return true;
+        if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        return normTR === slotStart;
+      });
+
+      if (existing) {
+        await apiFetch(`/timeslots/${existing.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ ...existing, status: 'UNAVAILABLE' }),
+        });
+      } else {
+        if (!matchedMaster) {
+          showSlotToast('⚠️ No matching master time range found. Add it in "Master Time Ranges" tab first.', false);
+          setActionLoading(null);
+          return;
+        }
+        await apiFetch('/timeslots', {
+          method: 'POST',
+          body: JSON.stringify({
+            consultantId,
+            slotDate,
+            slotTime: slotTimeFull,
+            durationMinutes: 60,
+            status: 'UNAVAILABLE',
+            masterTimeSlotId: matchedMaster.id,
+          }),
+        });
+      }
+
       // Optimistic update
-      setUnavailableSlots(prev => [...prev, { slotDate, slotTime }]);
+      setUnavailableSlots(prev => [...prev, { slotDate, slotTime: slotStart }]);
       showSlotToast('✓ Slot blocked');
+      await loadData(); // Refresh to sync with backend
     } catch (err: any) {
       showSlotToast(`Failed to block slot: ${err.message}`, false);
     } finally {
@@ -1288,25 +1333,39 @@ const MySlotsView: React.FC<{
     }
   };
 
-  const handleMarkAvailable = async (slotDate: string, slotTime: string) => {
-    const key = `${slotDate}|${slotTime}`;
+  const handleMarkAvailable = async (slotDate: string, slotStart: string) => {
+    const key = `${slotDate}|${slotStart}`;
     setActionLoading(key);
     try {
-      const token = localStorage.getItem('fin_token');
-      const res = await fetch('/api/slots/unavailable', {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ consultantId, slotDate, slotTime }),
+      const matchedMaster = masterSlots.find(ms => {
+        const startPart = ms.timeRange.split(/[-–]/)[0].trim();
+        return normaliseTimeKey(startPart) === slotStart;
       });
-      if (!res.ok) throw new Error(await res.text());
-      setUnavailableSlots(prev =>
-        prev.filter(u => !(u.slotDate === slotDate && u.slotTime === slotTime))
-      );
-      showSlotToast('✓ Slot restored');
+
+      const existing = dbSlots.find(s => {
+        if (s.slotDate !== slotDate) return false;
+        const dbSlotTime = (s as any).slotTime
+          ? String((s as any).slotTime).substring(0, 5)
+          : '';
+        if (dbSlotTime && dbSlotTime === slotStart) return true;
+        if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        return normTR === slotStart;
+      });
+
+      if (existing) {
+        await apiFetch(`/timeslots/${existing.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ ...existing, status: 'AVAILABLE' }),
+        });
+        setUnavailableSlots(prev =>
+          prev.filter(u => !(u.slotDate === slotDate && u.slotTime === slotStart))
+        );
+        showSlotToast('✓ Slot restored');
+        await loadData();
+      } else {
+        showSlotToast('⚠️ Slot record not found to restore.', false);
+      }
     } catch (err: any) {
       showSlotToast(`Failed to restore slot: ${err.message}`, false);
     } finally {
@@ -1327,6 +1386,7 @@ const MySlotsView: React.FC<{
   // ── data loader ─────────────────────────────────────────────────────────────
   const loadData = async () => {
     setLoading(true); setError(null);
+    let slotArr: any[] = [];
     try {
       let masterLookup: Record<number, string> = {};
       try {
@@ -1338,7 +1398,7 @@ const MySlotsView: React.FC<{
 
       try {
         const slotData = await apiFetch(`/timeslots/consultant/${consultantId}`);
-        const slotArr = extractArray(slotData);
+        slotArr = extractArray(slotData);
         setDbSlots(slotArr.map((s: any) => ({
           ...s,
           timeRange: (s.timeRange && s.timeRange !== 'Unknown Time')
@@ -1368,29 +1428,22 @@ const MySlotsView: React.FC<{
         // ── PATCH A – populate bookedSlots state from API bookings ────────────
         const mapped = enrichedB.map((b: any) => ({
           slotDate: deepFindDate(b),
-          slotTime: (b.slotTime
-            ? String(b.slotTime).substring(0, 5)
-            : normaliseTimeKey(deepFindTime(b))),
+          slotTime: parseSlotTimeKey(b.slotTime, deepFindTime(b)),
         })).filter(b => b.slotDate && b.slotTime);
         setBookedSlots(mapped);
       } catch { setBookings([]); }
 
-      // ── PATCH A – fetch unavailable slots from dedicated endpoint ───────────
-      try {
-        const token = localStorage.getItem('fin_token');
-        const unavailRes = await fetch(`/api/slots/unavailable?consultantId=${consultantId}`, {
-          headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        });
-        if (unavailRes.ok) {
-          const unavailData = await unavailRes.json();
-          setUnavailableSlots(
-            extractArray(unavailData).map((u: any) => ({
-              slotDate: u.slotDate || u.date || '',
-              slotTime: (u.slotTime || u.time || '').substring(0, 5),
-            }))
-          );
-        }
-      } catch { /* non-fatal – fallback to dbSlots-based detection below */ }
+      // Derive unavailable slots from consultant timeslots status.
+      setUnavailableSlots(
+        slotArr
+          .map((s: any) => ({
+            slotDate: s.slotDate || '',
+            slotTime: parseSlotTimeKey(s.slotTime, s.timeRange),
+            status: (s.status || '').toUpperCase(),
+          }))
+          .filter((s: any) => s.slotDate && s.slotTime && !['AVAILABLE', 'BOOKED'].includes(s.status))
+          .map((s: any) => ({ slotDate: s.slotDate, slotTime: s.slotTime }))
+      );
 
     } catch (e: any) {
       setError(e?.message || 'Failed to load slots.');
@@ -1413,16 +1466,13 @@ const MySlotsView: React.FC<{
     if (st === 'CANCELLED') return;
     const date = deepFindDate(b);
     if (!date) return;
-    let timeKey = '';
-    if (b.slotTime) timeKey = String(b.slotTime).substring(0, 5);
-    else timeKey = normaliseTimeKey(deepFindTime(b));
+    const timeKey = parseSlotTimeKey(b.slotTime, deepFindTime(b));
     if (date && timeKey) bookedByClientSet.add(`${date}|${timeKey}`);
   });
   dbSlots.forEach(s => {
     const st = (s.status || '').toUpperCase();
     if (st !== 'BOOKED') return;
-    const slotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
-    const timeKey = slotTime || normaliseTimeKey(s.timeRange || '');
+    const timeKey = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
     if (s.slotDate && timeKey) bookedByClientSet.add(`${s.slotDate}|${timeKey}`);
   });
 
@@ -1430,8 +1480,7 @@ const MySlotsView: React.FC<{
   dbSlots.forEach(s => {
     const st = (s.status || '').toUpperCase();
     if (st === 'AVAILABLE' || st === 'BOOKED') return;
-    const slotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
-    const timeKey = slotTime || normaliseTimeKey(s.timeRange || '');
+    const timeKey = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
     if (s.slotDate && timeKey && !bookedByClientSet.has(`${s.slotDate}|${timeKey}`)) {
       manuallyDisabledSet.add(`${s.slotDate}|${timeKey}`);
     }
@@ -1443,7 +1492,7 @@ const MySlotsView: React.FC<{
     const extras: string[] = [];
     dbSlots.forEach(s => {
       if (s.slotDate !== dateStr) return;
-      const slotT = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
+      const slotT = parseSlotTimeKey((s as any).slotTime, s.timeRange || '');
       if (slotT && !hourlySlotTimes.includes(slotT)) extras.push(slotT);
     });
     return [...new Set(extras)].sort();
@@ -1546,9 +1595,8 @@ const MySlotsView: React.FC<{
   // ── PATCH A – slot button renderer ─────────────────────────────────────────
   const renderSlotButton = (slotDate: string, slotStart: string) => {
     const key = `${slotDate}|${slotStart}`;
-    // PATCH A sets take precedence; fall back to dbSlot-derived sets
     const isBooked = bookedSlotSet.has(key) || bookedByClientSet.has(key);
-    const isUnavail = unavailSlotSet.has(key) || (!isBooked && manuallyDisabledSet.has(key));
+    const isUnavail = !isBooked && (unavailSlotSet.has(key) || manuallyDisabledSet.has(key));
     const isLoading = actionLoading === key || togglingSlot === key;
     const isCustom = !hourlySlotTimes.includes(slotStart);
 
@@ -1556,70 +1604,93 @@ const MySlotsView: React.FC<{
     const endStr = `${String(endH).padStart(2, '0')}:${slotStart.split(':')[1]}`;
     const label = `${fmt24to12(slotStart)} – ${fmt24to12(endStr)}`;
 
-    // Style matrix: BOOKED=blue, UNAVAIL=red-tint, AVAILABLE=white
-    let bg = '#fff', borderCol = '#BFDBFE', textCol = '#334155';
-    let badgeLabel = '';
+    // ── Booked: solid blue pill, no block button ──────────────────────────────
     if (isBooked) {
-      bg = '#2563EB'; borderCol = '#1D4ED8'; textCol = '#fff'; badgeLabel = 'BOOKED';
-    } else if (isUnavail) {
-      bg = '#FEE2E2'; borderCol = '#FCA5A5'; textCol = '#DC2626'; badgeLabel = 'UNAVAILABLE';
+      return (
+        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{
+            padding: '10px 6px', borderRadius: 100,
+            background: '#2563EB', border: '1.5px solid #1D4ED8',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+          }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{label}</span>
+            <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.08em' }}>
+              BOOKED
+            </span>
+          </div>
+          {/* No block button for booked slots */}
+        </div>
+      );
     }
 
-    return (
-      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {/* Main slot pill */}
-        <button
-          disabled={isBooked || isLoading}
-          style={{
+    // ── Unavailable: red-tinted pill + Restore button ─────────────────────────
+    if (isUnavail) {
+      return (
+        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{
             padding: '10px 6px', borderRadius: 100,
-            border: `1.5px solid ${borderCol}`,
-            background: bg, fontSize: 11, fontWeight: 600, color: textCol,
-            cursor: isBooked ? 'not-allowed' : 'pointer', width: '100%',
-            fontFamily: 'inherit', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', gap: 2,
-            opacity: isLoading ? 0.6 : 1,
-            transition: 'all 0.15s',
-          }}
-          title={isBooked ? 'Booked by client' : isUnavail ? 'Marked unavailable' : 'Available'}
-        >
-          <span>{isLoading ? '…' : label}</span>
-          {badgeLabel && (
-            <span style={{
-              fontSize: 8, fontWeight: 800,
-              color: isBooked ? 'rgba(255,255,255,0.9)' : '#DC2626',
-              letterSpacing: '0.08em',
-            }}>
-              {badgeLabel}
+            background: '#FEE2E2', border: '1.5px solid #FCA5A5',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+          }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#DC2626' }}>{label}</span>
+            <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>
+              UNAVAILABLE
             </span>
-          )}
-          {isCustom && !isBooked && !isUnavail && (
-            <span style={{ fontSize: 8, fontWeight: 800, color: '#10B981', background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>
-              CUSTOM
-            </span>
-          )}
-        </button>
-
-        {/* Block / Restore toggle — hidden when booked */}
-        {!isBooked && (
+          </div>
           <button
-            onClick={() =>
-              isUnavail
-                ? handleMarkAvailable(slotDate, slotStart)
-                : handleMarkUnavailable(slotDate, slotStart)
-            }
+            onClick={() => handleMarkAvailable(slotDate, slotStart)}
             disabled={isLoading}
             style={{
               padding: '3px 8px', borderRadius: 6,
-              border: isUnavail ? '1px solid #86EFAC' : '1px solid #FBBF24',
-              background: isUnavail ? '#F0FDF4' : '#FFFBEB',
-              color: isUnavail ? '#15803D' : '#92400E',
-              fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer',
+              border: '1px solid #86EFAC',
+              background: '#F0FDF4',
+              color: '#15803D',
+              fontSize: 9, fontWeight: 700,
+              cursor: isLoading ? 'default' : 'pointer',
               fontFamily: 'inherit', width: '100%',
+              opacity: isLoading ? 0.6 : 1,
             }}
           >
-            {isLoading ? '…' : isUnavail ? '✓ Restore' : 'Block'}
+            {isLoading ? '…' : '✓ Restore'}
           </button>
-        )}
+        </div>
+      );
+    }
+
+    // ── Available: white pill + Block button ──────────────────────────────────
+    return (
+      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{
+          padding: '10px 6px', borderRadius: 100,
+          background: '#fff', border: '1.5px solid #BFDBFE',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>{label}</span>
+          {isCustom && (
+            <span style={{
+              fontSize: 8, fontWeight: 800, color: '#10B981',
+              background: '#D1FAE5', borderRadius: 4, padding: '1px 5px',
+            }}>
+              CUSTOM
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => handleMarkUnavailable(slotDate, slotStart)}
+          disabled={isLoading}
+          style={{
+            padding: '3px 8px', borderRadius: 6,
+            border: '1px solid #FBBF24',
+            background: '#FFFBEB',
+            color: '#92400E',
+            fontSize: 9, fontWeight: 700,
+            cursor: isLoading ? 'default' : 'pointer',
+            fontFamily: 'inherit', width: '100%',
+            opacity: isLoading ? 0.6 : 1,
+          }}
+        >
+          {isLoading ? '…' : 'Block'}
+        </button>
       </div>
     );
   };
