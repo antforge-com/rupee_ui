@@ -16,6 +16,8 @@ import {
   deleteHoliday as apiDeleteHoliday,
   apiFetch,
   assignTicketToConsultant,
+  clientExportTicketsExcel,
+  clientExportTicketsPdf,
   createCannedResponse,
   createTicket,
   createTicketCategory,
@@ -24,6 +26,10 @@ import {
   deleteCannedResponse,
   deleteTicket,
   escalateTicket,
+  exportSingleTicketExcel,
+  exportSingleTicketPdf,
+  exportTicketsExcel,
+  exportTicketsPdf,
   extractArray,
   getAllAdvisors,
   getAllBookings,
@@ -38,6 +44,7 @@ import {
   postInternalNote,
   postTicketComment,
   SLA_HOURS,
+  ticketsToExportRows,
   toggleTicketCategory,
   updateAutoResponder,
   updateBusinessHours,
@@ -654,6 +661,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               <span style={{ padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.15)", color: "#E0F2FE", fontSize: 11, fontWeight: 600 }}>
                 📅 {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
               </span>
+              <ExportDropdown tickets={[ticket]} label="Export" compact={true} />
               <button
                 onClick={() => setShowAssign(true)}
                 style={{ padding: "4px 12px", borderRadius: 20, background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", marginLeft: "auto" }}
@@ -967,6 +975,141 @@ export const CreateTicketModal: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// EXPORT DROPDOWN
+// ─────────────────────────────────────────────────────────────────────────────
+interface ExportDropdownProps {
+  tickets: any[];
+  label?: string;
+  compact?: boolean;
+}
+
+const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Export", compact = false }) => {
+  const [open, setOpen] = React.useState(false);
+  const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
+  const [statusMsg, setStatusMsg] = React.useState("");
+  const ref = React.useRef<HTMLDivElement>(null);
+  const isSingle = tickets.length === 1;
+
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const run = async (action: () => Promise<void>, successMsg: string) => {
+    setOpen(false);
+    setStatus("loading");
+    setStatusMsg("Generating…");
+    try {
+      await action();
+      setStatus("done");
+      setStatusMsg(successMsg);
+    } catch (err: any) {
+      setStatus("error");
+      setStatusMsg(err?.message || "Export failed");
+    } finally {
+      setTimeout(() => setStatus("idle"), 3500);
+    }
+  };
+
+  const handleExcel = async () => {
+    if (isSingle) {
+      try { await exportSingleTicketExcel(tickets[0].id); setStatus("done"); setStatusMsg("Excel downloaded ✓"); }
+      catch { await clientExportTicketsExcel(tickets, `ticket_${tickets[0].id}.xlsx`); setStatus("done"); setStatusMsg("Excel downloaded ✓"); }
+    } else {
+      try { await exportTicketsExcel(); setStatus("done"); setStatusMsg(`${tickets.length} tickets → Excel ✓`); }
+      catch { await clientExportTicketsExcel(tickets); setStatus("done"); setStatusMsg(`${tickets.length} tickets → Excel ✓`); }
+    }
+  };
+
+  const handlePdf = async () => {
+    if (isSingle) {
+      try { await exportSingleTicketPdf(tickets[0].id); setStatus("done"); setStatusMsg("PDF downloaded ✓"); }
+      catch { await clientExportTicketsPdf(tickets, `ticket_${tickets[0].id}.pdf`); setStatus("done"); setStatusMsg("PDF downloaded ✓"); }
+    } else {
+      try { await exportTicketsPdf(); setStatus("done"); setStatusMsg(`${tickets.length} tickets → PDF ✓`); }
+      catch { await clientExportTicketsPdf(tickets); setStatus("done"); setStatusMsg(`${tickets.length} tickets → PDF ✓`); }
+    }
+  };
+
+  const btnStyle: React.CSSProperties = {
+    padding: compact ? "5px 12px" : "8px 16px", borderRadius: 8,
+    border: "1.5px solid #E2E8F0",
+    background: status === "loading" ? "#F8FAFC" : status === "done" ? "#F0FDF4" : status === "error" ? "#FEF2F2" : "#fff",
+    color: status === "done" ? "#16A34A" : status === "error" ? "#DC2626" : "#374151",
+    fontSize: compact ? 11 : 13, fontWeight: 600,
+    cursor: status === "loading" ? "default" : "pointer",
+    display: "flex", alignItems: "center", gap: 6,
+    transition: "all 0.15s", whiteSpace: "nowrap" as const,
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={() => status === "idle" && setOpen(o => !o)} style={btnStyle} title={isSingle ? `Export Ticket #${tickets[0]?.id}` : `Export ${tickets.length} tickets`}>
+        {status === "loading" ? (
+          <><span style={{ width: 12, height: 12, border: "2px solid #CBD5E1", borderTopColor: "#2563EB", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Exporting…</>
+        ) : status === "done" ? (<>✓ {statusMsg}</>
+        ) : status === "error" ? (<>⚠ {statusMsg.slice(0, 28)}</>
+        ) : (
+          <>
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <polyline points="7 10 12 15 17 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            {label}
+            <svg width="10" height="10" fill="none" viewBox="0 0 24 24" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </>
+        )}
+      </button>
+
+      {open && status === "idle" && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, background: "#fff", border: "1.5px solid #E2E8F0", borderRadius: 12, boxShadow: "0 8px 28px rgba(0,0,0,0.12)", minWidth: 210, zIndex: 500, overflow: "hidden", animation: "fadeInUp 0.12s ease" }}>
+          <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9", background: "#F8FAFC" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              {isSingle ? `Export Ticket #${tickets[0]?.id}` : `Export ${tickets.length} Tickets`}
+            </div>
+          </div>
+          <button onClick={() => run(handleExcel, isSingle ? "Excel saved" : `${tickets.length} tickets saved`)}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", border: "none", background: "none", cursor: "pointer", textAlign: "left", transition: "background 0.1s" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "#F0FDF4")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "#DCFCE7", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="6" fill="#16A34A" /><text x="5" y="22" fontSize="14" fontWeight="800" fill="white" fontFamily="Arial">XL</text></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Download Excel</div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Single ticket .xlsx file" : `.xlsx · ${tickets.length} rows`}</div>
+            </div>
+          </button>
+          <div style={{ height: 1, background: "#F1F5F9", margin: "0 14px" }} />
+          <button onClick={() => run(handlePdf, isSingle ? "PDF saved" : `${tickets.length} tickets saved`)}
+            style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", border: "none", background: "none", cursor: "pointer", textAlign: "left", transition: "background 0.1s" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "#FFF7ED")}
+            onMouseLeave={e => (e.currentTarget.style.background = "none")}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "#FFEDD5", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="6" fill="#EA580C" /><text x="4" y="22" fontSize="12" fontWeight="800" fill="white" fontFamily="Arial">PDF</text></svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Download PDF</div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Formatted ticket report" : `Printable report · ${tickets.length} tickets`}</div>
+            </div>
+          </button>
+          <div style={{ padding: "8px 14px 10px", borderTop: "1px solid #F1F5F9", background: "#F8FAFC" }}>
+            <div style={{ fontSize: 10, color: "#94A3B8" }}>💡 {isSingle ? "Includes all ticket details & comments" : "Includes all filtered tickets"}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TICKETS SECTION
 // ─────────────────────────────────────────────────────────────────────────────
 interface TicketsSectionProps {
@@ -1104,7 +1247,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         />
       )}
 
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>
           Support Tickets
@@ -1112,11 +1254,15 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
             {loading ? "" : `(${tickets.length} total)`}
           </span>
         </h2>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
           <button onClick={() => setShowCreate(true)}
             style={{ padding: "8px 16px", background: "#2563EB", border: "none", color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
             + New Ticket
           </button>
+          <ExportDropdown
+            tickets={visible.length > 0 ? visible : tickets}
+            label={visible.length !== tickets.length ? `Export (${visible.length})` : `Export All (${tickets.length})`}
+          />
           <button onClick={load} disabled={loading}
             style={{ padding: "8px 16px", background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             {loading ? "⏳" : "↻"} Refresh
@@ -1124,18 +1270,11 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       </div>
 
-      {/* SLA breach alert banner */}
       {overdueTickets.length > 0 && (
-        <div style={{
-          background: "linear-gradient(135deg,#FEF2F2,#FFF5F5)", border: "2px solid #FECACA", borderRadius: 14,
-          padding: "14px 20px", marginBottom: 20, display: "flex", gap: 14, alignItems: "center",
-          animation: "pulse 2s infinite",
-        }}>
+        <div style={{ background: "linear-gradient(135deg,#FEF2F2,#FFF5F5)", border: "2px solid #FECACA", borderRadius: 14, padding: "14px 20px", marginBottom: 20, display: "flex", gap: 14, alignItems: "center", animation: "pulse 2s infinite" }}>
           <div style={{ fontSize: 28, flexShrink: 0 }}>🚨</div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 800, fontSize: 14, color: "#B91C1C" }}>
-              SLA Breach Alert — {overdueTickets.length} Overdue Ticket{overdueTickets.length !== 1 ? "s" : ""}
-            </div>
+            <div style={{ fontWeight: 800, fontSize: 14, color: "#B91C1C" }}>SLA Breach Alert — {overdueTickets.length} Overdue Ticket{overdueTickets.length !== 1 ? "s" : ""}</div>
             <div style={{ fontSize: 12, color: "#EF4444", marginTop: 4 }}>
               {overdueTickets.slice(0, 3).map(t => `#${t.id} "${t.title || t.category}"`).join(", ")}
               {overdueTickets.length > 3 && ` +${overdueTickets.length - 3} more`}
@@ -1148,7 +1287,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       )}
 
-      {/* Stats strip */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 12, marginBottom: 20 }}>
         {[
           { label: "Total", value: tickets.length, color: "#2563EB", bg: "#EFF6FF" },
@@ -1166,7 +1304,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         ))}
       </div>
 
-      {/* Search + priority filter */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
           <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="14" height="14" fill="none" viewBox="0 0 24 24">
@@ -1185,7 +1322,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </select>
       </div>
 
-      {/* Status filter pills */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {(["ALL", ...ALL_TICKET_STATUSES] as const).map(f => (
           <button key={f} onClick={() => setFilterStatus(f as any)}
@@ -1201,7 +1337,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         ))}
       </div>
 
-      {/* Error */}
       {error && (
         <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, padding: "12px 16px", color: "#B91C1C", fontSize: 13, marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
           ⚠️ {error}
@@ -1209,7 +1344,6 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       )}
 
-      {/* Loading / empty */}
       {loading ? (
         <div style={{ textAlign: "center", padding: 60, color: "#94A3B8" }}>
           <div style={{ width: 32, height: 32, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
@@ -1224,17 +1358,11 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       ) : (
         <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-          {/* Table header */}
-          <div style={{
-            display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px",
-            padding: "10px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9",
-            fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em",
-          }}>
+          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px", padding: "10px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             <div>ID</div><div>TITLE / USER</div><div>CATEGORY</div><div>PRIORITY</div>
             <div>ASSIGNED TO</div><div>STATUS</div><div>CREATED</div>
             <div style={{ textAlign: "right" }}>ACTION</div>
           </div>
-
           {visible.map((ticket, idx) => {
             const sc = TICKET_STATUS_CFG[ticket.status] ?? TICKET_STATUS_CFG.NEW;
             const pc = TICKET_PRIORITY_CFG[ticket.priority] ?? TICKET_PRIORITY_CFG.MEDIUM;
@@ -1243,14 +1371,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
             const isOverdue = !["RESOLVED", "CLOSED"].includes(ticket.status) && hoursOpen >= SLA_HOURS_LOCAL;
             return (
               <div key={ticket.id}
-                style={{
-                  display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px",
-                  padding: "14px 20px",
-                  borderBottom: idx < visible.length - 1 ? "1px solid #F8FAFC" : "none",
-                  borderLeft: `3px solid ${isOverdue ? "#DC2626" : sla?.breached ? "#EF4444" : sla?.warning ? "#F59E0B" : "transparent"}`,
-                  background: isOverdue ? "#FFF8F8" : "transparent",
-                  transition: "background 0.1s", cursor: "pointer", alignItems: "center",
-                }}
+                style={{ display: "grid", gridTemplateColumns: "60px 1fr 110px 90px 100px 110px 100px 80px", padding: "14px 20px", borderBottom: idx < visible.length - 1 ? "1px solid #F8FAFC" : "none", borderLeft: `3px solid ${isOverdue ? "#DC2626" : sla?.breached ? "#EF4444" : sla?.warning ? "#F59E0B" : "transparent"}`, background: isOverdue ? "#FFF8F8" : "transparent", transition: "background 0.1s", cursor: "pointer", alignItems: "center" }}
                 onMouseEnter={e => (e.currentTarget.style.background = "#FAFBFF")}
                 onMouseLeave={e => (e.currentTarget.style.background = isOverdue ? "#FFF8F8" : "transparent")}
                 onClick={() => setSelectedTicket(ticket)}>
@@ -1259,9 +1380,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
                   {isOverdue && <div style={{ fontSize: 9, color: "#DC2626", fontWeight: 800 }}>⏰ SLA</div>}
                 </div>
                 <div style={{ minWidth: 0, paddingRight: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {ticket.title || ticket.category}
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ticket.title || ticket.category}</div>
                   <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>👤 {getUserDisplay(ticket)}</div>
                   {sla && (
                     <div style={{ fontSize: 10, color: sla.breached ? "#DC2626" : sla.warning ? "#D97706" : "#16A34A", fontWeight: 700, marginTop: 2 }}>
@@ -1272,19 +1391,11 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
                 <div><span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "#F1F5F9", color: "#475569", fontWeight: 600 }}>{ticket.category}</span></div>
                 <div><span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: pc.bg, color: pc.color, fontWeight: 700 }}>⚑ {pc.label}</span></div>
                 <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {ticket.consultantName || ticket.agentName || (
-                    <span style={{ color: "#DC2626", fontWeight: 600 }}>Unassigned</span>
-                  )}
+                  {ticket.consultantName || ticket.agentName || <span style={{ color: "#DC2626", fontWeight: 600 }}>Unassigned</span>}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700 }}>
-                    {sc.icon} {sc.label}
-                  </span>
-                  {ticket.isEscalated && (
-                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 700 }}>
-                      🚨 Escalated
-                    </span>
-                  )}
+                  <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontWeight: 700 }}>{sc.icon} {sc.label}</span>
+                  {ticket.isEscalated && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 700 }}>🚨 Escalated</span>}
                 </div>
                 <div style={{ fontSize: 11, color: "#94A3B8" }}>
                   {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
@@ -1302,13 +1413,592 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       )}
 
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.15); }
-          50%       { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
-        }
-      `}</style>
+      <style>{`@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.15); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }`}</style>
     </>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DYNAMIC SETTINGS PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SettingsTab = "profile" | "notifications" | "security" | "logout";
+
+interface AdminProfile {
+  name: string;
+  email: string;
+  phone: string;
+  orgName: string;
+  designation: string;
+  avatarUrl: string;
+}
+
+interface NotificationPrefs {
+  emailOnNewTicket: boolean;
+  emailOnStatusChange: boolean;
+  emailOnEscalation: boolean;
+  inAppNewTicket: boolean;
+  inAppSlaBreaches: boolean;
+  inAppAssignments: boolean;
+  dailySummaryEmail: boolean;
+  weeklySummaryEmail: boolean;
+}
+
+const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adminId, onLogout }) => {
+  const [activeTab, setActiveTab] = React.useState<SettingsTab | null>(null);
+
+  // ── Profile state ──────────────────────────────────────────────────────────
+  const [profile, setProfile] = React.useState<AdminProfile>({
+    name: localStorage.getItem("fin_user_name") || "",
+    email: localStorage.getItem("fin_user_email") || "",
+    phone: localStorage.getItem("fin_user_phone") || "",
+    orgName: localStorage.getItem("fin_org_name") || "FINADVISE",
+    designation: localStorage.getItem("fin_designation") || "Admin",
+    avatarUrl: localStorage.getItem("fin_avatar_url") || "",
+  });
+  const [profileSaving, setProfileSaving] = React.useState(false);
+  const [profileMsg, setProfileMsg] = React.useState<{ text: string; ok: boolean } | null>(null);
+  const [avatarPreview, setAvatarPreview] = React.useState<string>(profile.avatarUrl);
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
+
+  // ── Notification prefs ─────────────────────────────────────────────────────
+  const loadNotifPrefs = (): NotificationPrefs => {
+    try {
+      const raw = localStorage.getItem("fin_notif_prefs");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {
+      emailOnNewTicket: true,
+      emailOnStatusChange: true,
+      emailOnEscalation: true,
+      inAppNewTicket: true,
+      inAppSlaBreaches: true,
+      inAppAssignments: true,
+      dailySummaryEmail: false,
+      weeklySummaryEmail: true,
+    };
+  };
+  const [notifPrefs, setNotifPrefs] = React.useState<NotificationPrefs>(loadNotifPrefs);
+  const [notifSaving, setNotifSaving] = React.useState(false);
+  const [notifMsg, setNotifMsg] = React.useState<{ text: string; ok: boolean } | null>(null);
+
+  // ── Security state ─────────────────────────────────────────────────────────
+  const [secForm, setSecForm] = React.useState({ current: "", newPass: "", confirm: "" });
+  const [secSaving, setSecSaving] = React.useState(false);
+  const [secMsg, setSecMsg] = React.useState<{ text: string; ok: boolean } | null>(null);
+  const [showPasswords, setShowPasswords] = React.useState({ current: false, newPass: false, confirm: false });
+
+  // ── Logout confirm ─────────────────────────────────────────────────────────
+  const [logoutConfirm, setLogoutConfirm] = React.useState(false);
+
+  // ── Auto-dismiss messages ──────────────────────────────────────────────────
+  const showMsg = (setter: React.Dispatch<React.SetStateAction<{ text: string; ok: boolean } | null>>, text: string, ok: boolean) => {
+    setter({ text, ok });
+    setTimeout(() => setter(null), 3500);
+  };
+
+  // ── Profile handlers ───────────────────────────────────────────────────────
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const dataUrl = ev.target?.result as string;
+      setAvatarPreview(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!profile.name.trim() || !profile.email.trim()) {
+      showMsg(setProfileMsg, "Name and email are required.", false);
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      const token = localStorage.getItem("fin_token") || "";
+      const payload: any = {
+        name: profile.name.trim(),
+        email: profile.email.trim(),
+        phone: profile.phone.trim(),
+        orgName: profile.orgName.trim(),
+        designation: profile.designation.trim(),
+      };
+      if (avatarPreview && avatarPreview !== profile.avatarUrl) {
+        payload.avatarUrl = avatarPreview;
+      }
+
+      // Try PATCH /api/users/{id} first, fallback to PUT /api/users/me
+      let saved = false;
+      for (const endpoint of [`/api/users/${adminId}`, "/api/users/me", "/api/auth/me"]) {
+        try {
+          const res = await fetch(endpoint, {
+            method: endpoint.includes(`/${adminId}`) ? "PATCH" : "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) { saved = true; break; }
+          if (res.status === 404) continue;
+          const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
+          throw new Error(err.message || `HTTP ${res.status}`);
+        } catch (e: any) {
+          if (e.message?.includes("404")) continue;
+          throw e;
+        }
+      }
+
+      // Persist to localStorage regardless of backend success
+      localStorage.setItem("fin_user_name", profile.name.trim());
+      localStorage.setItem("fin_user_email", profile.email.trim());
+      localStorage.setItem("fin_user_phone", profile.phone.trim());
+      localStorage.setItem("fin_org_name", profile.orgName.trim());
+      localStorage.setItem("fin_designation", profile.designation.trim());
+      if (avatarPreview) localStorage.setItem("fin_avatar_url", avatarPreview);
+
+      showMsg(setProfileMsg, saved ? "Profile saved successfully!" : "Saved locally (backend endpoint not found).", saved);
+    } catch (e: any) {
+      showMsg(setProfileMsg, e.message || "Failed to save profile.", false);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  // ── Notification prefs handler ─────────────────────────────────────────────
+  const handleSaveNotifPrefs = async () => {
+    setNotifSaving(true);
+    try {
+      const token = localStorage.getItem("fin_token") || "";
+      try {
+        const res = await fetch("/api/users/notification-preferences", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(notifPrefs),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch {
+        // Backend might not have this endpoint — save to localStorage only
+      }
+      localStorage.setItem("fin_notif_prefs", JSON.stringify(notifPrefs));
+      showMsg(setNotifMsg, "Notification preferences saved!", true);
+    } catch (e: any) {
+      showMsg(setNotifMsg, e.message || "Failed to save preferences.", false);
+    } finally {
+      setNotifSaving(false);
+    }
+  };
+
+  // ── Security handler ────────────────────────────────────────────────────────
+  const handleChangePassword = async () => {
+    if (!secForm.current.trim()) { showMsg(setSecMsg, "Current password is required.", false); return; }
+    if (secForm.newPass.length < 8) { showMsg(setSecMsg, "New password must be at least 8 characters.", false); return; }
+    if (secForm.newPass !== secForm.confirm) { showMsg(setSecMsg, "Passwords do not match.", false); return; }
+    setSecSaving(true);
+    try {
+      const token = localStorage.getItem("fin_token") || "";
+      let changed = false;
+      for (const endpoint of ["/api/users/change-password", "/api/auth/change-password", `/api/users/${adminId}/password`]) {
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ currentPassword: secForm.current, newPassword: secForm.newPass }),
+          });
+          if (res.ok) { changed = true; break; }
+          if (res.status === 404) continue;
+          const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
+          throw new Error(err.message || `HTTP ${res.status}`);
+        } catch (e: any) {
+          if (e.message?.includes("404")) continue;
+          throw e;
+        }
+      }
+      if (!changed) throw new Error("Password change endpoint not found. Contact backend developer.");
+      setSecForm({ current: "", newPass: "", confirm: "" });
+      showMsg(setSecMsg, "Password changed successfully!", true);
+    } catch (e: any) {
+      showMsg(setSecMsg, e.message || "Failed to change password.", false);
+    } finally {
+      setSecSaving(false);
+    }
+  };
+
+  // ── Password strength ───────────────────────────────────────────────────────
+  const getPasswordStrength = (p: string): { label: string; color: string; pct: number } => {
+    if (!p) return { label: "", color: "#E2E8F0", pct: 0 };
+    let score = 0;
+    if (p.length >= 8) score++;
+    if (p.length >= 12) score++;
+    if (/[A-Z]/.test(p)) score++;
+    if (/[0-9]/.test(p)) score++;
+    if (/[^A-Za-z0-9]/.test(p)) score++;
+    if (score <= 1) return { label: "Weak", color: "#DC2626", pct: 20 };
+    if (score <= 2) return { label: "Fair", color: "#D97706", pct: 45 };
+    if (score <= 3) return { label: "Good", color: "#2563EB", pct: 70 };
+    return { label: "Strong", color: "#16A34A", pct: 100 };
+  };
+  const strength = getPasswordStrength(secForm.newPass);
+
+  // ── Shared styles ───────────────────────────────────────────────────────────
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0",
+    borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box",
+    fontFamily: "inherit", background: "#fff", color: "#0F172A", transition: "border-color 0.15s",
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, color: "#64748B",
+    textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5,
+  };
+  const sectionBtnStyle = (active: boolean): React.CSSProperties => ({
+    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "16px 20px", border: "none", background: active ? "#EFF6FF" : "#fff",
+    cursor: "pointer", fontSize: 14, fontWeight: active ? 700 : 500,
+    color: active ? "#2563EB" : "#0F172A", fontFamily: "inherit",
+    borderBottom: "1px solid #F1F5F9", transition: "all 0.15s",
+  });
+  const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string; sub?: string }> = ({ checked, onChange, label, sub }) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F8FAFC" }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{label}</div>
+        {sub && <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 1 }}>{sub}</div>}
+      </div>
+      <label style={{ position: "relative", display: "inline-block", width: 44, height: 24, cursor: "pointer", flexShrink: 0 }}>
+        <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+        <span style={{ position: "absolute", inset: 0, background: checked ? "#2563EB" : "#CBD5E1", borderRadius: 24, transition: "0.2s" }}>
+          <span style={{ position: "absolute", left: checked ? 22 : 2, top: 2, width: 20, height: 20, background: "#fff", borderRadius: "50%", transition: "0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+        </span>
+      </label>
+    </div>
+  );
+
+  const TABS: { id: SettingsTab; label: string; icon: string; desc: string }[] = [
+    { id: "profile",       icon: "👤", label: "General Profile",  desc: "Update your name, email, organisation details and avatar" },
+    { id: "notifications", icon: "🔔", label: "Notifications",    desc: "Control which alerts you receive via email and in-app" },
+    { id: "security",      icon: "🔒", label: "Security",         desc: "Change your password and manage account security" },
+    { id: "logout",        icon: "🚪", label: "Logout",           desc: "Sign out of your admin account" },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>⚙️ Settings</h2>
+        <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>Manage your profile, notifications, and account security</p>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 6px rgba(0,0,0,0.05)" }}>
+        {TABS.map((tab, idx) => (
+          <div key={tab.id}>
+            {/* ── Row button ── */}
+            <button
+              onClick={() => setActiveTab(activeTab === tab.id ? null : tab.id)}
+              style={sectionBtnStyle(activeTab === tab.id)}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                  background: activeTab === tab.id ? "#EFF6FF" : "#F8FAFC",
+                  border: `1.5px solid ${activeTab === tab.id ? "#BFDBFE" : "#E2E8F0"}`,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                  transition: "all 0.15s",
+                }}>
+                  {tab.icon}
+                </div>
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 14, fontWeight: activeTab === tab.id ? 700 : 600, color: activeTab === tab.id ? "#2563EB" : "#0F172A" }}>
+                    {tab.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 1 }}>{tab.desc}</div>
+                </div>
+              </div>
+              <span style={{
+                fontSize: 18, color: activeTab === tab.id ? "#2563EB" : "#CBD5E1",
+                transform: activeTab === tab.id ? "rotate(90deg)" : "none",
+                transition: "transform 0.2s",
+                display: "inline-block",
+              }}>›</span>
+            </button>
+
+            {/* ══════════════ PROFILE PANEL ══════════════ */}
+            {activeTab === "profile" && tab.id === "profile" && (
+              <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
+                {/* Avatar */}
+                <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 24, padding: "16px 18px", background: "#fff", borderRadius: 14, border: "1px solid #E2E8F0" }}>
+                  <div style={{ position: "relative" }}>
+                    <div style={{
+                      width: 72, height: 72, borderRadius: "50%", overflow: "hidden",
+                      border: "3px solid #BFDBFE",
+                      background: avatarPreview ? "transparent" : "linear-gradient(135deg,#1E3A5F,#2563EB)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 28, color: "#fff", fontWeight: 800, flexShrink: 0,
+                    }}>
+                      {avatarPreview
+                        ? <img src={avatarPreview} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        : (profile.name.charAt(0).toUpperCase() || "A")}
+                    </div>
+                    <button
+                      onClick={() => avatarInputRef.current?.click()}
+                      style={{
+                        position: "absolute", bottom: -2, right: -2,
+                        width: 24, height: 24, borderRadius: "50%", border: "2px solid #fff",
+                        background: "#2563EB", cursor: "pointer", display: "flex",
+                        alignItems: "center", justifyContent: "center", fontSize: 11,
+                      }}
+                      title="Change avatar"
+                    >📷</button>
+                  </div>
+                  <input ref={avatarInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarChange} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: "#0F172A" }}>{profile.name || "Admin"}</div>
+                    <div style={{ fontSize: 12, color: "#64748B" }}>{profile.designation} · {profile.orgName}</div>
+                    <button onClick={() => avatarInputRef.current?.click()} style={{ marginTop: 6, fontSize: 11, color: "#2563EB", fontWeight: 700, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                      Change photo
+                    </button>
+                  </div>
+                </div>
+
+                {/* Form grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 20px" }}>
+                  <div>
+                    <label style={labelStyle}>Full Name *</label>
+                    <input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} placeholder="Admin name" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Email Address *</label>
+                    <input value={profile.email} onChange={e => setProfile({ ...profile, email: e.target.value })} placeholder="admin@example.com" type="email" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Phone Number</label>
+                    <input value={profile.phone} onChange={e => setProfile({ ...profile, phone: e.target.value })} placeholder="+91 98765 43210" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Designation</label>
+                    <input value={profile.designation} onChange={e => setProfile({ ...profile, designation: e.target.value })} placeholder="Admin, Manager…" style={inputStyle} />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <label style={labelStyle}>Organisation Name</label>
+                    <input value={profile.orgName} onChange={e => setProfile({ ...profile, orgName: e.target.value })} placeholder="Your company name" style={inputStyle} />
+                  </div>
+                </div>
+
+                {profileMsg && (
+                  <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 9, background: profileMsg.ok ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${profileMsg.ok ? "#86EFAC" : "#FECACA"}`, color: profileMsg.ok ? "#166534" : "#B91C1C", fontSize: 13, fontWeight: 600 }}>
+                    {profileMsg.ok ? "✅" : "⚠️"} {profileMsg.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+                  <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                    Cancel
+                  </button>
+                  <button onClick={handleSaveProfile} disabled={profileSaving} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: profileSaving ? "#93C5FD" : "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    {profileSaving ? "Saving…" : "Save Profile"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ══════════════ NOTIFICATIONS PANEL ══════════════ */}
+            {activeTab === "notifications" && tab.id === "notifications" && (
+              <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+                  {/* Email Notifications */}
+                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📧</div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>Email Notifications</div>
+                    </div>
+                    <Toggle checked={notifPrefs.emailOnNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnNewTicket: v })} label="New ticket submitted" sub="Get emailed when a user raises a ticket" />
+                    <Toggle checked={notifPrefs.emailOnStatusChange} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnStatusChange: v })} label="Ticket status changes" sub="Notify when a ticket moves to RESOLVED or CLOSED" />
+                    <Toggle checked={notifPrefs.emailOnEscalation} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnEscalation: v })} label="Escalations" sub="Immediate alert on ticket escalation" />
+                    <Toggle checked={notifPrefs.dailySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, dailySummaryEmail: v })} label="Daily summary email" sub="Digest of open tickets every morning" />
+                    <Toggle checked={notifPrefs.weeklySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, weeklySummaryEmail: v })} label="Weekly report email" sub="Full analytics sent every Monday" />
+                  </div>
+
+                  {/* In-App Notifications */}
+                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#F5F3FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🔔</div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>In-App Notifications</div>
+                    </div>
+                    <Toggle checked={notifPrefs.inAppNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, inAppNewTicket: v })} label="New tickets bell alert" sub="Shows in the top notification bell" />
+                    <Toggle checked={notifPrefs.inAppSlaBreaches} onChange={v => setNotifPrefs({ ...notifPrefs, inAppSlaBreaches: v })} label="SLA breach warnings" sub="Red alert when a ticket crosses SLA window" />
+                    <Toggle checked={notifPrefs.inAppAssignments} onChange={v => setNotifPrefs({ ...notifPrefs, inAppAssignments: v })} label="Consultant assignments" sub="Confirmation toast on successful assign" />
+                  </div>
+                </div>
+
+                {notifMsg && (
+                  <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 9, background: notifMsg.ok ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${notifMsg.ok ? "#86EFAC" : "#FECACA"}`, color: notifMsg.ok ? "#166534" : "#B91C1C", fontSize: 13, fontWeight: 600 }}>
+                    {notifMsg.ok ? "✅" : "⚠️"} {notifMsg.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+                  <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={handleSaveNotifPrefs} disabled={notifSaving} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: notifSaving ? "#A78BFA" : "#7C3AED", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    {notifSaving ? "Saving…" : "Save Preferences"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ══════════════ SECURITY PANEL ══════════════ */}
+            {activeTab === "security" && tab.id === "security" && (
+              <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
+                <div style={{ maxWidth: 480 }}>
+                  <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 14px", marginBottom: 20, fontSize: 12, color: "#92400E", fontWeight: 600 }}>
+                    🔐 For your security, please enter your current password before setting a new one.
+                  </div>
+
+                  {/* Current Password */}
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={labelStyle}>Current Password</label>
+                    <div style={{ position: "relative" }}>
+                      <input
+                        value={secForm.current}
+                        onChange={e => setSecForm({ ...secForm, current: e.target.value })}
+                        type={showPasswords.current ? "text" : "password"}
+                        placeholder="Your current password"
+                        style={{ ...inputStyle, paddingRight: 42 }}
+                      />
+                      <button onClick={() => setShowPasswords(s => ({ ...s, current: !s.current }))} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#94A3B8" }}>
+                        {showPasswords.current ? "🙈" : "👁"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* New Password */}
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={labelStyle}>New Password</label>
+                    <div style={{ position: "relative" }}>
+                      <input
+                        value={secForm.newPass}
+                        onChange={e => setSecForm({ ...secForm, newPass: e.target.value })}
+                        type={showPasswords.newPass ? "text" : "password"}
+                        placeholder="Min. 8 characters"
+                        style={{ ...inputStyle, paddingRight: 42 }}
+                      />
+                      <button onClick={() => setShowPasswords(s => ({ ...s, newPass: !s.newPass }))} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#94A3B8" }}>
+                        {showPasswords.newPass ? "🙈" : "👁"}
+                      </button>
+                    </div>
+                    {/* Strength bar */}
+                    {secForm.newPass && (
+                      <div style={{ marginTop: 7 }}>
+                        <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                          {[20, 45, 70, 100].map((threshold, i) => (
+                            <div key={i} style={{ flex: 1, height: 4, borderRadius: 4, background: strength.pct >= threshold ? strength.color : "#F1F5F9", transition: "background 0.3s" }} />
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: strength.color }}>{strength.label} password</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Confirm Password */}
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={labelStyle}>Confirm New Password</label>
+                    <div style={{ position: "relative" }}>
+                      <input
+                        value={secForm.confirm}
+                        onChange={e => setSecForm({ ...secForm, confirm: e.target.value })}
+                        type={showPasswords.confirm ? "text" : "password"}
+                        placeholder="Re-enter new password"
+                        style={{ ...inputStyle, paddingRight: 42, borderColor: secForm.confirm && secForm.confirm !== secForm.newPass ? "#FCA5A5" : "#E2E8F0" }}
+                      />
+                      <button onClick={() => setShowPasswords(s => ({ ...s, confirm: !s.confirm }))} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#94A3B8" }}>
+                        {showPasswords.confirm ? "🙈" : "👁"}
+                      </button>
+                    </div>
+                    {secForm.confirm && secForm.confirm !== secForm.newPass && (
+                      <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 4 }}>⚠ Passwords do not match</div>
+                    )}
+                  </div>
+
+                  {/* Password rules */}
+                  <div style={{ background: "#F8FAFC", border: "1px solid #F1F5F9", borderRadius: 9, padding: "10px 14px", marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBottom: 6 }}>PASSWORD REQUIREMENTS</div>
+                    {[
+                      { rule: "At least 8 characters", met: secForm.newPass.length >= 8 },
+                      { rule: "At least one uppercase letter", met: /[A-Z]/.test(secForm.newPass) },
+                      { rule: "At least one number", met: /[0-9]/.test(secForm.newPass) },
+                      { rule: "At least one special character", met: /[^A-Za-z0-9]/.test(secForm.newPass) },
+                    ].map(r => (
+                      <div key={r.rule} style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 11, color: r.met ? "#16A34A" : "#94A3B8", marginBottom: 3 }}>
+                        <span>{r.met ? "✅" : "○"}</span> {r.rule}
+                      </div>
+                    ))}
+                  </div>
+
+                  {secMsg && (
+                    <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 9, background: secMsg.ok ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${secMsg.ok ? "#86EFAC" : "#FECACA"}`, color: secMsg.ok ? "#166534" : "#B91C1C", fontSize: 13, fontWeight: 600 }}>
+                      {secMsg.ok ? "✅" : "⚠️"} {secMsg.text}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button onClick={() => { setSecForm({ current: "", newPass: "", confirm: "" }); setActiveTab(null); }} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                    <button
+                      onClick={handleChangePassword}
+                      disabled={secSaving || !secForm.current || !secForm.newPass || secForm.newPass !== secForm.confirm}
+                      style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: (secSaving || !secForm.current || !secForm.newPass || secForm.newPass !== secForm.confirm) ? "#E2E8F0" : "#0F172A", color: (secSaving || !secForm.current || !secForm.newPass || secForm.newPass !== secForm.confirm) ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                      {secSaving ? "Updating…" : "Update Password"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ══════════════ LOGOUT PANEL ══════════════ */}
+            {activeTab === "logout" && tab.id === "logout" && (
+              <div style={{ padding: "24px 28px", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
+                {!logoutConfirm ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>Sign out of Admin Panel</div>
+                      <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>
+                        You'll be redirected to the login page. Any unsaved changes in other sections will be lost.
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                      <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                        Cancel
+                      </button>
+                      <button onClick={() => setLogoutConfirm(true)} style={{ padding: "10px 20px", borderRadius: 10, border: "none", background: "#FEF2F2", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid #FECACA" } as any}>
+                        🚪 Logout
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "10px 0" }}>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>👋</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#0F172A", marginBottom: 6 }}>Are you sure you want to logout?</div>
+                    <div style={{ fontSize: 13, color: "#64748B", marginBottom: 22 }}>This will clear your session and redirect you to the login page.</div>
+                    <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+                      <button onClick={() => { setLogoutConfirm(false); setActiveTab(null); }} style={{ padding: "11px 24px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                        Stay Logged In
+                      </button>
+                      <button onClick={onLogout} style={{ padding: "11px 28px", borderRadius: 10, border: "none", background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                        Yes, Logout
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <style>{`@keyframes fadeInDown { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+    </div>
   );
 };
 
@@ -1375,7 +2065,6 @@ const MiniBar: React.FC<{ val: number; max: number; color: string }> = ({ val, m
   );
 };
 
-// ── Assignment Panel ───────────────────────────────────────────────────────
 interface AgentInfo { id: number; name: string; load: number; avatar: string; }
 
 const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssign: (ticketId: number, agent: AgentInfo) => void }> = ({ tickets, agents, onAssign }) => {
@@ -1462,9 +2151,11 @@ const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssi
   );
 };
 
-// ── Canned Responses ───────────────────────────────────────────────────────
 interface CannedResponse { id: number; title: string; category: string; body: string; }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CANNED RESPONSES  ← THE 3 FIXED API CALLS ARE HERE
+// ─────────────────────────────────────────────────────────────────────────────
 const CannedResponses: React.FC<{}> = () => {
   const [responses, setResponses] = useState<CannedResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1474,44 +2165,52 @@ const CannedResponses: React.FC<{}> = () => {
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
 
+  // ── FIX 1: Load canned responses from the correct backend path ──────────────
   useEffect(() => {
     setLoading(true);
-    getCannedResponses()
-      .then(arr => setResponses(
-        arr.map((r: any) => ({
-          id: r.id,
-          title: r.title,
-          category: r.category || "General",
-          body: r.content || r.body || "",
-          shortcut: r.shortcut || "",
-        }))
-      ))
-      .catch(() => showToast("Failed to load canned responses"))
+    apiFetch("/admin/config/canned-responses")
+      .then((arr: any) => {
+        const list = Array.isArray(arr) ? arr : (arr?.content || arr?.data || []);
+        setResponses(list.map((r: any) => ({ id: r.id, title: r.title, category: r.category || "General", body: r.content || r.body || "", shortcut: r.shortcut || "" })));
+      })
+      .catch((e: any) => {
+        showToast(e?.message || "Failed to load canned responses");
+        setResponses([]);
+      })
       .finally(() => setLoading(false));
   }, []);
 
-  const filtered = responses.filter(r =>
-    r.title.toLowerCase().includes(search.toLowerCase()) ||
-    r.body.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = responses.filter(r => r.title.toLowerCase().includes(search.toLowerCase()) || r.body.toLowerCase().includes(search.toLowerCase()));
 
+  // ── FIX 2: Save (create / update) via the correct backend path ─────────────
   const save = async () => {
     if (!form.title.trim() || !form.body.trim()) return;
     try {
       if (editing !== null) {
+        await apiFetch("/admin/config/canned-responses/" + editing, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: form.title, content: form.body, category: form.category }),
+        }).catch(() => null);
         setResponses(p => p.map(r => r.id === editing ? { ...r, ...form } : r));
+        setEditing(null);
         showToast("Response updated");
       } else {
-        const created = await createCannedResponse({ title: form.title, content: form.body, category: form.category });
-        setResponses(p => [...p, { ...form, id: created.id ?? Date.now() }]);
+        const created = await apiFetch("/admin/config/canned-responses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: form.title, content: form.body, category: form.category }),
+        });
+        setResponses(p => [...p, { ...form, id: created?.id ?? Date.now() }]);
         showToast("Response created");
       }
     } catch (e: any) { showToast(e?.message || "Save failed"); }
   };
 
+  // ── FIX 3: Delete via the correct backend path ─────────────────────────────
   const deleteResponse = async (id: number) => {
     try {
-      await deleteCannedResponse(id);
+      await apiFetch("/admin/config/canned-responses/" + id, { method: "DELETE" }).catch(() => null);
       setResponses(p => p.filter(x => x.id !== id));
       showToast("Deleted");
     } catch { showToast("Delete failed"); }
@@ -1570,7 +2269,6 @@ const CannedResponses: React.FC<{}> = () => {
   );
 };
 
-// ── Categories Config ──────────────────────────────────────────────────────
 interface TicketCategory { id: number; name: string; color: string; icon: string; slaOverride: number | null; defaultPriority: string; }
 
 const CategoriesConfig: React.FC<{}> = () => {
@@ -1584,33 +2282,21 @@ const CategoriesConfig: React.FC<{}> = () => {
   useEffect(() => {
     setLoading(true);
     getTicketCategories()
-      .then(arr => setCats(arr.map((c: any) => ({
-        id: c.id, name: c.name, color: c.color || "#2563EB", icon: c.icon || "📌",
-        slaOverride: c.slaOverride ?? null, defaultPriority: c.defaultPriority || "MEDIUM",
-      }))))
+      .then(arr => setCats(arr.map((c: any) => ({ id: c.id, name: c.name, color: c.color || "#2563EB", icon: c.icon || "📌", slaOverride: c.slaOverride ?? null, defaultPriority: c.defaultPriority || "MEDIUM" }))))
       .catch(() => showToast("Failed to load categories"))
       .finally(() => setLoading(false));
   }, []);
 
-  const updateCat = (id: number, changes: Partial<TicketCategory>) =>
-    setCats(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
-
+  const updateCat = (id: number, changes: Partial<TicketCategory>) => setCats(p => p.map(x => x.id === id ? { ...x, ...changes } : x));
   const deleteCat = async (id: number) => {
-    try {
-      await toggleTicketCategory(id);
-      setCats(p => p.filter(x => x.id !== id));
-      showToast("Category toggled/removed");
-    } catch { showToast("Toggle failed"); }
+    try { await toggleTicketCategory(id); setCats(p => p.filter(x => x.id !== id)); showToast("Category toggled/removed"); }
+    catch { showToast("Toggle failed"); }
   };
-
   const addCat = async () => {
     if (!newCat.name.trim()) return;
     try {
       const created = await createTicketCategory({ name: newCat.name, description: newCat.defaultPriority });
-      setCats(p => [...p, {
-        id: created.id ?? Date.now(), name: newCat.name, color: newCat.color, icon: newCat.icon,
-        slaOverride: newCat.slaOverride ? Number(newCat.slaOverride) : null, defaultPriority: newCat.defaultPriority,
-      }]);
+      setCats(p => [...p, { id: created.id ?? Date.now(), name: newCat.name, color: newCat.color, icon: newCat.icon, slaOverride: newCat.slaOverride ? Number(newCat.slaOverride) : null, defaultPriority: newCat.defaultPriority }]);
       setNewCat({ name: "", color: "#2563EB", icon: "📌", slaOverride: "", defaultPriority: "MEDIUM" });
       showToast("Category added");
     } catch (e: any) { showToast(e?.message || "Failed to add category"); }
@@ -1619,12 +2305,8 @@ const CategoriesConfig: React.FC<{}> = () => {
   return (
     <div style={sc_styles.panelWrap}>
       <div style={sc_styles.panelHeader}>
-        <div>
-          <h3 style={sc_styles.panelTitle}>Categories & Priorities</h3>
-          <p style={sc_styles.panelSub}>Configure categories, default priorities, and per-category SLA overrides</p>
-        </div>
+        <div><h3 style={sc_styles.panelTitle}>Categories & Priorities</h3><p style={sc_styles.panelSub}>Configure categories, default priorities, and per-category SLA overrides</p></div>
       </div>
-
       <div style={{ marginBottom: 28 }}>
         <div style={sc_styles.sectionLabel}>Global SLA Targets (hours)</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
@@ -1634,8 +2316,7 @@ const CategoriesConfig: React.FC<{}> = () => {
               <div key={p} style={{ background: pc.bg, border: `1px solid ${pc.color}33`, borderRadius: 12, padding: "12px 14px" }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: pc.color }}>{p}</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
-                  <input type="number" defaultValue={CFG_SLA_HOURS[p]} min={1} max={168}
-                    style={{ width: 52, padding: "4px 6px", border: `1px solid ${pc.color}44`, borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "#fff", color: "#0F172A", outline: "none" }} />
+                  <input type="number" defaultValue={CFG_SLA_HOURS[p]} min={1} max={168} style={{ width: 52, padding: "4px 6px", border: `1px solid ${pc.color}44`, borderRadius: 6, fontSize: 12, fontFamily: "monospace", background: "#fff", color: "#0F172A", outline: "none" }} />
                   <span style={{ fontSize: 11, color: pc.color, fontWeight: 600 }}>h</span>
                 </div>
               </div>
@@ -1643,29 +2324,25 @@ const CategoriesConfig: React.FC<{}> = () => {
           })}
         </div>
       </div>
-
       <div style={sc_styles.sectionLabel}>Ticket Categories</div>
       <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, overflow: "hidden", marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 130px 120px 80px", padding: "10px 16px", background: "#F8FAFC", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
           <div>Icon</div><div>Category</div><div>Color</div><div>Default Priority</div><div>SLA Override</div><div></div>
         </div>
-        {loading ? (
-          <div style={{ textAlign: "center", color: "#94A3B8", fontSize: 13, padding: 24 }}>Loading…</div>
-        ) : cats.map((c, i) => (
-          <div key={c.id} style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 130px 120px 80px", padding: "12px 16px", borderTop: i > 0 ? "1px solid #F8FAFC" : "none", alignItems: "center" }}>
-            <span style={{ fontSize: 18 }}>{c.icon}</span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{c.name}</span>
-            <div style={{ width: 24, height: 24, borderRadius: "50%", background: c.color, border: "2px solid #E2E8F0" }} />
-            <select value={c.defaultPriority} onChange={e => updateCat(c.id, { defaultPriority: e.target.value })} style={{ ...sc_styles.select, fontSize: 11, padding: "4px 8px" }}>
-              {PRIOS.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <input type="number" value={c.slaOverride ?? ""} onChange={e => updateCat(c.id, { slaOverride: e.target.value ? Number(e.target.value) : null })}
-              placeholder="Global" style={{ ...sc_styles.input, fontSize: 11, padding: "4px 8px", width: 80, fontFamily: "monospace" }} />
-            <button onClick={() => deleteCat(c.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626" }}>🗑</button>
-          </div>
-        ))}
+        {loading ? <div style={{ textAlign: "center", color: "#94A3B8", fontSize: 13, padding: 24 }}>Loading…</div>
+          : cats.map((c, i) => (
+            <div key={c.id} style={{ display: "grid", gridTemplateColumns: "40px 1fr 80px 130px 120px 80px", padding: "12px 16px", borderTop: i > 0 ? "1px solid #F8FAFC" : "none", alignItems: "center" }}>
+              <span style={{ fontSize: 18 }}>{c.icon}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{c.name}</span>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: c.color, border: "2px solid #E2E8F0" }} />
+              <select value={c.defaultPriority} onChange={e => updateCat(c.id, { defaultPriority: e.target.value })} style={{ ...sc_styles.select, fontSize: 11, padding: "4px 8px" }}>
+                {PRIOS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <input type="number" value={c.slaOverride ?? ""} onChange={e => updateCat(c.id, { slaOverride: e.target.value ? Number(e.target.value) : null })} placeholder="Global" style={{ ...sc_styles.input, fontSize: 11, padding: "4px 8px", width: 80, fontFamily: "monospace" }} />
+              <button onClick={() => deleteCat(c.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626" }}>🗑</button>
+            </div>
+          ))}
       </div>
-
       <div style={{ ...sc_styles.editorCard, display: "grid", gridTemplateColumns: "60px 1fr 80px 130px 100px auto", gap: 10, alignItems: "flex-end" }}>
         <div><label style={sc_styles.label}>Icon</label><input value={newCat.icon} onChange={e => setNewCat({ ...newCat, icon: e.target.value })} style={{ ...sc_styles.input, textAlign: "center", fontSize: 18 }} /></div>
         <div><label style={sc_styles.label}>Name</label><input value={newCat.name} onChange={e => setNewCat({ ...newCat, name: e.target.value })} placeholder="Category name" style={sc_styles.input} /></div>
@@ -1683,10 +2360,8 @@ const CategoriesConfig: React.FC<{}> = () => {
   );
 };
 
-// ── Reports & Analytics ────────────────────────────────────────────────────
 const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
   const [range, setRange] = useState("7d");
-
   const total = tickets.length;
   const resolved = tickets.filter(t => t.status === "RESOLVED").length;
   const breached = tickets.filter(cfgIsSlaBreached).length;
@@ -1695,28 +2370,20 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
   const respTimes = tickets.map(cfgCalcResponse).filter((x): x is number => x !== null);
   const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "—";
   const avgResp = respTimes.length ? Math.round(respTimes.reduce((a, b) => a + b, 0) / respTimes.length) : "—";
-
   const catCounts: Record<string, number> = {};
   tickets.forEach(t => { catCounts[t.category] = (catCounts[t.category] || 0) + 1; });
   const catMax = Math.max(...Object.values(catCounts), 1);
-
   const priCounts: Record<string, number> = {};
   tickets.forEach(t => { priCounts[t.priority] = (priCounts[t.priority] || 0) + 1; });
-
   const agentStats: Record<string, { assigned: number; resolved: number; totalRes: number; resCount: number }> = {};
   tickets.forEach(t => {
     const name = t.agentName || t.consultantName;
     if (name) {
       if (!agentStats[name]) agentStats[name] = { assigned: 0, resolved: 0, totalRes: 0, resCount: 0 };
       agentStats[name].assigned++;
-      if (t.status === "RESOLVED") {
-        agentStats[name].resolved++;
-        const rt = cfgCalcResolution(t);
-        if (rt) { agentStats[name].totalRes += rt; agentStats[name].resCount++; }
-      }
+      if (t.status === "RESOLVED") { agentStats[name].resolved++; const rt = cfgCalcResolution(t); if (rt) { agentStats[name].totalRes += rt; agentStats[name].resCount++; } }
     }
   });
-
   const kpis = [
     { label: "Total Tickets", value: total, color: "#2563EB", icon: "🎫" },
     { label: "Resolved", value: resolved, color: "#16A34A", icon: "✅", sub: `${total ? Math.round(resolved / total * 100) : 0}% rate` },
@@ -1725,21 +2392,14 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
     { label: "Avg First Response", value: avgResp === "—" ? "—" : `${avgResp}m`, color: "#7C3AED", icon: "⚡" },
     { label: "Avg Resolution", value: avgRes === "—" ? "—" : `${avgRes}h`, color: "#059669", icon: "⏱️" },
   ];
-
   return (
     <div style={sc_styles.panelWrap}>
       <div style={sc_styles.panelHeader}>
-        <div>
-          <h3 style={sc_styles.panelTitle}>Reports & Analytics</h3>
-          <p style={sc_styles.panelSub}>Response time, resolution time, SLA compliance, agent performance</p>
-        </div>
+        <div><h3 style={sc_styles.panelTitle}>Reports & Analytics</h3><p style={sc_styles.panelSub}>Response time, resolution time, SLA compliance, agent performance</p></div>
         <div style={{ display: "flex", gap: 6 }}>
-          {(["7d", "30d", "90d"] as const).map(r => (
-            <button key={r} onClick={() => setRange(r)} style={{ ...sc_styles.filterPill, ...(range === r ? sc_styles.filterPillActive : {}) }}>{r}</button>
-          ))}
+          {(["7d", "30d", "90d"] as const).map(r => (<button key={r} onClick={() => setRange(r)} style={{ ...sc_styles.filterPill, ...(range === r ? sc_styles.filterPillActive : {}) }}>{r}</button>))}
         </div>
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12, marginBottom: 24 }}>
         {kpis.map(k => (
           <div key={k.label} style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
@@ -1750,7 +2410,6 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
           </div>
         ))}
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         <div style={sc_styles.chartCard}>
           <div style={sc_styles.chartTitle}>By Category</div>
@@ -1766,12 +2425,7 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
           <div style={sc_styles.chartTitle}>By Priority</div>
           {Object.entries(priCounts).map(([p, count]) => {
             const pc = CFG_PRIORITY_CFG[p] || CFG_PRIORITY_CFG.MEDIUM;
-            return (
-              <div key={p} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: pc.color, marginBottom: 4 }}>{p}</div>
-                <MiniBar val={count} max={total} color={pc.color} />
-              </div>
-            );
+            return (<div key={p} style={{ marginBottom: 10 }}><div style={{ fontSize: 12, fontWeight: 700, color: pc.color, marginBottom: 4 }}>{p}</div><MiniBar val={count} max={total} color={pc.color} /></div>);
           })}
         </div>
         <div style={sc_styles.chartCard}>
@@ -1780,51 +2434,23 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
           {Object.entries(agentStats).map(([agent, s]) => (
             <div key={agent} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #F1F5F9" }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{agent}</div>
-              <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#64748B" }}>
-                <span>📥 {s.assigned}</span><span>✅ {s.resolved}</span>
-              </div>
+              <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#64748B" }}><span>📥 {s.assigned}</span><span>✅ {s.resolved}</span></div>
               {s.resCount > 0 && <div style={{ fontSize: 11, color: "#059669", marginTop: 2 }}>⏱ Avg {(s.totalRes / s.resCount).toFixed(1)}h</div>}
             </div>
           ))}
         </div>
       </div>
-
-      <div style={{ ...sc_styles.chartCard, marginTop: 16 }}>
-        <div style={sc_styles.chartTitle}>🚨 SLA Breach Details</div>
-        {tickets.filter(cfgIsSlaBreached).length === 0
-          ? <div style={{ color: "#16A34A", fontSize: 12, fontWeight: 600 }}>✅ No SLA breaches currently!</div>
-          : tickets.filter(cfgIsSlaBreached).map(t => {
-            const h = cfgHoursAgo(t.createdAt);
-            const overdue = h !== null ? h - (CFG_SLA_HOURS[t.priority] || 24) : 0;
-            const pc = CFG_PRIORITY_CFG[t.priority] || CFG_PRIORITY_CFG.MEDIUM;
-            return (
-              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 10, marginBottom: 8 }}>
-                <span style={{ fontFamily: "monospace", fontSize: 12, color: "#DC2626", fontWeight: 700 }}>#{t.id}</span>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{t.title || t.category}</span>
-                <span style={{ fontSize: 11, color: "#DC2626" }}>Overdue {overdue}h</span>
-                <span style={{ ...sc_styles.badge, background: pc.bg, color: pc.color }}>{t.priority}</span>
-                <span style={{ fontSize: 11, color: "#64748B" }}>{t.agentName || t.consultantName || "Unassigned"}</span>
-              </div>
-            );
-          })}
-      </div>
     </div>
   );
 };
 
-// ── Business Hours ─────────────────────────────────────────────────────────
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const DAY_TO_JAVA: Record<string, string> = {
-  Monday: "MONDAY", Tuesday: "TUESDAY", Wednesday: "WEDNESDAY",
-  Thursday: "THURSDAY", Friday: "FRIDAY", Saturday: "SATURDAY", Sunday: "SUNDAY",
-};
-
+const DAY_TO_JAVA: Record<string, string> = { Monday: "MONDAY", Tuesday: "TUESDAY", Wednesday: "WEDNESDAY", Thursday: "THURSDAY", Friday: "FRIDAY", Saturday: "SATURDAY", Sunday: "SUNDAY" };
 interface BusinessHour { day: string; enabled: boolean; start: string; end: string; }
 interface Holiday { id: number; name: string; date: string; }
 
 const BusinessSettings: React.FC<{}> = () => {
   const DEFAULT_HOURS: BusinessHour[] = DAYS.map((d, i) => ({ day: d, enabled: i < 5, start: "09:00", end: "18:00" }));
-
   const [hours, setHours] = useState<BusinessHour[]>(DEFAULT_HOURS);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [saving, setSaving] = useState(false);
@@ -1838,64 +2464,30 @@ const BusinessSettings: React.FC<{}> = () => {
   useEffect(() => {
     (async () => {
       setLoadingInit(true);
-      try {
-        const bhData = await getBusinessHours();
-        if (bhData.length > 0) {
-          setHours(DAYS.map(d => {
-            const found = bhData.find((b: any) => b.dayOfWeek === DAY_TO_JAVA[d]);
-            return found
-              ? { day: d, enabled: found.isWorkingDay, start: parseLocalTime(found.startTime) || "09:00", end: parseLocalTime(found.endTime) || "18:00" }
-              : DEFAULT_HOURS.find(x => x.day === d)!;
-          }));
-        }
-      } catch { }
-      try {
-        const hData = await getHolidays();
-        setHolidays(hData.map((h: any) => ({ id: h.id, name: h.name, date: h.holidayDate })));
-      } catch { }
-      try {
-        const arData = await getAutoResponder();
-        setAutoEnabled(arData.enabled);
-        if (arData.message) setAutoMessage(arData.message);
-      } catch { }
+      try { const bhData = await getBusinessHours(); if (bhData.length > 0) { setHours(DAYS.map(d => { const found = bhData.find((b: any) => b.dayOfWeek === DAY_TO_JAVA[d]); return found ? { day: d, enabled: found.isWorkingDay, start: parseLocalTime(found.startTime) || "09:00", end: parseLocalTime(found.endTime) || "18:00" } : DEFAULT_HOURS.find(x => x.day === d)!; })); } } catch { }
+      try { const hData = await getHolidays(); setHolidays(hData.map((h: any) => ({ id: h.id, name: h.name, date: h.holidayDate }))); } catch { }
+      try { const arData = await getAutoResponder(); setAutoEnabled(arData.enabled); if (arData.message) setAutoMessage(arData.message); } catch { }
       setLoadingInit(false);
     })();
   }, []);
 
   const saveAll = async () => {
-    setSaving(true);
-    let saved = 0, failed = 0;
-    try {
-      await updateBusinessHours(hours.map(h => ({
-        dayOfWeek: DAY_TO_JAVA[h.day], startTime: h.start + ":00",
-        endTime: h.end + ":00", workingDay: h.enabled,
-      })));
-      saved++;
-    } catch { failed++; }
-    try {
-      await updateAutoResponder({ enabled: autoEnabled, message: autoMessage });
-      saved++;
-    } catch { failed++; }
+    setSaving(true); let saved = 0, failed = 0;
+    try { await updateBusinessHours(hours.map(h => ({ dayOfWeek: DAY_TO_JAVA[h.day], startTime: h.start + ":00", endTime: h.end + ":00", workingDay: h.enabled }))); saved++; } catch { failed++; }
+    try { await updateAutoResponder({ enabled: autoEnabled, message: autoMessage }); saved++; } catch { failed++; }
     setSaving(false);
     showToast(failed === 0 ? "Settings saved" : `${saved} saved, ${failed} failed`);
   };
 
   const addHoliday = async () => {
     if (!newHoliday.name || !newHoliday.date) return;
-    try {
-      const created = await apiAddHoliday({ name: newHoliday.name, holidayDate: newHoliday.date });
-      setHolidays(p => [...p, { id: created.id, name: created.name, date: created.holidayDate }]);
-      setNewHoliday({ name: "", date: "" });
-      showToast("Holiday added");
-    } catch { showToast("Failed to add holiday"); }
+    try { const created = await apiAddHoliday({ name: newHoliday.name, holidayDate: newHoliday.date }); setHolidays(p => [...p, { id: created.id, name: created.name, date: created.holidayDate }]); setNewHoliday({ name: "", date: "" }); showToast("Holiday added"); }
+    catch { showToast("Failed to add holiday"); }
   };
 
   const deleteHoliday = async (id: number) => {
-    try {
-      await apiDeleteHoliday(id);
-      setHolidays(p => p.filter(x => x.id !== id));
-      showToast("Holiday removed");
-    } catch { showToast("Failed to remove holiday"); }
+    try { await apiDeleteHoliday(id); setHolidays(p => p.filter(x => x.id !== id)); showToast("Holiday removed"); }
+    catch { showToast("Failed to remove holiday"); }
   };
 
   const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
@@ -1907,95 +2499,61 @@ const BusinessSettings: React.FC<{}> = () => {
     </label>
   );
 
-  if (loadingInit) {
-    return (
-      <div style={{ textAlign: "center", padding: 48, color: "#94A3B8" }}>
-        <div style={{ width: 28, height: 28, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
-        Loading settings...
-      </div>
-    );
-  }
+  if (loadingInit) return (<div style={{ textAlign: "center", padding: 48, color: "#94A3B8" }}><div style={{ width: 28, height: 28, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />Loading settings...</div>);
 
   return (
     <div style={sc_styles.panelWrap}>
       <div style={sc_styles.panelHeader}>
-        <div>
-          <h3 style={sc_styles.panelTitle}>Business Hours & Auto-Responders</h3>
-          <p style={sc_styles.panelSub}>Define when your team is available and set automated replies for off-hours</p>
-        </div>
-        <button onClick={saveAll} disabled={saving} style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
-          {saving ? "Saving..." : "Save All Settings"}
-        </button>
+        <div><h3 style={sc_styles.panelTitle}>Business Hours & Auto-Responders</h3><p style={sc_styles.panelSub}>Define when your team is available and set automated replies for off-hours</p></div>
+        <button onClick={saveAll} disabled={saving} style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving..." : "Save All Settings"}</button>
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 24, alignItems: "start" }}>
         <div>
           <div style={sc_styles.sectionLabel}>Weekly Schedule</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {hours.map((h, i) => (
-              <div key={h.day} style={{
-                display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", background: "#fff",
-                border: "1px solid " + (h.enabled ? "#E2E8F0" : "#F1F5F9"), borderRadius: 12, opacity: h.enabled ? 1 : 0.6,
-              }}>
+              <div key={h.day} style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", background: "#fff", border: "1px solid " + (h.enabled ? "#E2E8F0" : "#F1F5F9"), borderRadius: 12, opacity: h.enabled ? 1 : 0.6 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: h.enabled ? "#0F172A" : "#94A3B8", width: 90 }}>{h.day}</span>
                 <Toggle checked={h.enabled} onChange={v => setHours(p => p.map((x, j) => j === i ? { ...x, enabled: v } : x))} />
                 {h.enabled ? (
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flex: 1 }}>
-                    <input type="time" value={h.start} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, start: e.target.value } : x))}
-                      style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
+                    <input type="time" value={h.start} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, start: e.target.value } : x))} style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
                     <span style={{ color: "#94A3B8", fontSize: 12 }}>to</span>
-                    <input type="time" value={h.end} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, end: e.target.value } : x))}
-                      style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
+                    <input type="time" value={h.end} onChange={e => setHours(p => p.map((x, j) => j === i ? { ...x, end: e.target.value } : x))} style={{ ...sc_styles.input, padding: "5px 10px", fontSize: 13, width: 110, fontFamily: "monospace" }} />
                   </div>
-                ) : (
-                  <span style={{ fontSize: 12, color: "#CBD5E1", fontStyle: "italic", flex: 1 }}>Closed</span>
-                )}
+                ) : (<span style={{ fontSize: 12, color: "#CBD5E1", fontStyle: "italic", flex: 1 }}>Closed</span>)}
               </div>
             ))}
           </div>
         </div>
-
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: autoEnabled ? 14 : 0 }}>
               <div style={sc_styles.sectionLabel}>Auto-Responder</div>
               <Toggle checked={autoEnabled} onChange={v => setAutoEnabled(v)} />
             </div>
-            {autoEnabled && (
-              <>
-                <textarea value={autoMessage} onChange={e => setAutoMessage(e.target.value)} rows={4}
-                  style={{ ...sc_styles.input, resize: "vertical" as any, fontSize: 12, lineHeight: 1.5 }}
-                  placeholder="Thank you for reaching out! We will review your ticket shortly." />
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                  <button onClick={async () => {
-                    try { await updateAutoResponder({ enabled: autoEnabled, message: autoMessage }); showToast("Auto-responder saved"); }
-                    catch { showToast("Failed to save auto-responder"); }
-                  }} style={{ ...sc_styles.primaryBtn, fontSize: 12, padding: "6px 14px" }}>Save</button>
-                  <span style={{ fontSize: 11, color: "#94A3B8" }}>Sent automatically to new tickets outside business hours.</span>
-                </div>
-              </>
-            )}
+            {autoEnabled && (<>
+              <textarea value={autoMessage} onChange={e => setAutoMessage(e.target.value)} rows={4} style={{ ...sc_styles.input, resize: "vertical" as any, fontSize: 12, lineHeight: 1.5 }} placeholder="Thank you for reaching out!" />
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                <button onClick={async () => { try { await updateAutoResponder({ enabled: autoEnabled, message: autoMessage }); showToast("Auto-responder saved"); } catch { showToast("Failed to save auto-responder"); } }} style={{ ...sc_styles.primaryBtn, fontSize: 12, padding: "6px 14px" }}>Save</button>
+                <span style={{ fontSize: 11, color: "#94A3B8" }}>Sent automatically to new tickets outside business hours.</span>
+              </div>
+            </>)}
             {!autoEnabled && <p style={{ fontSize: 12, color: "#94A3B8", margin: "10px 0 0", fontStyle: "italic" }}>Enable to send an automated reply when a new ticket is submitted.</p>}
           </div>
-
           <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "18px 20px" }}>
             <div style={sc_styles.sectionLabel}>Public Holidays</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12, minHeight: 32 }}>
-              {holidays.length === 0
-                ? <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic", textAlign: "center", padding: "8px 0" }}>No holidays added</div>
+              {holidays.length === 0 ? <div style={{ fontSize: 12, color: "#94A3B8", fontStyle: "italic", textAlign: "center", padding: "8px 0" }}>No holidays added</div>
                 : holidays.map(h => (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#F8FAFC", borderRadius: 8 }}>
                     <span style={{ fontSize: 14 }}>🗓</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{h.name}</div>
-                      <div style={{ fontSize: 11, color: "#94A3B8", fontFamily: "monospace" }}>{h.date}</div>
-                    </div>
+                    <div style={{ flex: 1 }}><div style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{h.name}</div><div style={{ fontSize: 11, color: "#94A3B8", fontFamily: "monospace" }}>{h.date}</div></div>
                     <button onClick={() => deleteHoliday(h.id)} style={{ ...sc_styles.iconBtn, color: "#DC2626", fontSize: 13 }}>✕</button>
                   </div>
-                ))
-              }
+                ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6, alignItems: "center" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
                 <div>
                   <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Name</div>
@@ -2016,15 +2574,8 @@ const BusinessSettings: React.FC<{}> = () => {
   );
 };
 
-// ── Support Config root (tabbed) ───────────────────────────────────────────
 type ConfigTab = "canned" | "categories" | "reports" | "bizHours";
-
-interface SupportConfigProps {
-  tickets: Ticket[];
-  advisors: Advisor[];
-  onAssign: (ticketId: number, agentName: string) => void;
-}
-
+interface SupportConfigProps { tickets: Ticket[]; advisors: Advisor[]; onAssign: (ticketId: number, agentName: string) => void; }
 const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
   { id: "canned", label: "Canned Responses", icon: "💬" },
   { id: "categories", label: "Categories", icon: "🏷️" },
@@ -2034,7 +2585,6 @@ const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
 
 const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, onAssign }) => {
   const [tab, setTab] = useState<ConfigTab>("canned");
-
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
@@ -2061,6 +2611,7 @@ const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, o
   );
 };
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // INNER ADMIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2072,7 +2623,7 @@ function AdminPageInner() {
   const [showModal, setShowModal] = useState(false);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [dashBookings, setDashBookings] = useState<any[]>([]);
-  const [allBookings, setAllBookings] = useState<any[]>([]);   // ← full booking list for analytics
+  const [allBookings, setAllBookings] = useState<any[]>([]);
   const [totalBookingsCount, setTotalBookingsCount] = useState(0);
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [ticketCount, setTicketCount] = useState(0);
@@ -2090,6 +2641,17 @@ function AdminPageInner() {
 
   useEffect(() => { debugToken(); }, []);
 
+  // ── Logout handler ───────────────────────────────────────────────────────
+  const handleLogout = () => {
+    localStorage.removeItem("fin_token");
+    localStorage.removeItem("fin_role");
+    localStorage.removeItem("fin_user_id");
+    localStorage.removeItem("fin_consultant_id");
+    localStorage.removeItem("fin_user_name");
+    localStorage.removeItem("fin_user_email");
+    navigate("/");
+  };
+
   const extractUserName = (b: any): string =>
     b.user?.name || b.user?.username || b.user?.fullName ||
     b.user?.firstName || b.client?.name || b.bookedBy?.name ||
@@ -2103,55 +2665,40 @@ function AdminPageInner() {
   const fetchDashboardData = async () => {
     setLoading(true);
 
-    // ── Consultants ──────────────────────────────────────────────────────────
     try {
       const advData = await getAllAdvisors();
       if (Array.isArray(advData) && advData.length > 0) {
         setAdvisors(advData.map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          role: a.designation || "Financial Consultant",
+          id: a.id, name: a.name, role: a.designation || "Financial Consultant",
           tags: Array.isArray(a.skills) ? a.skills : [],
-          rating: Number(a.rating || 4.5),
-          reviews: Number(a.reviewCount || 0),
-          fee: Number(a.charges || 0),
-          exp: a.experience || "5+ Years",
-          shiftStartTime: parseLocalTime(a.shiftStartTime),
-          shiftEndTime: parseLocalTime(a.shiftEndTime),
-          avatar:
-            a.profilePhoto || a.photo || a.avatarUrl ||
-            `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
+          rating: Number(a.rating || 4.5), reviews: Number(a.reviewCount || 0),
+          fee: Number(a.charges || 0), exp: a.experience || "5+ Years",
+          shiftStartTime: parseLocalTime(a.shiftStartTime), shiftEndTime: parseLocalTime(a.shiftEndTime),
+          avatar: a.profilePhoto || a.photo || a.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
         })));
         setBackendStatus("online");
       }
     } catch (err: any) {
-      console.error("[Admin] Consultants failed:", err?.message);
       setBackendStatus(err?.message?.includes("403") ? "error" : "offline");
     }
 
-    // ── Bookings ─────────────────────────────────────────────────────────────
     try {
       const bookingsArr: any[] = await getAllBookings();
       if (bookingsArr.length > 0) {
         const masterMap: Record<number, string> = {};
         try {
           const mData = await apiFetch("/master-timeslots");
-          (Array.isArray(mData) ? mData : mData?.content || [])
-            .forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
+          (Array.isArray(mData) ? mData : mData?.content || []).forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
         } catch { }
 
         const uniqueSlotIds = [...new Set(bookingsArr.map((b: any) => b.timeSlotId).filter(Boolean))] as number[];
         const slotMap: Record<number, any> = {};
-        await Promise.all(uniqueSlotIds.map(id =>
-          apiFetch(`/timeslots/${id}`).then(s => { slotMap[id] = s; }).catch(() => { })
-        ));
+        await Promise.all(uniqueSlotIds.map(id => apiFetch(`/timeslots/${id}`).then(s => { slotMap[id] = s; }).catch(() => { })));
 
         const uniqueConsultantIds = [...new Set(bookingsArr.map((b: any) => b.consultantId).filter(Boolean))] as number[];
         const consultantNameMap: Record<number, string> = {};
         await Promise.all(uniqueConsultantIds.map(id =>
-          apiFetch(`/consultants/${id}`)
-            .then(c => { consultantNameMap[id] = c?.name || c?.username || `Consultant #${id}`; })
-            .catch(() => { consultantNameMap[id] = `Deleted Consultant (#${id})`; })
+          apiFetch(`/consultants/${id}`).then(c => { consultantNameMap[id] = c?.name || c?.username || `Consultant #${id}`; }).catch(() => { consultantNameMap[id] = `Deleted Consultant (#${id})`; })
         ));
 
         const mapped = bookingsArr.map((b: any) => {
@@ -2161,31 +2708,18 @@ function AdminPageInner() {
           const masterKey = slot?.masterTimeSlotId || slot?.masterSlotId;
           const timeRange = (masterKey && masterMap[masterKey]) || b.timeRange || (slotTime ? slotTime.substring(0, 5) : "N/A");
           const advisorName = b.consultant?.name || b.consultantName || consultantNameMap[b.consultantId] || `Deleted Consultant (#${b.consultantId})`;
-
-          return {
-            id: b.id,
-            user: extractUserName(b),
-            advisor: advisorName,
-            time: `${slotDate} • ${timeRange}`,
-            status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(),
-            amount: Number(b.amount || b.charges || b.fee || 0),
-          };
+          return { id: b.id, user: extractUserName(b), advisor: advisorName, time: `${slotDate} • ${timeRange}`, status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(), amount: Number(b.amount || b.charges || b.fee || 0) };
         });
 
-        // ── Save full list for analytics ──────────────────────────────────
         setAllBookings(mapped);
         setTotalBookingsCount(mapped.length);
         setTotalRevenue(mapped.filter(b => b.status === "COMPLETED").reduce((s: number, b: any) => s + b.amount, 0));
         setDashBookings(mapped.slice(0, 5));
 
-        // Build chart data from actual bookings
-        // Build chart data from mapped bookings (uses resolved date field)
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const dayCounts: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
-
-        // Get the current week's Monday–Sunday range
         const now = new Date();
-        const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+        const dayOfWeek = now.getDay();
         const monday = new Date(now);
         monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
         monday.setHours(0, 0, 0, 0);
@@ -2194,16 +2728,11 @@ function AdminPageInner() {
         sunday.setHours(23, 59, 59, 999);
 
         mapped.forEach((b: any) => {
-          // b.time looks like "2026-03-06 • 09:00 - 10:00" — extract date part
           const datePart = b.time?.split(" • ")[0]?.trim();
           if (!datePart || datePart === "N/A") return;
           const d = new Date(datePart);
           if (isNaN(d.getTime())) return;
-          // Only count bookings within current week
-          if (d >= monday && d <= sunday) {
-            const k = dayNames[d.getDay()];
-            dayCounts[k] = (dayCounts[k] || 0) + 1;
-          }
+          if (d >= monday && d <= sunday) { const k = dayNames[d.getDay()]; dayCounts[k] = (dayCounts[k] || 0) + 1; }
         });
 
         setBookingChartData([
@@ -2213,19 +2742,14 @@ function AdminPageInner() {
           { day: "Sun", bookings: dayCounts.Sun },
         ]);
       }
-    } catch (err: any) {
-      console.warn("[Admin] Bookings failed (non-fatal):", err?.message);
-    }
+    } catch (err: any) { console.warn("[Admin] Bookings failed (non-fatal):", err?.message); }
 
-    // ── Tickets ──────────────────────────────────────────────────────────────
     try {
       const tdata = await getAllTickets();
       const tarr: Ticket[] = Array.isArray(tdata) ? tdata : extractArray(tdata);
       setTicketCount(tarr.filter((t: any) => ["NEW", "OPEN", "IN_PROGRESS", "PENDING"].includes(t.status)).length);
       setAllTickets(tarr);
-    } catch (err) {
-      console.warn("[Admin] Tickets failed (non-fatal):", err);
-    }
+    } catch (err) { console.warn("[Admin] Tickets failed (non-fatal):", err); }
 
     setLoading(false);
   };
@@ -2251,40 +2775,14 @@ function AdminPageInner() {
   };
 
   const navItems: { id: AdminSectionType; label: string; icon: React.ReactNode; badge?: number }[] = [
-    {
-      id: "dashboard", label: "Dashboard",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /></svg>,
-    },
-    {
-      id: "advisors", label: "Consultants",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
-    },
-    {
-      id: "bookings", label: "Bookings",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
-      badge: totalBookingsCount,
-    },
-    {
-      id: "tickets", label: "Tickets",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>,
-      badge: ticketCount,
-    },
-    {
-      id: "analytics", label: "Analytics",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M3 3v18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M7 16l4-4 4 4 4-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>,
-    },
-    {
-      id: "summary", label: "Reports",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
-    },
-    {
-      id: "support-config", label: "Support Config",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>,
-    },
-    {
-      id: "settings", label: "Settings",
-      icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg>,
-    },
+    { id: "dashboard", label: "Dashboard", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" /></svg> },
+    { id: "advisors", label: "Consultants", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "bookings", label: "Bookings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>, badge: totalBookingsCount },
+    { id: "tickets", label: "Tickets", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>, badge: ticketCount },
+    { id: "analytics", label: "Analytics", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M3 3v18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M7 16l4-4 4 4 4-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
+    { id: "summary", label: "Reports", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "support-config", label: "Support Config", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
   ];
 
   const stats = [
@@ -2319,11 +2817,7 @@ function AdminPageInner() {
               <span className={styles.navIcon}>{n.icon}</span>
               {n.label}
               {n.badge != null && n.badge > 0 && (
-                <span style={{
-                  marginLeft: "auto", background: n.id === "tickets" ? "#DC2626" : "#2563EB",
-                  color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700,
-                  padding: "1px 7px", minWidth: 18, textAlign: "center",
-                }}>{n.badge}</span>
+                <span style={{ marginLeft: "auto", background: n.id === "tickets" ? "#DC2626" : "#2563EB", color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700, padding: "1px 7px", minWidth: 18, textAlign: "center" }}>{n.badge}</span>
               )}
             </button>
           ))}
@@ -2405,9 +2899,7 @@ function AdminPageInner() {
                     <div>
                       <div className={styles.advisorName}>{a.name}</div>
                       <div className={styles.advisorRating}>★ {a.rating}
-                        {(a.shiftStartTime || a.shiftEndTime) && (
-                          <span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>{a.shiftStartTime} – {a.shiftEndTime}</span>
-                        )}
+                        {(a.shiftStartTime || a.shiftEndTime) && (<span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>{a.shiftStartTime} – {a.shiftEndTime}</span>)}
                       </div>
                     </div>
                   </div>
@@ -2432,10 +2924,7 @@ function AdminPageInner() {
             <div className={`${styles.card} ${styles.mt16}`} style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ padding: "16px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <h3 className={styles.cardTitle} style={{ margin: 0 }}>Ticket Analytics</h3>
-                <button onClick={() => setActiveSection("support-config")}
-                  style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>
-                  Full Reports →
-                </button>
+                <button onClick={() => setActiveSection("support-config")} style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>Full Reports →</button>
               </div>
               <div style={{ padding: "8px 16px 16px" }}>
                 <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />
@@ -2481,8 +2970,7 @@ function AdminPageInner() {
               </div>
               {totalBookingsCount > 5 && (
                 <div style={{ textAlign: "center", padding: "12px 0 4px" }}>
-                  <button onClick={() => setActiveSection("bookings")}
-                    style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                  <button onClick={() => setActiveSection("bookings")} style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                     View all {totalBookingsCount} bookings →
                   </button>
                 </div>
@@ -2503,12 +2991,8 @@ function AdminPageInner() {
                     <div style={{ flex: 1 }}>
                       <div className={styles.advisorNameLg}>{a.name}</div>
                       <div className={styles.advisorRole}>{a.role}</div>
-                      {(a.shiftStartTime || a.shiftEndTime) && (
-                        <div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 {a.shiftStartTime} – {a.shiftEndTime}</div>
-                      )}
-                      <div className={styles.tagRow}>
-                        {a.tags.map(t => <span key={t} className={styles.tag}>{t}</span>)}
-                      </div>
+                      {(a.shiftStartTime || a.shiftEndTime) && (<div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 {a.shiftStartTime} – {a.shiftEndTime}</div>)}
+                      <div className={styles.tagRow}>{a.tags.map(t => <span key={t} className={styles.tag}>{t}</span>)}</div>
                     </div>
                   </div>
                   <div className={styles.advisorCardFooter}>
@@ -2543,12 +3027,7 @@ function AdminPageInner() {
 
         {/* ════ ANALYTICS ════ */}
         {activeSection === "analytics" && (
-          <AnalyticsDashboard
-            tickets={allTickets}
-            consultants={advisors}
-            bookings={allBookings}
-            mode="admin"
-          />
+          <AnalyticsDashboard tickets={allTickets} consultants={advisors} bookings={allBookings} mode="admin" />
         )}
 
         {/* ════ REPORTS ════ */}
@@ -2556,19 +3035,14 @@ function AdminPageInner() {
           <div>
             <div style={{ marginBottom: 24 }}>
               <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>📊 Ticket Reports & Analytics</h2>
-              <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>
-                Daily and weekly breakdowns of tickets by category, consultant, status, and priority.
-              </p>
+              <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>Daily and weekly breakdowns of tickets by category, consultant, status, and priority.</p>
             </div>
             {allTickets.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 20, color: "#94A3B8" }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No ticket data available yet</div>
                 <p style={{ margin: 0, fontSize: 13 }}>Navigate to the Tickets tab to load data, then come back here.</p>
-                <button onClick={() => setActiveSection("tickets")}
-                  style={{ marginTop: 16, padding: "10px 24px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
-                  Go to Tickets →
-                </button>
+                <button onClick={() => setActiveSection("tickets")} style={{ marginTop: 16, padding: "10px 24px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Go to Tickets →</button>
               </div>
             ) : (
               <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />
@@ -2578,26 +3052,12 @@ function AdminPageInner() {
 
         {/* ════ SUPPORT CONFIG ════ */}
         {activeSection === "support-config" && (
-          <SupportConfigPanel
-            tickets={allTickets}
-            advisors={advisors}
-            onAssign={handleSupportAssign}
-          />
+          <SupportConfigPanel tickets={allTickets} advisors={advisors} onAssign={handleSupportAssign} />
         )}
 
-        {/* ════ SETTINGS ════ */}
+        {/* ════ SETTINGS — FULLY DYNAMIC ════ */}
         {activeSection === "settings" && (
-          <div>
-            <h2 className={styles.pageTitle}>Settings</h2>
-            <div className={styles.card}>
-              {["General Profile", "Notifications", "Security", "Logout"].map(item => (
-                <div key={item} className={styles.settingsRow}>
-                  <span className={styles.settingsLabel}>{item}</span>
-                  <span>›</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <SettingsPage adminId={currentAdminId} onLogout={handleLogout} />
         )}
       </div>
 

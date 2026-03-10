@@ -1,38 +1,26 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // api.ts  —  Unified service layer
-// Aligned with backend: TicketController, TicketService, AdminConfigController
 // ─────────────────────────────────────────────────────────────────────────────
 
 import axios from "axios";
 
-// Keep as relative path — Vite proxy forwards:
-//   /api      → http://52.55.178.31:8081/api
-//   /uploads  → http://52.55.178.31:8081/uploads
 const BASE_URL = "/api";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TOKEN / SESSION HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const TOKEN_KEY = "fin_token";
-export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
-export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
-export const clearToken = () => {
+export const TOKEN_KEY       = "fin_token";
+export const setToken        = (token: string) => localStorage.setItem(TOKEN_KEY, token);
+export const getToken        = ()              => localStorage.getItem(TOKEN_KEY) || "";
+export const clearToken      = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem("fin_role");
   localStorage.removeItem("fin_user_id");
   localStorage.removeItem("fin_consultant_id");
 };
-export const setRole = (role: string) => localStorage.setItem("fin_role", role);
-export const getRole = () => localStorage.getItem("fin_role");
-export const setUserId = (id: number) => localStorage.setItem("fin_user_id", String(id));
-export const getUserId = () => localStorage.getItem("fin_user_id");
-export const setConsultantId = (id: number) => localStorage.setItem("fin_consultant_id", String(id));
-export const getConsultantId = () => localStorage.getItem("fin_consultant_id");
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DEBUG: decode JWT payload
-// ─────────────────────────────────────────────────────────────────────────────
+export const setRole         = (role: string) => localStorage.setItem("fin_role", role);
+export const getRole         = ()             => localStorage.getItem("fin_role");
+export const setUserId       = (id: number)   => localStorage.setItem("fin_user_id", String(id));
+export const getUserId       = ()             => localStorage.getItem("fin_user_id");
+export const setConsultantId = (id: number)   => localStorage.setItem("fin_consultant_id", String(id));
+export const getConsultantId = ()             => localStorage.getItem("fin_consultant_id");
 
 export const debugToken = () => {
   console.group("🔍 AUTH DEBUG");
@@ -54,10 +42,10 @@ export const debugToken = () => {
     const jwtPayload = JSON.parse(atob(parts[1]));
     console.log("✅ Token payload:", jwtPayload);
     console.log("   Roles/Authorities:", {
-      role: jwtPayload.role,
-      roles: jwtPayload.roles,
+      role:        jwtPayload.role,
+      roles:       jwtPayload.roles,
       authorities: jwtPayload.authorities,
-      scope: jwtPayload.scope,
+      scope:       jwtPayload.scope,
     });
     const exp = jwtPayload.exp ? new Date(jwtPayload.exp * 1000) : null;
     if (exp) {
@@ -74,16 +62,11 @@ export const debugToken = () => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AXIOS INSTANCE
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const api = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
 });
 
-// Attach token to every axios request automatically
 api.interceptors.request.use((config) => {
   const token = getToken();
   if (token) {
@@ -94,15 +77,6 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CORE FETCH WRAPPERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Authenticated fetch — attaches Bearer token, handles 403 debug output.
- * Does NOT set Content-Type when body is FormData — lets the browser
- * add the multipart boundary automatically (prevents corruption).
- */
 export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const defaultHeaders: Record<string, string> = { Accept: "application/json" };
@@ -125,7 +99,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
     });
 
     const contentType = res.headers.get("content-type");
-    const data: any = contentType?.includes("application/json")
+    const data: any   = contentType?.includes("application/json")
       ? await res.json()
       : { message: await res.text() };
 
@@ -135,9 +109,6 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
         console.error("   Response body:", data);
         console.error("   Calling debugToken() to help diagnose…");
         debugToken();
-      } else if (res.status === 404) {
-        // 404s are expected (e.g. consultant/user not found) — warn only, no stack noise
-        console.warn(`⚠️ 404 Not Found: ${endpoint}`);
       }
       throw new Error(data?.message || `Request failed with status ${res.status}`);
     }
@@ -151,10 +122,6 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 };
 
-/**
- * Public fetch — no auth token.
- * Used for login, register, OTP, forgot/reset password endpoints.
- */
 const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const res = await fetch(url, {
@@ -165,42 +132,33 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
       ...((options.headers as Record<string, string>) || {}),
     },
   });
-  const ct = res.headers.get("content-type");
+  const ct   = res.headers.get("content-type");
   const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
   if (!res.ok) {
     const fieldErrors = (data?.fieldErrors as Record<string, string> | undefined)
       ? Object.entries(data.fieldErrors as Record<string, string>)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ")
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(", ")
       : null;
     throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
   }
   return data;
 };
 
-/**
- * Extracts an array from any backend response shape.
- * Handles: plain array, { content }, { data }, { tickets }, { bookings }, { items }, { results }
- * Falls back to scanning all keys for the first non-empty array.
- */
 export const extractArray = (data: any): any[] => {
   if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.content)) return data.content;
-  if (Array.isArray(data.data)) return data.data;
-  if (Array.isArray(data.tickets)) return data.tickets;
+  if (Array.isArray(data))          return data;
+  if (Array.isArray(data.content))  return data.content;
+  if (Array.isArray(data.data))     return data.data;
+  if (Array.isArray(data.tickets))  return data.tickets;
   if (Array.isArray(data.bookings)) return data.bookings;
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.results)) return data.results;
+  if (Array.isArray(data.items))    return data.items;
+  if (Array.isArray(data.results))  return data.results;
   for (const key of Object.keys(data)) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
   return [];
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const loginUser = async (identifier: string, password: string) => {
   clearToken();
@@ -208,10 +166,10 @@ export const loginUser = async (identifier: string, password: string) => {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
   });
-  if (data?.token) setToken(data.token);
-  if (data?.role) setRole(data.role);
-  if (data?.id) setUserId(Number(data.id));
-  if (data?.userId) setUserId(Number(data.userId));
+  if (data?.token)        setToken(data.token);
+  if (data?.role)         setRole(data.role);
+  if (data?.id)           setUserId(Number(data.id));
+  if (data?.userId)       setUserId(Number(data.userId));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   debugToken();
   return data;
@@ -222,9 +180,9 @@ export const registerUser = async (payload: any) => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (data?.token) setToken(data.token);
-  if (data?.role) setRole(data.role);
-  if (data?.id) setUserId(Number(data.id));
+  if (data?.token)        setToken(data.token);
+  if (data?.role)         setRole(data.role);
+  if (data?.id)           setUserId(Number(data.id));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   return data;
 };
@@ -233,7 +191,6 @@ export const logoutUser = () => clearToken();
 
 export const getCurrentUser = async () => apiFetch("/users/me");
 
-/** POST /api/users/send-otp — registration OTP (public) */
 export const sendRegistrationOtp = async (email: string): Promise<void> => {
   await publicFetch("/users/send-otp", {
     method: "POST",
@@ -241,7 +198,6 @@ export const sendRegistrationOtp = async (email: string): Promise<void> => {
   });
 };
 
-/** POST /api/users/forgot-password — send reset OTP (public) */
 export const sendForgotPasswordOtp = async (email: string): Promise<void> => {
   await publicFetch("/users/forgot-password", {
     method: "POST",
@@ -249,7 +205,6 @@ export const sendForgotPasswordOtp = async (email: string): Promise<void> => {
   });
 };
 
-/** POST /api/users/reset-password — submit new password with OTP (public) */
 export const resetPassword = async (
   email: string,
   otp: string,
@@ -264,16 +219,12 @@ export const resetPassword = async (
 export const changePassword = async (payload: any) =>
   apiFetch("/users/me/password", { method: "PUT", body: JSON.stringify(payload) });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// USER MANAGEMENT
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const getAllUsers = async () => apiFetch("/users");
+export const getAllUsers    = async ()             => apiFetch("/users");
 export const getUsersByRole = async (role: string) => apiFetch(`/users/role/${role}`);
 
-export const getConsultantUserList = async (): Promise<string[]> => {
+export const getAgentList = async (): Promise<string[]> => {
   try {
-    const data = await apiFetch("/users/role/CONSULTANT");
+    const data = await apiFetch("/users/role/AGENT");
     return (Array.isArray(data) ? data : []).map((u: any) => u.name || u.username || u.email);
   } catch {
     return [];
@@ -286,120 +237,73 @@ export const updateUser = async (id: number, payload: object) =>
 export const deleteUser = async (id: number) =>
   apiFetch(`/users/${id}`, { method: "DELETE" });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSULTANTS
-// ─────────────────────────────────────────────────────────────────────────────
+export const getConsultants   = async () => apiFetch("/consultants");
+export const getAllConsultants = getConsultants;
+export const getAdvisors      = getConsultants;
+export const getAllAdvisors    = getConsultants;
 
-export const getConsultants = async () => apiFetch("/consultants");
+export const getConsultantById = async (consultantId: number) =>
+  apiFetch(`/consultants/${consultantId}`);
+export const getAdvisorById = getConsultantById;
+export const getMyProfile   = getConsultantById;
 
-export const getConsultantById = async (consultantId: number) => {
-  try {
-    const data = await apiFetch(`/consultants/${consultantId}`);
-    if (data) return data;
-  } catch {
-    // 404 or any error — fall through to users endpoint
-  }
-  try {
-    return await apiFetch(`/users/${consultantId}`);
-  } catch {
-    return null; // genuinely not found — always return null, never throw
-  }
-};
-
-export const getMyProfile = getConsultantById;
-
-// POST /consultants — multipart/form-data
 export const createConsultant = async (payload: any) => {
-  const formData = new FormData();
+  const formData    = new FormData();
   const dataPayload = { ...payload };
-  let file: File | null = null;
+  let   file: File | null = null;
 
   if (dataPayload.file) { file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
+  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
   return apiFetch("/consultants", { method: "POST", body: formData });
 };
+export const createAdvisor = createConsultant;
 
-// PUT /consultants/:id — multipart/form-data
 export const updateConsultant = async (
   consultantId: number,
   data: {
     name?: string; designation?: string; charges?: number; email?: string;
     skills?: string[]; shiftStartTime?: string | null; shiftEndTime?: string | null;
-    description?: string; rating?: number | null;[key: string]: any;
+    description?: string; rating?: number | null; [key: string]: any;
   },
   explicitFile?: File | null
 ): Promise<any> => {
-  const formData = new FormData();
+  const formData    = new FormData();
   const dataPayload = { ...data };
-  let file: File | null = explicitFile || null;
+  let   file: File | null = explicitFile || null;
 
   if (dataPayload.file) { if (!file) file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
+  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
   return apiFetch(`/consultants/${consultantId}`, { method: "PUT", body: formData });
 };
+export const updateAdvisor = updateConsultant;
 
 export const deleteConsultant = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}`, { method: "DELETE" });
-
-/**
- * Convenience helper: resolve a display name for a consultant/user ID.
- * Tries /consultants/:id then /users/:id, never throws.
- */
-export const resolveConsultantName = async (id: number): Promise<string> => {
-  try {
-    const d = await getConsultantById(id);
-    return d?.name || d?.fullName || d?.username || `Consultant #${id}`;
-  } catch {
-    return `Consultant #${id}`;
-  }
-};
-export const getAllConsultants = getConsultants;
-export const getAllAdvisors = getConsultants;
-export const getAdvisorById = getConsultantById;
-export const createAdvisor = createConsultant;
-export const updateAdvisor = updateConsultant;
 export const deleteAdvisor = deleteConsultant;
-/** @deprecated Use getConsultantUserList instead */
-export const getAgentList = async (): Promise<string[]> => {
-  try {
-    const data = await apiFetch("/users/role/CONSULTANT");
-    return (Array.isArray(data) ? data : []).map((u: any) => u.name || u.username || u.email);
-  } catch {
-    return [];
-  }
-};
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ONBOARDING
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const getOnboarding = async (id: number) => apiFetch(`/onboarding/${id}`);
+export const getOnboarding    = async (id: number)                  => apiFetch(`/onboarding/${id}`);
 export const updateOnboarding = async (id: number, payload: object) =>
   apiFetch(`/onboarding/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-export const deleteOnboarding = async (id: number) =>
+export const deleteOnboarding = async (id: number)                  =>
   apiFetch(`/onboarding/${id}`, { method: "DELETE" });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TIMESLOTS
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const getTimeslotById = async (id: number) => apiFetch(`/timeslots/${id}`);
 
 export const getTimeslotsByConsultant = async (consultantId: number) => {
   const data = await apiFetch(`/timeslots/consultant/${consultantId}`);
   if (Array.isArray(data)) return data;
-  if (data?.content) return data.content;
+  if (data?.content)       return data.content;
   return [];
 };
+export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 
 export const getAvailableTimeslotsByConsultant = async (consultantId: number) => {
   try {
@@ -409,6 +313,7 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
     return getTimeslotsByConsultant(consultantId);
   }
 };
+export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 
 export const createTimeslot = async (payload: {
   consultantId: number; slotDate: string; slotTime: string;
@@ -421,70 +326,33 @@ export const updateTimeslot = async (id: number, payload: any) =>
 export const deleteTimeslot = async (id: number) =>
   apiFetch(`/timeslots/${id}`, { method: "DELETE" });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MASTER TIMESLOTS
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const getConsultantMasterSlots = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}/master-timeslots`);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKINGS
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const createBooking = async (payload: {
   consultantId: number; timeSlotId: number; amount: number;
   userNotes?: string; meetingMode?: string; bookingDate?: string;
-  slotDate?: string; masterTimeSlotId?: number; slotTime?: string; timeRange?: string;
-  userId?: number;
-}) => {
-  // Pre-validate consultant exists before hitting /bookings
-  // This prevents the 500 "Transaction silently rolled back" error
-  try {
-    const check = await apiFetch(`/consultants/${payload.consultantId}`);
-    if (!check?.id) throw new Error("Consultant not found");
-  } catch (e: any) {
-    throw new Error(`Consultant #${payload.consultantId} is no longer available. Please choose another advisor.`);
-  }
-
-  return apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
-};
+  slotDate?: string; masterTimeslotId?: number; slotTime?: string; timeRange?: string;
+}) => apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
 
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
 export const getAllBookings = async (): Promise<any[]> => {
-  // ── FIX: removed "/bookings/admin" — the backend has no such route.
-  // Spring resolves /bookings/{id} and tries to parse "admin" as a Long → 500.
-  // Only "/bookings" (admin-scoped by JWT role) is a valid direct endpoint.
-  const directEndpoints = [
-    "/bookings",
-  ];
-
+  const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
   for (const endpoint of directEndpoints) {
     try {
-      const data = await apiFetch(endpoint);
-      const extracted = extractArray(data);
-      console.log(`📋 getAllBookings: ${endpoint} → ${extracted.length} records`);
+      const response  = await api.get(endpoint);
+      const extracted = extractArray(response.data);
       if (extracted.length > 0) return extracted;
-    } catch (e: any) {
-      console.warn(`⚠️ getAllBookings: ${endpoint} failed (${e?.message})`);
+      if (endpoint === "/bookings") return [];
+    } catch {
+      console.warn(`⚠️ ${endpoint} failed, trying next…`);
     }
   }
-
-  // ── Phase 2: aggregate per-consultant ──
-  console.warn("getAllBookings: direct endpoints returned 0 — trying per-consultant fallback");
   try {
-    let consultants: any[] = [];
-    try {
-      const d = await apiFetch("/consultants");
-      consultants = extractArray(d);
-      console.log(`getAllBookings: got ${consultants.length} consultants from /consultants`);
-    } catch { /* non-fatal */ }
-
-    if (consultants.length === 0) {
-      console.warn("getAllBookings: no consultants found — cannot aggregate");
-      return [];
-    }
+    const consultantsData = await apiFetch("/consultants");
+    const consultants: any[] = extractArray(consultantsData);
+    if (consultants.length === 0) { console.warn("getAllBookings: no consultants"); return []; }
 
     const results = await Promise.allSettled(
       consultants.map((c: any) =>
@@ -496,7 +364,7 @@ export const getAllBookings = async (): Promise<any[]> => {
     const all: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
     const seen = new Set<number>();
     const deduped = all.filter(b => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
-    console.log(`✅ getAllBookings fallback: ${deduped.length} bookings across ${consultants.length} consultants`);
+    console.log(`✅ getAllBookings: ${deduped.length} bookings across ${consultants.length} consultants`);
     return deduped;
   } catch (err: any) {
     console.error("❌ getAllBookings fallback failed:", err?.message);
@@ -519,14 +387,8 @@ export const getMyBookings = async (): Promise<any[]> => {
   }
 };
 
-export const getBookingsByConsultant = async (consultantId: number): Promise<any[]> => {
-  const data = await apiFetch(`/bookings/consultant/${consultantId}`);
-  return extractArray(data);
-};
-
-// ── Timeslot / booking aliases ──
-export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
-export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
+export const getBookingsByConsultant = async (consultantId: number) =>
+  apiFetch(`/bookings/consultant/${consultantId}`);
 export const getBookingsByAdvisor = getBookingsByConsultant;
 
 export const updateBooking = async (id: number, payload: any) =>
@@ -535,57 +397,31 @@ export const updateBooking = async (id: number, payload: any) =>
 export const deleteBooking = async (id: number) =>
   apiFetch(`/bookings/${id}`, { method: "DELETE" });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SKILLS / CATEGORIES
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const getAllSkills = async () => {
   const data = await apiFetch("/skills");
   return extractArray(data);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKETS
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const createTicket = async (
   payload: {
-    userId: number;
+    userId?: number | null;
     consultantId?: number | null;
     category: string;
     description: string;
     attachmentUrl?: string;
     priority?: string;
+    status?: string;
+    title?: string;
   },
   file?: File | null
 ): Promise<any> => {
-  const role = (getRole() || "").toUpperCase().replace(/^ROLE_/, "");
-  if (
-    role !== "SUBSCRIBER" &&
-    role !== "SUBSCRIBED" &&
-    role !== "ADMIN" &&
-    role !== "CONSULTANT"
-  ) {
-    throw new Error(
-      "SUBSCRIBER_ONLY: Only subscribed users can raise support tickets. Please upgrade your plan to get access."
-    );
-  }
-
-  const ticketPayload: Record<string, any> = {
-    userId: payload.userId,
-    category: payload.category,
-    description: payload.description,
-  };
-  if (payload.consultantId != null) ticketPayload.consultantId = payload.consultantId;
-  if (payload.attachmentUrl) ticketPayload.attachmentUrl = payload.attachmentUrl;
-  if (payload.priority) ticketPayload.priority = payload.priority;
-
   const token = getToken();
+  const ticketPayload = { ...payload, status: payload.status || "NEW" };
+
   const form = new FormData();
   const blob = new Blob([JSON.stringify(ticketPayload)], { type: "application/json" });
-
+  form.append("data",       blob);
   form.append("ticketData", blob);
-  form.append("data", blob);
   if (file) form.append("file", file);
 
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -607,6 +443,7 @@ export const getAllTickets = async (): Promise<any[]> => {
     const arr = extractArray(data);
     if (arr.length === 0) {
       console.warn("⚠️ [getAllTickets] /api/tickets returned empty array.");
+      console.warn("   Check: (a) no tickets exist, OR (b) token lacks ROLE_ADMIN.");
       debugToken();
     } else {
       console.log(`✅ [getAllTickets] Loaded ${arr.length} tickets`);
@@ -645,11 +482,52 @@ export const getTicketsByConsultant = async (consultantId: number): Promise<any[
   }
 };
 
-export const updateTicketStatus = async (id: number, status: string) =>
-  apiFetch(`/tickets/${id}/status`, {
+// ─── BUG 1 FIX: updateTicketStatus ───────────────────────────────────────────
+// Root cause: Spring backend expects status as a query-param or plain-text body,
+// NOT as a JSON object { status }. We try 3 strategies in order.
+/** PATCH /api/tickets/:id/status */
+export const updateTicketStatus = async (id: number, status: string): Promise<any> => {
+  // Strategy 1: query-param — PATCH /tickets/{id}/status?status=VALUE
+  try {
+    const result = await apiFetch(`/tickets/${id}/status?status=${encodeURIComponent(status)}`, {
+      method: "PATCH",
+    });
+    console.log(`✅ updateTicketStatus(${id}, ${status}) via query-param`);
+    return result;
+  } catch (e1: any) {
+    console.warn(`⚠️ query-param strategy failed: ${e1?.message}`);
+  }
+
+  // Strategy 2: plain text body — Content-Type: text/plain, body = status string
+  try {
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/tickets/${id}/status`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "text/plain",
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: status,
+    });
+    const ct   = res.headers.get("content-type");
+    const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
+    if (!res.ok) throw new Error(data?.message || `Status ${res.status}`);
+    console.log(`✅ updateTicketStatus(${id}, ${status}) via text/plain body`);
+    return data;
+  } catch (e2: any) {
+    console.warn(`⚠️ text/plain strategy failed: ${e2?.message}`);
+  }
+
+  // Strategy 3: original JSON body fallback
+  console.warn(`⚠️ Falling back to JSON body for updateTicketStatus(${id}, ${status})`);
+  return apiFetch(`/tickets/${id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const patchTicketStatus = updateTicketStatus;
 
 export const assignTicketToConsultant = async (ticketId: number, consultantId: number) =>
@@ -659,12 +537,6 @@ export const assignTicketToConsultant = async (ticketId: number, consultantId: n
   });
 export const reassignTicket = assignTicketToConsultant;
 
-export const escalateTicket = async (ticketId: number, reason: string): Promise<any> =>
-  apiFetch(`/tickets/${ticketId}/escalate`, {
-    method: "POST",
-    body: JSON.stringify({ reason }),
-  });
-
 export const updateTicket = async (id: number, payload: any) =>
   apiFetch(`/tickets/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 
@@ -672,10 +544,6 @@ export const deleteTicket = async (id: number) =>
   apiFetch(`/tickets/${id}`, { method: "DELETE" });
 
 export const closeTicket = (id: number) => updateTicketStatus(id, "CLOSED");
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKET COMMENTS
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const getTicketComments = async (ticketId: number): Promise<any[]> => {
   const data = await apiFetch(`/tickets/${ticketId}/comments`);
@@ -688,17 +556,21 @@ export const postTicketComment = async (
   senderIdOrOptions?: number | {
     senderId?: number | null;
     isConsultantReply?: boolean;
+    authorRole?: "CUSTOMER" | "AGENT";
   } | null,
-  isConsultantReply = false
+  isConsultantReply = false,
+  isInternal = false
 ): Promise<any> => {
   let senderId: number | null = null;
   let consultantReply = isConsultantReply;
+  let authorRole: string = "CUSTOMER";
 
   if (typeof senderIdOrOptions === "number") {
     senderId = senderIdOrOptions;
   } else if (senderIdOrOptions && typeof senderIdOrOptions === "object") {
-    senderId = senderIdOrOptions.senderId ?? null;
+    senderId        = senderIdOrOptions.senderId ?? null;
     consultantReply = senderIdOrOptions.isConsultantReply ?? false;
+    authorRole      = senderIdOrOptions.authorRole ?? "CUSTOMER";
   }
 
   if (senderId === null) {
@@ -713,6 +585,8 @@ export const postTicketComment = async (
       message,
       senderId,
       isConsultantReply: consultantReply,
+      isPrivateNote: isInternal,
+      authorRole,
     }),
   });
 };
@@ -721,29 +595,34 @@ export const postInternalNote = async (
   ticketId: number,
   noteText: string,
   authorId: number
-): Promise<any> =>
-  apiFetch(`/tickets/${ticketId}/notes`, {
-    method: "POST",
-    body: JSON.stringify({ authorId, noteText }),
-  });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TICKET FEEDBACK
-// ─────────────────────────────────────────────────────────────────────────────
+) => {
+  try {
+    return await apiFetch(`/tickets/${ticketId}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ authorId, noteText }),
+    });
+  } catch {
+    return postTicketComment(ticketId, noteText, authorId, false, true);
+  }
+};
 
 export const submitTicketFeedback = async (
   ticketId: number,
   rating: number,
   feedbackText: string
-): Promise<any> =>
-  apiFetch(`/tickets/${ticketId}`, {
-    method: "POST",
-    body: JSON.stringify({ feedbackRating: rating, feedbackText }),
-  });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NOTIFICATIONS
-// ─────────────────────────────────────────────────────────────────────────────
+) => {
+  try {
+    return await apiFetch(`/tickets/${ticketId}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ rating, feedbackText }),
+    });
+  } catch {
+    return await apiFetch(`/tickets/${ticketId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ feedbackRating: rating, feedbackText }),
+    });
+  }
+};
 
 export const getMyUnreadNotifications = async () => {
   const data = await apiFetch("/notifications");
@@ -753,9 +632,80 @@ export const getMyUnreadNotifications = async () => {
 export const markNotificationAsRead = async (id: number) =>
   apiFetch(`/notifications/${id}/read`, { method: "PUT" });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SLA HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+export const sendTicketStatusEmail = async (payload: {
+  ticketId: number;
+  ticketTitle: string;
+  newStatus: string;
+  userEmail: string;
+  userName?: string;
+  updatedBy?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-update", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Status email sent to ${payload.userEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketStatusEmail failed (non-fatal):`, err?.message);
+  }
+};
+
+export const sendTicketAssignedEmail = async (payload: {
+  ticketId: number;
+  ticketTitle: string;
+  consultantEmail: string;
+  consultantName?: string;
+  assignedBy?: string;
+  priority?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-assigned", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Assignment email sent to ${payload.consultantEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketAssignedEmail failed (non-fatal):`, err?.message);
+  }
+};
+
+export const sendTicketCommentEmail = async (payload: {
+  ticketId: number;
+  ticketTitle: string;
+  userEmail: string;
+  userName?: string;
+  commentPreview: string;
+  repliedBy?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-comment", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Reply email sent to ${payload.userEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketCommentEmail failed (non-fatal):`, err?.message);
+  }
+};
+
+export const sendTicketEscalatedEmail = async (payload: {
+  ticketId: number;
+  ticketTitle: string;
+  userEmail?: string;
+  consultantEmail?: string;
+  reason?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-escalated", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Escalation email sent for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketEscalatedEmail failed (non-fatal):`, err?.message);
+  }
+};
 
 export const SLA_HOURS: Record<string, number> = {
   LOW: 72, MEDIUM: 24, HIGH: 8, URGENT: 4,
@@ -763,12 +713,12 @@ export const SLA_HOURS: Record<string, number> = {
 
 export const getSlaInfo = (ticket: any) => {
   if (!ticket?.createdAt) return null;
-  const created = new Date(ticket.createdAt);
-  const hours = SLA_HOURS[ticket.priority] ?? 24;
+  const created  = new Date(ticket.createdAt);
+  const hours    = SLA_HOURS[ticket.priority] ?? 24;
   const deadline = new Date(created.getTime() + hours * 3_600_000);
   const minsLeft = Math.round((deadline.getTime() - Date.now()) / 60_000);
   const breached = ticket.isSlaBreached || minsLeft <= 0;
-  const warning = !breached && minsLeft < 120;
+  const warning  = !breached && minsLeft < 120;
 
   return {
     deadline,
@@ -778,28 +728,24 @@ export const getSlaInfo = (ticket: any) => {
     label: breached
       ? `Overdue by ${Math.abs(minsLeft)} min`
       : minsLeft < 60
-        ? `${minsLeft} min remaining`
-        : `${Math.round(minsLeft / 60)}h remaining`,
+      ? `${minsLeft} min remaining`
+      : `${Math.round(minsLeft / 60)}h remaining`,
     deadlineStr: deadline.toLocaleString("en-IN", {
       day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
     }),
   };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATUS / PRIORITY STYLES
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const getStatusStyle = (status: string) => {
   const s = (status ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string }> = {
-    NEW: { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
-    OPEN: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
+    NEW:         { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
+    OPEN:        { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
     IN_PROGRESS: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
-    RESOLVED: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
-    CLOSED: { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
-    ESCALATED: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
-    PENDING: { bg: "#FAF5FF", color: "#7C3AED", border: "#C4B5FD" },
+    RESOLVED:    { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
+    CLOSED:      { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
+    ESCALATED:   { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
+    PENDING:     { bg: "#FAF5FF", color: "#7C3AED", border: "#C4B5FD" },
   };
   return map[s] ?? { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" };
 };
@@ -807,25 +753,17 @@ export const getStatusStyle = (status: string) => {
 export const getPriorityStyle = (priority: string) => {
   const p = (priority ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string; dot: string }> = {
-    LOW: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
-    MEDIUM: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D", dot: "#F59E0B" },
-    HIGH: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
-    URGENT: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5", dot: "#EF4444" },
+    LOW:      { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
+    MEDIUM:   { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D", dot: "#F59E0B" },
+    HIGH:     { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
+    URGENT:   { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5", dot: "#EF4444" },
     CRITICAL: { bg: "#4A0404", color: "#FCA5A5", border: "#7F1D1D", dot: "#DC2626" },
   };
   return map[p] ?? map.MEDIUM;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DASHBOARD
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const getDashboardSummaries = async (period: "DAILY" | "WEEKLY" = "WEEKLY") =>
   apiFetch(`/dashboard/summaries?period=${period}`);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FEEDBACKS
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const getFeedbackByBooking = async (bookingId: number) =>
   apiFetch(`/feedbacks/booking/${bookingId}`);
@@ -842,254 +780,270 @@ export const updateFeedback = async (id: number, payload: {
   rating: number; comments?: string;
 }) => apiFetch(`/feedbacks/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN CONFIG — Canned Responses & Ticket Categories
-// Base: AdminConfigController @RequestMapping("/api/admin/config")
-// ─────────────────────────────────────────────────────────────────────────────
+export const initiateGoogleOAuth = () => {
+  window.location.href = `${BASE_URL}/oauth2/authorize/google`;
+};
 
-export const getCannedResponses = async (category?: string): Promise<any[]> => {
-  const query = category ? `?category=${encodeURIComponent(category)}` : "";
-  const data = await apiFetch(`/admin/config/canned-responses${query}`);
-  return extractArray(data);
+export const handleOAuthCallback = (): {
+  token: string; role: string; userId: number; consultantId?: number;
+} | null => {
+  const params      = new URLSearchParams(window.location.search);
+  const token       = params.get("token");
+  const role        = params.get("role");
+  const userId      = params.get("userId");
+  if (!token || !role || !userId) return null;
+  setToken(token);
+  setRole(role);
+  setUserId(Number(userId));
+  const consultantId = params.get("consultantId");
+  if (consultantId) setConsultantId(Number(consultantId));
+  debugToken();
+  return { token, role, userId: Number(userId), consultantId: consultantId ? Number(consultantId) : undefined };
+};
+
+export const loginWithGoogleToken = async (googleIdToken: string) => {
+  clearToken();
+  const data = await publicFetch("/auth/google", {
+    method: "POST",
+    body: JSON.stringify({ idToken: googleIdToken }),
+  });
+  if (data?.token)        setToken(data.token);
+  if (data?.role)         setRole(data.role);
+  if (data?.id)           setUserId(Number(data.id));
+  if (data?.userId)       setUserId(Number(data.userId));
+  if (data?.consultantId) setConsultantId(Number(data.consultantId));
+  debugToken();
+  return data;
+};
+
+export const escalateTicket = async (id: number, reason?: string): Promise<any> => {
+  try {
+    return await apiFetch(`/tickets/${id}/escalate`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason || "" }),
+    });
+  } catch {
+    return apiFetch(`/tickets/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "ESCALATED" }),
+    });
+  }
+};
+
+export const getCannedResponses = async (): Promise<any[]> => {
+  const data = await apiFetch("/canned-responses");
+  return Array.isArray(data) ? data : extractArray(data);
 };
 
 export const createCannedResponse = async (payload: {
-  title: string;
-  content: string;
-  category?: string;
+  title: string; message: string; category?: string;
 }): Promise<any> =>
-  apiFetch("/admin/config/canned-responses", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  apiFetch("/canned-responses", { method: "POST", body: JSON.stringify(payload) });
+
+export const updateCannedResponse = async (id: number, payload: {
+  title?: string; message?: string; category?: string;
+}): Promise<any> =>
+  apiFetch(`/canned-responses/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
 export const deleteCannedResponse = async (id: number): Promise<void> => {
-  await apiFetch(`/admin/config/canned-responses/${id}`, { method: "DELETE" });
+  await apiFetch(`/canned-responses/${id}`, { method: "DELETE" });
 };
 
 export const getTicketCategories = async (): Promise<any[]> => {
-  const data = await apiFetch("/admin/config/categories");
-  return extractArray(data);
+  const data = await apiFetch("/ticket-categories");
+  return Array.isArray(data) ? data : extractArray(data);
 };
 
 export const createTicketCategory = async (payload: {
-  name: string;
-  description?: string;
+  name: string; description?: string;
 }): Promise<any> =>
-  apiFetch("/admin/config/categories", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  apiFetch("/ticket-categories", { method: "POST", body: JSON.stringify(payload) });
 
-export const toggleTicketCategory = async (id: number): Promise<any> =>
-  apiFetch(`/admin/config/categories/${id}/toggle`, { method: "PATCH" });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN — Ticket Analytics & SLA
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const getResolutionAnalytics = async (
-  period: "DAILY" | "WEEKLY" | "MONTHLY" = "WEEKLY"
-): Promise<Record<string, any>> =>
-  apiFetch(`/admin/config/analytics?period=${period}`);
-
-export const getSlaBreachedTickets = async (): Promise<any[]> => {
+export const toggleTicketCategory = async (id: number): Promise<any> => {
   try {
-    const data = await apiFetch("/admin/config/sla-breached");
-    return extractArray(data);
-  } catch (err: any) {
-    console.error("❌ getSlaBreachedTickets failed:", err?.message);
-    return [];
+    return await apiFetch(`/ticket-categories/${id}/toggle`, { method: "PATCH" });
+  } catch {
+    return apiFetch(`/ticket-categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ active: true }),
+    });
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKING NOTIFICATIONS
-// ─────────────────────────────────────────────────────────────────────────────
+export const deleteTicketCategory = async (id: number): Promise<void> => {
+  await apiFetch(`/ticket-categories/${id}`, { method: "DELETE" });
+};
 
-export interface BookingNotificationRequest {
-  bookingId: number;
-  userEmail: string;
-  consultantEmail: string;
-  meetingMode: string;
-  amount: number;
-  meetingLink?: string;
-}
+export const getBusinessHours = async (): Promise<any[]> => {
+  const data = await apiFetch("/business-hours");
+  return Array.isArray(data) ? data : extractArray(data);
+};
 
-export const sendBookingConfirmationEmails = async (
-  payload: BookingNotificationRequest
-): Promise<void> => {
+export const updateBusinessHours = async (hours: Array<{
+  dayOfWeek: string; openTime: string; closeTime: string; isOpen: boolean;
+}>): Promise<any> =>
+  apiFetch("/business-hours", { method: "PUT", body: JSON.stringify(hours) });
+
+export const getHolidays = async (): Promise<any[]> => {
+  const data = await apiFetch("/holidays");
+  return Array.isArray(data) ? data : extractArray(data);
+};
+
+export const addHoliday = async (payload: { name: string; holidayDate: string }): Promise<any> =>
+  apiFetch("/holidays", { method: "POST", body: JSON.stringify(payload) });
+
+export const deleteHoliday = async (id: number): Promise<void> => {
+  await apiFetch(`/holidays/${id}`, { method: "DELETE" });
+};
+
+export const getAutoResponder = async (): Promise<any> =>
+  apiFetch("/auto-responder");
+
+export const updateAutoResponder = async (payload: { enabled: boolean; message: string }): Promise<any> =>
+  apiFetch("/auto-responder", { method: "PUT", body: JSON.stringify(payload) });
+
+const _today = () => new Date().toISOString().slice(0, 10);
+
+export const triggerDownload = (blob: Blob, filename: string, type: string): void => {
+  const url = URL.createObjectURL(new Blob([blob], { type }));
+  const a   = document.createElement("a");
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+export const exportTicketsExcel = async (): Promise<void> => {
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}/tickets/export/excel`, {
+    headers: {
+      Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  triggerDownload(await res.blob(), `tickets_${_today()}.xlsx`,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+};
+
+export const exportSingleTicketExcel = async (id: number): Promise<void> => {
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}/tickets/${id}/export/excel`, {
+    headers: {
+      Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  triggerDownload(await res.blob(), `ticket_${id}_${_today()}.xlsx`,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+};
+
+export const exportTicketsPdf = async (): Promise<void> => {
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}/tickets/export/pdf`, {
+    headers: {
+      Accept: "application/pdf",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  triggerDownload(await res.blob(), `tickets_${_today()}.pdf`, "application/pdf");
+};
+
+export const exportSingleTicketPdf = async (id: number): Promise<void> => {
+  const token = getToken();
+  const res = await fetch(`${BASE_URL}/tickets/${id}/export/pdf`, {
+    headers: {
+      Accept: "application/pdf",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  triggerDownload(await res.blob(), `ticket_${id}_${_today()}.pdf`, "application/pdf");
+};
+
+export const ticketsToExportRows = (tickets: any[]): Record<string, any>[] =>
+  tickets.map(t => ({
+    "Ticket ID":      t.id,
+    "Title":          t.title || t.category || "",
+    "Description":    t.description || "",
+    "Category":       t.category || "",
+    "Priority":       t.priority || "",
+    "Status":         t.status || "",
+    "Submitted By":   t.user?.name || t.user?.username || t.userName || (t.userId ? `User #${t.userId}` : ""),
+    "Assigned To":    t.agentName || t.consultantName || "",
+    "Created At":     t.createdAt ? new Date(t.createdAt).toLocaleString("en-IN") : "",
+    "Updated At":     t.updatedAt ? new Date(t.updatedAt).toLocaleString("en-IN") : "",
+    "SLA Breached":   t.isSlaBreached ? "Yes" : "No",
+    "Escalated":      t.isEscalated   ? "Yes" : "No",
+    "Feedback Rating": t.feedbackRating ?? "",
+    "Feedback Text":   t.feedbackText  ?? "",
+  }));
+
+export const clientExportTicketsExcel = async (tickets: any[], filename?: string): Promise<void> => {
+  const rows  = ticketsToExportRows(tickets);
+  const fname = filename || `tickets_${_today()}.xlsx`;
   try {
-    const token = getToken();
-    const res = await fetch("/api/notifications/booking-confirmation", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "text/plain, application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const text = await res.text();
-
-    if (!res.ok) {
-      console.warn(`⚠️ Booking email returned ${res.status}: ${text}`);
+    const XLSX = (window as any).XLSX;
+    if (XLSX) {
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Tickets");
+      ws["!cols"] = Object.keys(rows[0] ?? {}).map(k => ({ wch: Math.max(k.length, 18) }));
+      XLSX.writeFile(wb, fname);
       return;
     }
-
-    console.log(`✅ Booking emails dispatched for #${payload.bookingId}: ${text}`);
-  } catch (err: any) {
-    console.warn("⚠️ Booking confirmation email failed (non-fatal):", err?.message);
-  }
+  } catch { /* fall through */ }
+  const headers = Object.keys(rows[0] ?? {});
+  const csv = [
+    headers.join(","),
+    ...rows.map(r => headers.map(h => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(",")),
+  ].join("\n");
+  triggerDownload(new Blob([csv], { type: "text/csv" }), fname.replace(".xlsx", ".csv"), "text/csv");
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SYSTEM SETTINGS — Business Hours, Holidays, Auto-Responder
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface BusinessHoursRequest {
-  dayOfWeek: string;
-  startTime: string;
-  endTime: string;
-  workingDay: boolean;
-}
-
-export interface BusinessHoursResponse {
-  id: number;
-  dayOfWeek: string;
-  // NOTE: Spring returns LocalTime as {hour, minute, second, nano} by default.
-  // Use parseLocalTime() in AdminPage.tsx to safely convert to "HH:mm" string.
-  startTime: string | { hour: number; minute: number; second?: number; nano?: number };
-  endTime: string | { hour: number; minute: number; second?: number; nano?: number };
-  isWorkingDay: boolean;
-}
-
-export interface HolidayRequest {
-  name: string;
-  holidayDate: string;
-}
-
-export interface HolidayResponse {
-  id: number;
-  name: string;
-  holidayDate: string;
-}
-
-export interface AutoResponderDto {
-  enabled: boolean;
-  message: string;
-}
-
-/** GET /api/admin/settings/business-hours */
-export const getBusinessHours = async (): Promise<BusinessHoursResponse[]> => {
-  const data = await apiFetch("/admin/settings/business-hours");
-  return extractArray(data);
-};
-
-/**
- * FIX 2 (409 Conflict): Records already exist in the DB — POST creates duplicates.
- * Strategy:
- *   1. GET existing rows to obtain their IDs (keyed by dayOfWeek).
- *   2. For rows that already exist → PUT /admin/settings/business-hours/{id}
- *   3. For rows that are new (shouldn't happen after first run) → POST
- * Falls back to PUT on the collection if per-row PUT also fails.
- *
- * NOTE: startTime / endTime come back from the backend as LocalTime objects
- * {hour, minute, second, nano}. We always send plain "HH:mm:ss" strings
- * (Spring's LocalTime deserializer accepts both).
- */
-export const updateBusinessHours = async (
-  payload: BusinessHoursRequest[]
-): Promise<BusinessHoursResponse[]> => {
-  // Step 1 — load existing rows to get their IDs
-  let existingById: Record<string, number> = {};
+export const clientExportTicketsPdf = async (tickets: any[], filename?: string): Promise<void> => {
+  const rows  = ticketsToExportRows(tickets);
+  const fname = filename || `tickets_${_today()}.pdf`;
   try {
-    const existing = await apiFetch("/admin/settings/business-hours");
-    extractArray(existing).forEach((r: any) => {
-      if (r.dayOfWeek && r.id) existingById[r.dayOfWeek] = r.id;
-    });
-  } catch { /* non-fatal — proceed without IDs */ }
-
-  // Step 2 — update or create each day
-  const results = await Promise.allSettled(
-    payload.map(async (row) => {
-      const existingId = existingById[row.dayOfWeek];
-      if (existingId) {
-        // Record exists → update it by ID
-        return apiFetch(`/admin/settings/business-hours/${existingId}`, {
-          method: "PUT",
-          body: JSON.stringify(row),
-        });
-      } else {
-        // No existing record → try to create
-        return apiFetch("/admin/settings/business-hours", {
-          method: "POST",
-          body: JSON.stringify(row),
-        });
-      }
-    })
-  );
-
-  const saved = results
-    .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
-    .map(r => r.value);
-
-  const failed = results.filter(r => r.status === "rejected");
-  if (failed.length > 0) {
-    console.warn(`⚠️ updateBusinessHours: ${failed.length}/${payload.length} rows failed`);
-  }
-
-  return saved;
-};
-
-/** GET /api/admin/settings/holidays */
-export const getHolidays = async (): Promise<HolidayResponse[]> => {
-  const data = await apiFetch("/admin/settings/holidays");
-  return extractArray(data);
-};
-
-/** POST /api/admin/settings/holidays */
-export const addHoliday = async (payload: HolidayRequest): Promise<HolidayResponse> =>
-  apiFetch("/admin/settings/holidays", { method: "POST", body: JSON.stringify(payload) });
-
-/** DELETE /api/admin/settings/holidays/:id */
-export const deleteHoliday = async (id: number): Promise<void> => {
-  await apiFetch(`/admin/settings/holidays/${id}`, { method: "DELETE" });
-};
-
-/** GET /api/admin/settings/auto-responder */
-export const getAutoResponder = async (): Promise<AutoResponderDto> =>
-  apiFetch("/admin/settings/auto-responder");
-
-/**
- * FIX 2 (409 Conflict): Auto-responder record already exists.
- * Strategy:
- *   1. GET /admin/settings/auto-responder to check if a record with an ID exists.
- *   2. If it has an id field → PUT /admin/settings/auto-responder/{id}
- *   3. If no id → fall back to POST (first-time creation).
- */
-export const updateAutoResponder = async (payload: AutoResponderDto): Promise<AutoResponderDto> => {
-  // Step 1 — try to find existing record's ID
-  let existingId: number | null = null;
-  try {
-    const existing = await apiFetch("/admin/settings/auto-responder");
-    if (existing?.id) existingId = Number(existing.id);
-  } catch { /* non-fatal */ }
-
-  if (existingId) {
-    // Record exists → update by ID
-    return apiFetch(`/admin/settings/auto-responder/${existingId}`, {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
-  }
-
-  // No existing record → create
-  return apiFetch("/admin/settings/auto-responder", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+    const jsPDF = (window as any).jspdf?.jsPDF || (window as any).jsPDF;
+    if (jsPDF) {
+      const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+      doc.setFontSize(14);
+      doc.text("Support Tickets Export", 40, 40);
+      doc.setFontSize(9);
+      doc.text(`Generated: ${new Date().toLocaleString("en-IN")}  |  Total: ${tickets.length} tickets`, 40, 58);
+      const headers = Object.keys(rows[0] ?? {});
+      (doc as any).autoTable?.({
+        head: [headers],
+        body: rows.map(r => headers.map(h => String(r[h] ?? ""))),
+        startY: 72,
+        styles: { fontSize: 7, cellPadding: 3 },
+        headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { left: 40, right: 40 },
+      });
+      doc.save(fname);
+      return;
+    }
+  } catch { /* fall through */ }
+  const headers = Object.keys(rows[0] ?? {});
+  const html = `<!DOCTYPE html><html><head><title>Tickets Export</title>
+<style>body{font-family:Arial,sans-serif;font-size:11px;padding:20px}
+h2{color:#1e3a5f}table{border-collapse:collapse;width:100%}
+th{background:#2563eb;color:#fff;padding:6px 8px;text-align:left;font-size:10px}
+td{border-bottom:1px solid #e2e8f0;padding:5px 8px}
+tr:nth-child(even){background:#f8fafc}</style></head><body>
+<h2>Support Tickets Export</h2>
+<p style="color:#64748b">Generated: ${new Date().toLocaleString("en-IN")} | Total: ${tickets.length} tickets</p>
+<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>
+<tbody>${rows.map(r => `<tr>${Object.values(r).map(v => `<td>${String(v ?? "")}</td>`).join("")}</tr>`).join("")}</tbody>
+</table><script>window.onload=()=>window.print();</script></body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
 };
 
 export default api;
