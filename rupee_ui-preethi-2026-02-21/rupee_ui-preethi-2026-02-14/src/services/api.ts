@@ -1,11 +1,6 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// api.ts  —  Unified service layer
-// Aligned with backend: TicketController, TicketService, AdminConfigController
-// ─────────────────────────────────────────────────────────────────────────────
-
 import axios from "axios";
 
-const BASE_URL = (typeof __API_BASE__ !== "undefined") ? __API_BASE__ : "/api";
+const BASE_URL = "http://52.55.178.31:8081/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOKEN / SESSION HELPERS
