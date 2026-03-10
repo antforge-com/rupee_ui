@@ -900,9 +900,12 @@ export const CreateTicketModal: React.FC<{
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const savingRef = useRef(false);
 
   const handleSubmit = async () => {
+    if (savingRef.current) return;
     if (!form.category.trim() || !form.description.trim()) { setError("Category and description are required."); return; }
+    savingRef.current = true;
     setSaving(true); setError("");
     try {
       const saved = await createTicket({
@@ -914,7 +917,7 @@ export const CreateTicketModal: React.FC<{
       }, file);
       onCreated(saved);
     } catch (e: any) { setError(e.message || "Failed to create ticket."); }
-    finally { setSaving(false); }
+    finally { savingRef.current = false; setSaving(false); }
   };
 
   return (

@@ -571,34 +571,73 @@ export const createTicket = async (
     );
   }
 
+  let effectiveUserId = Number(payload.userId);
+  try {
+    const me = await apiFetch("/users/me");
+    const meId = Number(me?.id ?? me?.userId);
+    if (Number.isFinite(meId) && meId > 0) effectiveUserId = meId;
+  } catch {
+    // Fallback to payload userId if /users/me is unavailable.
+  }
+  if (!Number.isFinite(effectiveUserId) || effectiveUserId <= 0) {
+    throw new Error("User ID is required");
+  }
+
+  // ─── FIX: Use the category exactly as provided by the user.
+  // Previously, resolveBackendCategory() made a network call to /admin/config/categories
+  // and could silently fail, returning a mismatched casing or fallback value that
+  // bypassed the pre-check in CreateTicketModal but still collided with the DB constraint.
+  // We now trust the raw user-selected category string directly.
+  const rawCategory = String(payload.category || "").trim();
+  const normalizedPriority = String(payload.priority || "MEDIUM").trim().toUpperCase();
+  const normalizedDescription = String(payload.description || "").trim();
+
   const ticketPayload: Record<string, any> = {
-    userId: payload.userId,
-    category: payload.category,
-    description: payload.description,
+    userId: effectiveUserId,
+    category: rawCategory,                 // Use exactly what the user selected — no re-resolution
+    description: normalizedDescription,
+    status: "NEW",
+    priority: normalizedPriority,
   };
   if (payload.consultantId != null) ticketPayload.consultantId = payload.consultantId;
   if (payload.attachmentUrl) ticketPayload.attachmentUrl = payload.attachmentUrl;
-  if (payload.priority) ticketPayload.priority = payload.priority;
 
   const token = getToken();
-  const form = new FormData();
-  const blob = new Blob([JSON.stringify(ticketPayload)], { type: "application/json" });
+  const postTicket = async (bodyPayload: Record<string, any>) => {
+    const form = new FormData();
+    // Backend TicketController expects required multipart part name: "ticketData".
+    form.append("ticketData", new Blob([JSON.stringify(bodyPayload)], { type: "application/json" }));
+    if (file) form.append("file", file);
 
-  form.append("ticketData", blob);
-  form.append("data", blob);
-  if (file) form.append("file", file);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${BASE_URL}/tickets`, {
+      method: "POST",
+      headers,
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err: any = new Error(data?.message || `Error ${res.status}`);
+      err.status = res.status;
+      err.response = data;
+      throw err;
+    }
+    return data;
+  };
 
-  const res = await fetch(`${BASE_URL}/tickets`, {
-    method: "POST",
-    headers,
-    body: form,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.message || `Error ${res.status}`);
-  return data;
+  try {
+    return await postTicket(ticketPayload);
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (Number(err?.status) === 409) {
+      throw new Error(
+        msg || "A similar ticket already exists. Please check your open tickets before creating another."
+      );
+    }
+    throw err;
+  }
 };
 
 export const getAllTickets = async (): Promise<any[]> => {
@@ -986,19 +1025,6 @@ export const getBusinessHours = async (): Promise<BusinessHoursResponse[]> => {
   const data = await apiFetch("/admin/settings/business-hours");
   return extractArray(data);
 };
-
-/**
- * FIX 2 (409 Conflict): Records already exist in the DB — POST creates duplicates.
- * Strategy:
- *   1. GET existing rows to obtain their IDs (keyed by dayOfWeek).
- *   2. For rows that already exist → PUT /admin/settings/business-hours/{id}
- *   3. For rows that are new (shouldn't happen after first run) → POST
- * Falls back to PUT on the collection if per-row PUT also fails.
- *
- * NOTE: startTime / endTime come back from the backend as LocalTime objects
- * {hour, minute, second, nano}. We always send plain "HH:mm:ss" strings
- * (Spring's LocalTime deserializer accepts both).
- */
 export const updateBusinessHours = async (
   payload: BusinessHoursRequest[]
 ): Promise<BusinessHoursResponse[]> => {

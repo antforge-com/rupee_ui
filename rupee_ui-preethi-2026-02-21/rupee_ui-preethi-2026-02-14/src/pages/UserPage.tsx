@@ -310,6 +310,27 @@ const fetchMasterTimeslots = async (): Promise<MasterSlot[]> => {
 };
 const JITSI_URL = (bookingId: number) => `https://meet.jit.si/finadvise-booking-${bookingId}`;
 const PENDING_FEEDBACK_KEY = "finadvise_pending_feedback_bookingId";
+const CONFLICT_SLOTS_KEY = "finadvise_conflict_slots_v1";
+
+const loadConflictSlots = (consultantId: number): Set<string> => {
+  try {
+    const raw = localStorage.getItem(CONFLICT_SLOTS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as Record<string, string[]>;
+    return new Set(Array.isArray(parsed?.[String(consultantId)]) ? parsed[String(consultantId)] : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const saveConflictSlots = (consultantId: number, slots: Set<string>) => {
+  try {
+    const raw = localStorage.getItem(CONFLICT_SLOTS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+    parsed[String(consultantId)] = Array.from(slots);
+    localStorage.setItem(CONFLICT_SLOTS_KEY, JSON.stringify(parsed));
+  } catch { }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EMAIL NOTIFICATION HELPER
@@ -414,13 +435,33 @@ const CreateTicketModal: React.FC<{ userId: number | null; onCreated: (t: Ticket
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const savingRef = useRef(false);
   const handleSubmit = async () => {
+    if (savingRef.current) return;
+    if (!userId || userId <= 0) { setError("User session not ready. Please close and open this form again."); return; }
     if (!form.category || !form.description.trim()) { setError("Category and description are required."); return; }
     if (form.description.trim().length < 10) { setError("Description must be at least 10 characters."); return; }
+    savingRef.current = true;
     setSaving(true); setError("");
-    try { const saved = await createTicket({ userId: userId ?? 0, ...form }, file); onCreated(saved as Ticket); }
-    catch (e: any) { setError(e.message || "Failed to create ticket."); }
-    finally { setSaving(false); }
+    try {
+      const saved = await createTicket({ userId, ...form }, file);
+      onCreated(saved as Ticket);
+    } catch (e: any) {
+      const msg = (e.message || "").toLowerCase();
+      if (
+        msg.includes("409") ||
+        msg.includes("conflict") ||
+        msg.includes("constraint") ||
+        msg.includes("duplicate")
+      ) {
+        setError(
+          "A similar ticket already exists. Try changing your description slightly — e.g. add more detail — then resubmit."
+        );
+      } else {
+        setError(e.message || "Failed to create ticket.");
+      }
+    }
+    finally { savingRef.current = false; setSaving(false); }
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000, backdropFilter: "blur(3px)" }} onClick={onClose}>
@@ -870,6 +911,7 @@ export default function UserPage() {
   const [masterSlots, setMasterSlots] = useState<MasterSlot[]>([]);
   const [dbTimeslots, setDbTimeslots] = useState<TimeSlotRecord[]>([]);
   const [bookedSlotSet, setBookedSlotSet] = useState<Set<string>>(new Set());
+  const [conflictBookedSet, setConflictBookedSet] = useState<Set<string>>(new Set());
   // ── NEW: unavailable slots set from advisor ──
   const [unavailSlotSet, setUnavailSlotSet] = useState<Set<string>>(new Set());
   const [dayOffset, setDayOffset] = useState(0);
@@ -1124,7 +1166,6 @@ export default function UserPage() {
     if (tab === "tickets") fetchTickets();
     if (tab === "settings") setSettingsView("menu");
   }, [tab]);
-
   useEffect(() => {
     const onVisible = async () => {
       if (document.visibilityState !== "visible") return;
@@ -1188,6 +1229,7 @@ export default function UserPage() {
 
   const handleOpenModal = async (c: Consultant) => {
     setSelectedConsultant(c); setMasterSlots([]); setDbTimeslots([]); setBookedSlotSet(new Set());
+    setConflictBookedSet(loadConflictSlots(c.id));
     setUnavailSlotSet(new Set()); setDayOffset(0); setSelectedDay(DEFAULT_DAY);
     setSelectedSlot(null); setMeetingMode("ONLINE"); setUserNotes(""); setShowModal(true);
     setLoading(p => ({ ...p, slots: true }));
@@ -1260,7 +1302,11 @@ export default function UserPage() {
         return hhmm ? `${String(parseInt(hhmm[1], 10)).padStart(2, "0")}:${hhmm[2]}` : "";
       };
       if (!realTimeslotId) {
-        const localMatch = dbTimeslots.find(s => s.slotDate === selectedDay.iso && normalizeTime(s.slotTime) === slot24 && (s.status || "").toUpperCase() !== "BOOKED") ?? dbTimeslots.find(s => s.slotDate === selectedDay.iso && (s.status || "").toUpperCase() !== "BOOKED");
+        const localMatch = dbTimeslots.find(s =>
+          s.slotDate === selectedDay.iso &&
+          normalizeTime(s.slotTime) === slot24 &&
+          (s.status || "").toUpperCase() !== "BOOKED"
+        );
         if (localMatch?.id) realTimeslotId = localMatch.id;
       }
       if (!realTimeslotId) {
@@ -1271,7 +1317,14 @@ export default function UserPage() {
             if (!res.ok) continue;
             const raw = await res.json();
             const arr: any[] = Array.isArray(raw) ? raw : raw?.content || [];
-            const match = arr.find(s => s.slotDate === selectedDay.iso && (normalizeTime(s.slotTime) === slot24 || normalise24(s.masterTimeSlot?.timeRange || s.timeRange || "") === slot24) && (s.status || "").toUpperCase() !== "BOOKED") ?? arr.find(s => s.slotDate === selectedDay.iso && (s.status || "").toUpperCase() !== "BOOKED");
+            const match = arr.find(s =>
+              s.slotDate === selectedDay.iso &&
+              (
+                normalizeTime(s.slotTime) === slot24 ||
+                normalise24(s.masterTimeSlot?.timeRange || s.timeRange || "") === slot24
+              ) &&
+              (s.status || "").toUpperCase() !== "BOOKED"
+            );
             if (match?.id) { realTimeslotId = match.id; break; }
           } catch { }
         }
@@ -1280,7 +1333,16 @@ export default function UserPage() {
         try {
           const token = getToken();
           const res = await fetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant.id}?date=${selectedDay.iso}`, { headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
-          if (res.ok) { const data = await res.json(); const arr: any[] = Array.isArray(data) ? data : data?.content || []; const match = arr.find(s => normalizeTime(s.slotTime) === slot24 && (s.status || "").toUpperCase() !== "BOOKED") ?? arr.find(s => (s.status || "").toUpperCase() !== "BOOKED"); if (match?.id) realTimeslotId = match.id; }
+          if (res.ok) {
+            const data = await res.json();
+            const arr: any[] = Array.isArray(data) ? data : data?.content || [];
+            const match = arr.find(s =>
+              s.slotDate === selectedDay.iso &&
+              normalizeTime(s.slotTime) === slot24 &&
+              (s.status || "").toUpperCase() !== "BOOKED"
+            );
+            if (match?.id) realTimeslotId = match.id;
+          }
         } catch { }
       }
       if (!realTimeslotId) {
@@ -1293,12 +1355,57 @@ export default function UserPage() {
           if (errMsg.includes("already exists") || errMsg.includes("409")) {
             const token = getToken();
             const res = await fetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant.id}?date=${selectedDay.iso}`, { headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
-            if (res.ok) { const data = await res.json(); const arr: any[] = Array.isArray(data) ? data : data?.content || []; const existing = arr.find(s => s.slotDate === selectedDay.iso && normalise24(s.slotTime) === slot24 && (s.status || "").toUpperCase() !== "BOOKED"); if (existing?.id) realTimeslotId = existing.id; }
+            if (res.ok) {
+              const data = await res.json();
+              const arr: any[] = Array.isArray(data) ? data : data?.content || [];
+              const existing = arr.find(s =>
+                s.slotDate === selectedDay.iso &&
+                normalizeTime(s.slotTime) === slot24 &&
+                (s.status || "").toUpperCase() !== "BOOKED"
+              );
+              if (existing?.id) realTimeslotId = existing.id;
+            }
             if (!realTimeslotId) { showToast("❌ This slot was just taken."); setConfirming(false); return; }
           } else { showToast("❌ Could not reserve this time slot."); setConfirming(false); return; }
         }
       }
       if (!realTimeslotId) { showToast("❌ Could not reserve slot."); setConfirming(false); return; }
+
+      // Final preflight check: verify the exact selected slot is still available on server.
+      try {
+        const latest = await apiFetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant.id}?date=${selectedDay.iso}`);
+        const arr: any[] = Array.isArray(latest) ? latest : latest?.content || [];
+        const exactSlot = arr.find((s: any) =>
+          Number(s?.id) === Number(realTimeslotId) ||
+          (
+            s?.slotDate === selectedDay.iso &&
+            (
+              normalizeTime(s?.slotTime) === slot24 ||
+              normalise24(s?.masterTimeSlot?.timeRange || s?.timeRange || "") === slot24
+            )
+          )
+        );
+        const exactStatus = (exactSlot?.status || "").toUpperCase();
+        if (!exactSlot || exactStatus === "BOOKED") {
+          showToast("⚠️ That slot is no longer available. Please choose another slot.");
+          setBookedSlotSet(prev => {
+            const next = new Set(prev);
+            next.add(slotKey);
+            return next;
+          });
+          setConflictBookedSet(prev => {
+            const next = new Set(prev);
+            next.add(slotKey);
+            saveConflictSlots(selectedConsultant.id, next);
+            return next;
+          });
+          setSelectedSlot(null);
+          setConfirming(false);
+          return;
+        }
+      } catch {
+        // Non-fatal: let booking call decide.
+      }
       const bookingPayload: any = {
         consultantId: selectedConsultant.id, timeSlotId: realTimeslotId, timeslotId: realTimeslotId, slotId: realTimeslotId,
         amount: selectedConsultant.fee, charges: selectedConsultant.fee, meetingMode,
@@ -1349,19 +1456,39 @@ export default function UserPage() {
         msg.includes("409") ||
         msg.includes("no longer available") ||
         msg.includes("slot is no longer available");
+      const conflictByMessage =
+        msg.includes("already booked") ||
+        msg.includes("no longer available") ||
+        msg.includes("slot is no longer available");
 
       if (looksLikeConflict) {
+        // If backend explicitly says slot is unavailable, trust that signal.
+        if (conflictByMessage) {
+          showToast("⚠️ That slot is no longer available. Please choose another slot.");
+          setBookedSlotSet(prev => {
+            const next = new Set(prev);
+            next.add(slotKey);
+            return next;
+          });
+          setConflictBookedSet(prev => {
+            const next = new Set(prev);
+            next.add(slotKey);
+            saveConflictSlots(selectedConsultant.id, next);
+            return next;
+          });
+          shouldClearSelection = true;
+        }
         try {
           const latest = await refreshSlotAvailability(selectedConsultant.id);
           const trulyBooked = latest.booked.has(slotKey);
-          if (trulyBooked) {
+          if (trulyBooked && !conflictByMessage) {
             showToast("⚠️ That slot is no longer available. Please choose another slot.");
             shouldClearSelection = true;
-          } else {
+          } else if (!trulyBooked && !conflictByMessage) {
             showToast("❌ Booking was not completed. Please try again.");
           }
         } catch {
-          showToast("❌ Booking was not completed. Please try again.");
+          if (!conflictByMessage) showToast("❌ Booking was not completed. Please try again.");
         }
       }
       else if (msg.includes("rollback")) showToast("❌ Booking was not completed. Please try again.");
@@ -1404,7 +1531,7 @@ export default function UserPage() {
     timeslotId?: number,
     isMasterGrid?: boolean
   ) => {
-    const isBooked = bookedSlotSet.has(`${dayIso}|${slotStart}`);
+    const isBooked = bookedSlotSet.has(`${dayIso}|${slotStart}`) || conflictBookedSet.has(`${dayIso}|${slotStart}`);
     const isAdvisorBlocked = !isBooked && unavailSlotSet.has(`${dayIso}|${slotStart}`);
     const isPast = !isBooked && !isAdvisorBlocked && isSlotPast(slotStart, dayIso);
     const isUnavail = isBooked || isAdvisorBlocked || isPast;
