@@ -18,12 +18,10 @@ import {
   assignTicketToConsultant,
   clientExportTicketsExcel,
   clientExportTicketsPdf,
-  createCannedResponse,
   createTicket,
   createTicketCategory,
   debugToken,
   deleteAdvisor,
-  deleteCannedResponse,
   deleteTicket,
   escalateTicket,
   exportSingleTicketExcel,
@@ -36,7 +34,6 @@ import {
   getAllTickets,
   getAutoResponder,
   getBusinessHours,
-  getCannedResponses,
   getHolidays,
   getSlaInfo,
   getTicketCategories,
@@ -44,11 +41,10 @@ import {
   postInternalNote,
   postTicketComment,
   SLA_HOURS,
-  ticketsToExportRows,
   toggleTicketCategory,
   updateAutoResponder,
   updateBusinessHours,
-  updateTicketStatus,
+  updateTicketStatus
 } from "../services/api";
 import styles from "../styles/AdminPage.module.css";
 import AnalyticsDashboard from "./AnalyticsDashboard";
@@ -1226,8 +1222,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
 
   return (
     <>
-      <EscalationMonitor tickets={tickets} slaHours={SLA_HOURS_LOCAL} />
-
+      <EscalationMonitor tickets={tickets.map(t => ({ ...t, title: t.title ?? "", consultantId: t.consultantId ?? undefined }))} slaHours={SLA_HOURS_LOCAL} />
       {selectedTicket && (
         <TicketDetailPanel
           ticket={selectedTicket}
@@ -1466,7 +1461,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     try {
       const raw = localStorage.getItem("fin_notif_prefs");
       if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch { }
     return {
       emailOnNewTicket: true,
       emailOnStatusChange: true,
@@ -1681,10 +1676,10 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
   );
 
   const TABS: { id: SettingsTab; label: string; icon: string; desc: string }[] = [
-    { id: "profile",       icon: "👤", label: "General Profile",  desc: "Update your name, email, organisation details and avatar" },
-    { id: "notifications", icon: "🔔", label: "Notifications",    desc: "Control which alerts you receive via email and in-app" },
-    { id: "security",      icon: "🔒", label: "Security",         desc: "Change your password and manage account security" },
-    { id: "logout",        icon: "🚪", label: "Logout",           desc: "Sign out of your admin account" },
+    { id: "profile", icon: "👤", label: "General Profile", desc: "Update your name, email, organisation details and avatar" },
+    { id: "notifications", icon: "🔔", label: "Notifications", desc: "Control which alerts you receive via email and in-app" },
+    { id: "security", icon: "🔒", label: "Security", desc: "Change your password and manage account security" },
+    { id: "logout", icon: "🚪", label: "Logout", desc: "Sign out of your admin account" },
   ];
 
   return (
@@ -1972,7 +1967,8 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                       <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                         Cancel
                       </button>
-                      <button onClick={() => setLogoutConfirm(true)} style={{ padding: "10px 20px", borderRadius: 10, border: "none", background: "#FEF2F2", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "1.5px solid #FECACA" } as any}>
+                      <button onClick={() => setLogoutConfirm(true)} // Remove the first `border: "none"`, keep only:
+                        style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer" } as any}>
                         🚪 Logout
                       </button>
                     </div>
@@ -2473,7 +2469,7 @@ const BusinessSettings: React.FC<{}> = () => {
 
   const saveAll = async () => {
     setSaving(true); let saved = 0, failed = 0;
-    try { await updateBusinessHours(hours.map(h => ({ dayOfWeek: DAY_TO_JAVA[h.day], startTime: h.start + ":00", endTime: h.end + ":00", workingDay: h.enabled }))); saved++; } catch { failed++; }
+    try { await updateBusinessHours(hours.map(h => ({ dayOfWeek: DAY_TO_JAVA[h.day], openTime: h.start + ":00", closeTime: h.end + ":00", isOpen: h.enabled }))); saved++; } catch { failed++; }
     try { await updateAutoResponder({ enabled: autoEnabled, message: autoMessage }); saved++; } catch { failed++; }
     setSaving(false);
     showToast(failed === 0 ? "Settings saved" : `${saved} saved, ${failed} failed`);
