@@ -1,30 +1,34 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// api.ts  —  Unified service layer (merged from both source files)
+// api.ts  —  Unified service layer
+// Aligned with backend: TicketController, TicketService, AdminConfigController
 // ─────────────────────────────────────────────────────────────────────────────
 
 import axios from "axios";
 
+// Keep as relative path — Vite proxy forwards:
+//   /api      → http://52.55.178.31:8081/api
+//   /uploads  → http://52.55.178.31:8081/uploads
 const BASE_URL = "/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOKEN / SESSION HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const TOKEN_KEY       = "fin_token";
-export const setToken        = (token: string) => localStorage.setItem(TOKEN_KEY, token);
-export const getToken        = ()              => localStorage.getItem(TOKEN_KEY) || "";
-export const clearToken      = () => {
+export const TOKEN_KEY = "fin_token";
+export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
+export const clearToken = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem("fin_role");
   localStorage.removeItem("fin_user_id");
   localStorage.removeItem("fin_consultant_id");
 };
-export const setRole         = (role: string) => localStorage.setItem("fin_role", role);
-export const getRole         = ()             => localStorage.getItem("fin_role");
-export const setUserId       = (id: number)   => localStorage.setItem("fin_user_id", String(id));
-export const getUserId       = ()             => localStorage.getItem("fin_user_id");
-export const setConsultantId = (id: number)   => localStorage.setItem("fin_consultant_id", String(id));
-export const getConsultantId = ()             => localStorage.getItem("fin_consultant_id");
+export const setRole = (role: string) => localStorage.setItem("fin_role", role);
+export const getRole = () => localStorage.getItem("fin_role");
+export const setUserId = (id: number) => localStorage.setItem("fin_user_id", String(id));
+export const getUserId = () => localStorage.getItem("fin_user_id");
+export const setConsultantId = (id: number) => localStorage.setItem("fin_consultant_id", String(id));
+export const getConsultantId = () => localStorage.getItem("fin_consultant_id");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEBUG: decode JWT payload
@@ -40,23 +44,29 @@ export const debugToken = () => {
   }
   const token = getToken();
   if (!token) {
-    console.error(`❌ No token found under key "${TOKEN_KEY}".`);
+    console.error(`❌ No token found under key "${TOKEN_KEY}". Cannot authenticate.`);
     console.groupEnd();
     return null;
   }
   try {
     const parts = token.split(".");
     if (parts.length !== 3) throw new Error("Not a valid JWT (expected 3 parts)");
-    const payload = JSON.parse(atob(parts[1]));
-    console.log("✅ Token payload:", payload);
-    const exp = payload.exp ? new Date(payload.exp * 1000) : null;
+    const jwtPayload = JSON.parse(atob(parts[1]));
+    console.log("✅ Token payload:", jwtPayload);
+    console.log("   Roles/Authorities:", {
+      role: jwtPayload.role,
+      roles: jwtPayload.roles,
+      authorities: jwtPayload.authorities,
+      scope: jwtPayload.scope,
+    });
+    const exp = jwtPayload.exp ? new Date(jwtPayload.exp * 1000) : null;
     if (exp) {
       const expired = exp < new Date();
       console.log(`   Expires: ${exp.toLocaleString()} — ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
       if (expired) console.error("   ⚠️  Token is expired — log in again!");
     }
     console.groupEnd();
-    return payload;
+    return jwtPayload;
   } catch (e) {
     console.error("❌ Failed to decode token:", e);
     console.groupEnd();
@@ -73,9 +83,14 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// Attach token to every axios request automatically
 api.interceptors.request.use((config) => {
   const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  } else {
+    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+  }
   return config;
 });
 
@@ -83,7 +98,11 @@ api.interceptors.request.use((config) => {
 // CORE FETCH WRAPPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Authenticated fetch — attaches Bearer token, handles 403 debug output */
+/**
+ * Authenticated fetch — attaches Bearer token, handles 403 debug output.
+ * Does NOT set Content-Type when body is FormData — lets the browser
+ * add the multipart boundary automatically (prevents corruption).
+ */
 export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const defaultHeaders: Record<string, string> = { Accept: "application/json" };
@@ -93,7 +112,11 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 
   const token = getToken();
-  if (token) defaultHeaders["Authorization"] = `Bearer ${token}`;
+  if (token) {
+    defaultHeaders["Authorization"] = `Bearer ${token}`;
+  } else {
+    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+  }
 
   try {
     const res = await fetch(url, {
@@ -102,19 +125,25 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
     });
 
     const contentType = res.headers.get("content-type");
-    const data: any   = contentType?.includes("application/json")
+    const data: any = contentType?.includes("application/json")
       ? await res.json()
       : { message: await res.text() };
 
     if (!res.ok) {
       if (res.status === 403) {
         console.error(`🚫 403 Forbidden on ${options.method || "GET"} ${endpoint}`);
+        console.error("   Response body:", data);
+        console.error("   Calling debugToken() to help diagnose…");
         debugToken();
+      } else if (res.status === 404) {
+        // 404s are expected (e.g. consultant/user not found) — warn only, no stack noise
+        console.warn(`⚠️ 404 Not Found: ${endpoint}`);
       }
       throw new Error(data?.message || `Request failed with status ${res.status}`);
     }
     return data;
   } catch (err: any) {
+    console.error("API Fetch Error:", err);
     if (err.name === "TypeError" && err.message === "Failed to fetch") {
       throw new Error("Cannot connect to server. Please check if the backend is running.");
     }
@@ -122,7 +151,10 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 };
 
-/** Public fetch — no auth token; used for login, register, OTP, forgot/reset password */
+/**
+ * Public fetch — no auth token.
+ * Used for login, register, OTP, forgot/reset password endpoints.
+ */
 const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const res = await fetch(url, {
@@ -133,29 +165,33 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
       ...((options.headers as Record<string, string>) || {}),
     },
   });
-  const ct   = res.headers.get("content-type");
+  const ct = res.headers.get("content-type");
   const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
   if (!res.ok) {
     const fieldErrors = (data?.fieldErrors as Record<string, string> | undefined)
       ? Object.entries(data.fieldErrors as Record<string, string>)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(", ")
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")
       : null;
     throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
   }
   return data;
 };
 
-/** Extracts an array from any API response shape */
+/**
+ * Extracts an array from any backend response shape.
+ * Handles: plain array, { content }, { data }, { tickets }, { bookings }, { items }, { results }
+ * Falls back to scanning all keys for the first non-empty array.
+ */
 export const extractArray = (data: any): any[] => {
   if (!data) return [];
-  if (Array.isArray(data))             return data;
-  if (Array.isArray(data.content))     return data.content;
-  if (Array.isArray(data.data))        return data.data;
-  if (Array.isArray(data.tickets))     return data.tickets;
-  if (Array.isArray(data.bookings))    return data.bookings;
-  if (Array.isArray(data.items))       return data.items;
-  if (Array.isArray(data.results))     return data.results;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.content)) return data.content;
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.tickets)) return data.tickets;
+  if (Array.isArray(data.bookings)) return data.bookings;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.results)) return data.results;
   for (const key of Object.keys(data)) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
@@ -172,10 +208,10 @@ export const loginUser = async (identifier: string, password: string) => {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
   });
-  if (data?.token)        setToken(data.token);
-  if (data?.role)         setRole(data.role);
-  if (data?.id)           setUserId(Number(data.id));
-  if (data?.userId)       setUserId(Number(data.userId));
+  if (data?.token) setToken(data.token);
+  if (data?.role) setRole(data.role);
+  if (data?.id) setUserId(Number(data.id));
+  if (data?.userId) setUserId(Number(data.userId));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   debugToken();
   return data;
@@ -186,9 +222,9 @@ export const registerUser = async (payload: any) => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (data?.token)        setToken(data.token);
-  if (data?.role)         setRole(data.role);
-  if (data?.id)           setUserId(Number(data.id));
+  if (data?.token) setToken(data.token);
+  if (data?.role) setRole(data.role);
+  if (data?.id) setUserId(Number(data.id));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   return data;
 };
@@ -232,12 +268,12 @@ export const changePassword = async (payload: any) =>
 // USER MANAGEMENT
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getAllUsers    = async ()             => apiFetch("/users");
+export const getAllUsers = async () => apiFetch("/users");
 export const getUsersByRole = async (role: string) => apiFetch(`/users/role/${role}`);
 
-export const getAgentList = async (): Promise<string[]> => {
+export const getConsultantUserList = async (): Promise<string[]> => {
   try {
-    const data = await apiFetch("/users/role/AGENT");
+    const data = await apiFetch("/users/role/CONSULTANT");
     return (Array.isArray(data) ? data : []).map((u: any) => u.name || u.username || u.email);
   } catch {
     return [];
@@ -251,69 +287,105 @@ export const deleteUser = async (id: number) =>
   apiFetch(`/users/${id}`, { method: "DELETE" });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSULTANTS / ADVISORS
+// CONSULTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getConsultants   = async () => apiFetch("/consultants");
-export const getAllConsultants = getConsultants;
-export const getAdvisors      = getConsultants;
-export const getAllAdvisors    = getConsultants;
+export const getConsultants = async () => apiFetch("/consultants");
 
-export const getConsultantById = async (consultantId: number) =>
-  apiFetch(`/consultants/${consultantId}`);
-export const getAdvisorById = getConsultantById;
-export const getMyProfile   = getConsultantById;
+export const getConsultantById = async (consultantId: number) => {
+  try {
+    const data = await apiFetch(`/consultants/${consultantId}`);
+    if (data) return data;
+  } catch {
+    // 404 or any error — fall through to users endpoint
+  }
+  try {
+    return await apiFetch(`/users/${consultantId}`);
+  } catch {
+    return null; // genuinely not found — always return null, never throw
+  }
+};
 
+export const getMyProfile = getConsultantById;
+
+// POST /consultants — multipart/form-data
 export const createConsultant = async (payload: any) => {
-  const formData    = new FormData();
+  const formData = new FormData();
   const dataPayload = { ...payload };
-  let   file: File | null = null;
+  let file: File | null = null;
 
   if (dataPayload.file) { file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
+  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
   return apiFetch("/consultants", { method: "POST", body: formData });
 };
-export const createAdvisor = createConsultant;
 
+// PUT /consultants/:id — multipart/form-data
 export const updateConsultant = async (
   consultantId: number,
   data: {
     name?: string; designation?: string; charges?: number; email?: string;
     skills?: string[]; shiftStartTime?: string | null; shiftEndTime?: string | null;
-    description?: string; rating?: number | null; [key: string]: any;
+    description?: string; rating?: number | null;[key: string]: any;
   },
   explicitFile?: File | null
 ): Promise<any> => {
-  const formData    = new FormData();
+  const formData = new FormData();
   const dataPayload = { ...data };
-  let   file: File | null = explicitFile || null;
+  let file: File | null = explicitFile || null;
 
   if (dataPayload.file) { if (!file) file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
+  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
   return apiFetch(`/consultants/${consultantId}`, { method: "PUT", body: formData });
 };
-export const updateAdvisor = updateConsultant;
 
 export const deleteConsultant = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}`, { method: "DELETE" });
+
+/**
+ * Convenience helper: resolve a display name for a consultant/user ID.
+ * Tries /consultants/:id then /users/:id, never throws.
+ */
+export const resolveConsultantName = async (id: number): Promise<string> => {
+  try {
+    const d = await getConsultantById(id);
+    return d?.name || d?.fullName || d?.username || `Consultant #${id}`;
+  } catch {
+    return `Consultant #${id}`;
+  }
+};
+export const getAllConsultants = getConsultants;
+export const getAllAdvisors = getConsultants;
+export const getAdvisorById = getConsultantById;
+export const createAdvisor = createConsultant;
+export const updateAdvisor = updateConsultant;
 export const deleteAdvisor = deleteConsultant;
+/** @deprecated Use getConsultantUserList instead */
+export const getAgentList = async (): Promise<string[]> => {
+  try {
+    const data = await apiFetch("/users/role/CONSULTANT");
+    return (Array.isArray(data) ? data : []).map((u: any) => u.name || u.username || u.email);
+  } catch {
+    return [];
+  }
+};
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ONBOARDING
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getOnboarding    = async (id: number)                  => apiFetch(`/onboarding/${id}`);
+export const getOnboarding = async (id: number) => apiFetch(`/onboarding/${id}`);
 export const updateOnboarding = async (id: number, payload: object) =>
   apiFetch(`/onboarding/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-export const deleteOnboarding = async (id: number)                  =>
+export const deleteOnboarding = async (id: number) =>
   apiFetch(`/onboarding/${id}`, { method: "DELETE" });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,11 +396,10 @@ export const getTimeslotById = async (id: number) => apiFetch(`/timeslots/${id}`
 
 export const getTimeslotsByConsultant = async (consultantId: number) => {
   const data = await apiFetch(`/timeslots/consultant/${consultantId}`);
-  if (Array.isArray(data))   return data;
-  if (data?.content)         return data.content;
+  if (Array.isArray(data)) return data;
+  if (data?.content) return data.content;
   return [];
 };
-export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 
 export const getAvailableTimeslotsByConsultant = async (consultantId: number) => {
   try {
@@ -338,7 +409,6 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
     return getTimeslotsByConsultant(consultantId);
   }
 };
-export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 
 export const createTimeslot = async (payload: {
   consultantId: number; slotDate: string; slotTime: string;
@@ -352,67 +422,111 @@ export const deleteTimeslot = async (id: number) =>
   apiFetch(`/timeslots/${id}`, { method: "DELETE" });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MASTER TIMESLOTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getConsultantMasterSlots = async (consultantId: number) =>
+  apiFetch(`/consultants/${consultantId}/master-timeslots`);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BOOKINGS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const createBooking = async (payload: {
   consultantId: number; timeSlotId: number; amount: number;
   userNotes?: string; meetingMode?: string; bookingDate?: string;
-  slotDate?: string; masterTimeslotId?: number; slotTime?: string; timeRange?: string;
-}) => apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
+  slotDate?: string; masterTimeSlotId?: number; slotTime?: string; timeRange?: string;
+  userId?: number;
+}) => {
+  // Pre-validate consultant exists before hitting /bookings
+  // This prevents the 500 "Transaction silently rolled back" error
+  try {
+    const check = await apiFetch(`/consultants/${payload.consultantId}`);
+    if (!check?.id) throw new Error("Consultant not found");
+  } catch (e: any) {
+    throw new Error(`Consultant #${payload.consultantId} is no longer available. Please choose another advisor.`);
+  }
+
+  return apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
+};
 
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
 export const getAllBookings = async (): Promise<any[]> => {
-  const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
+  // ── FIX: removed "/bookings/admin" — the backend has no such route.
+  // Spring resolves /bookings/{id} and tries to parse "admin" as a Long → 500.
+  // Only "/bookings" (admin-scoped by JWT role) is a valid direct endpoint.
+  const directEndpoints = [
+    "/bookings",
+  ];
+
   for (const endpoint of directEndpoints) {
     try {
-      const response  = await api.get(endpoint);
-      const extracted = extractArray(response.data);
+      const data = await apiFetch(endpoint);
+      const extracted = extractArray(data);
+      console.log(`📋 getAllBookings: ${endpoint} → ${extracted.length} records`);
       if (extracted.length > 0) return extracted;
-      if (endpoint === "/bookings") return [];
-    } catch {
-      console.warn(`⚠️ ${endpoint} failed, trying next…`);
+    } catch (e: any) {
+      console.warn(`⚠️ getAllBookings: ${endpoint} failed (${e?.message})`);
     }
   }
+
+  // ── Phase 2: aggregate per-consultant ──
+  console.warn("getAllBookings: direct endpoints returned 0 — trying per-consultant fallback");
   try {
-    const consultantsData = await api.get("/consultants");
-    const consultants: any[] = extractArray(consultantsData.data);
-    if (consultants.length === 0) return [];
+    let consultants: any[] = [];
+    try {
+      const d = await apiFetch("/consultants");
+      consultants = extractArray(d);
+      console.log(`getAllBookings: got ${consultants.length} consultants from /consultants`);
+    } catch { /* non-fatal */ }
+
+    if (consultants.length === 0) {
+      console.warn("getAllBookings: no consultants found — cannot aggregate");
+      return [];
+    }
+
     const results = await Promise.allSettled(
       consultants.map((c: any) =>
-        api.get(`/bookings/consultant/${c.id}`)
-           .then(r => extractArray(r.data))
-           .catch(() => [] as any[])
+        apiFetch(`/bookings/consultant/${c.id}`)
+          .then(r => extractArray(r))
+          .catch(() => [] as any[])
       )
     );
-    const allBookings: any[] = results.flatMap(r =>
-      r.status === "fulfilled" ? r.value : []
-    );
+    const all: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
     const seen = new Set<number>();
-    return allBookings.filter(b => {
-      if (seen.has(b.id)) return false;
-      seen.add(b.id);
-      return true;
-    });
-  } catch (err) {
-    console.error("❌ Fallback aggregation failed:", err);
+    const deduped = all.filter(b => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
+    console.log(`✅ getAllBookings fallback: ${deduped.length} bookings across ${consultants.length} consultants`);
+    return deduped;
+  } catch (err: any) {
+    console.error("❌ getAllBookings fallback failed:", err?.message);
+    return [];
   }
-  return [];
 };
 
 export const getMyBookings = async (): Promise<any[]> => {
   try {
-    const response = await api.get("/bookings/me");
-    return extractArray(response.data);
+    try {
+      const response = await api.get("/bookings/me");
+      return extractArray(response.data);
+    } catch {
+      const data = await apiFetch("/bookings/me");
+      return extractArray(data);
+    }
   } catch (err: any) {
     console.error("getMyBookings error:", err?.message);
     return [];
   }
 };
 
-export const getBookingsByConsultant = async (consultantId: number) =>
-  apiFetch(`/bookings/consultant/${consultantId}`);
+export const getBookingsByConsultant = async (consultantId: number): Promise<any[]> => {
+  const data = await apiFetch(`/bookings/consultant/${consultantId}`);
+  return extractArray(data);
+};
+
+// ── Timeslot / booking aliases ──
+export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
+export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 export const getBookingsByAdvisor = getBookingsByConsultant;
 
 export const updateBooking = async (id: number, payload: any) =>
@@ -420,13 +534,6 @@ export const updateBooking = async (id: number, payload: any) =>
 
 export const deleteBooking = async (id: number) =>
   apiFetch(`/bookings/${id}`, { method: "DELETE" });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MASTER TIMESLOTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const getConsultantMasterSlots = async (consultantId: number) =>
-  apiFetch(`/consultants/${consultantId}/master-timeslots`);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SKILLS / CATEGORIES
@@ -438,13 +545,9 @@ export const getAllSkills = async () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKETS  — matches TicketController exactly
+// TICKETS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/tickets  (multipart — ticketData JSON part + optional file)
- * Matches Spring Boot TicketController exactly.
- */
 export const createTicket = async (
   payload: {
     userId: number;
@@ -456,14 +559,41 @@ export const createTicket = async (
   },
   file?: File | null
 ): Promise<any> => {
+  const role = (getRole() || "").toUpperCase().replace(/^ROLE_/, "");
+  if (
+    role !== "SUBSCRIBER" &&
+    role !== "SUBSCRIBED" &&
+    role !== "ADMIN" &&
+    role !== "CONSULTANT"
+  ) {
+    throw new Error(
+      "SUBSCRIBER_ONLY: Only subscribed users can raise support tickets. Please upgrade your plan to get access."
+    );
+  }
+
+  const ticketPayload: Record<string, any> = {
+    userId: payload.userId,
+    category: payload.category,
+    description: payload.description,
+  };
+  if (payload.consultantId != null) ticketPayload.consultantId = payload.consultantId;
+  if (payload.attachmentUrl) ticketPayload.attachmentUrl = payload.attachmentUrl;
+  if (payload.priority) ticketPayload.priority = payload.priority;
+
   const token = getToken();
-  const form  = new FormData();
-  form.append("ticketData", JSON.stringify(payload));
+  const form = new FormData();
+  const blob = new Blob([JSON.stringify(ticketPayload)], { type: "application/json" });
+
+  form.append("ticketData", blob);
+  form.append("data", blob);
   if (file) form.append("file", file);
+
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}/tickets`, {
     method: "POST",
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers,
     body: form,
   });
   const data = await res.json().catch(() => ({}));
@@ -471,130 +601,160 @@ export const createTicket = async (
   return data;
 };
 
-/** GET /api/tickets */
 export const getAllTickets = async (): Promise<any[]> => {
-  const data = await apiFetch("/tickets");
-  return extractArray(data);
+  try {
+    const data = await apiFetch("/tickets");
+    const arr = extractArray(data);
+    if (arr.length === 0) {
+      console.warn("⚠️ [getAllTickets] /api/tickets returned empty array.");
+      debugToken();
+    } else {
+      console.log(`✅ [getAllTickets] Loaded ${arr.length} tickets`);
+    }
+    return arr;
+  } catch (err) {
+    console.error("❌ [getAllTickets] error:", err);
+    debugToken();
+    return [];
+  }
 };
 
-/** GET /api/tickets/:id */
 export const getTicketById = async (id: number) => apiFetch(`/tickets/${id}`);
 
-/** GET /api/tickets/user/:userId */
-export const getTicketsByUser = (userId: number): Promise<any[]> =>
-  apiFetch(`/tickets/user/${userId}`).then(extractArray);
+export const getTicketsByUser = async (userId: number): Promise<any[]> => {
+  try {
+    const data = await apiFetch(`/tickets/user/${userId}`);
+    const arr = extractArray(data);
+    console.log(`✅ getTicketsByUser(${userId}) → ${arr.length} tickets`);
+    return arr;
+  } catch (err: any) {
+    console.error(`❌ getTicketsByUser(${userId}) failed:`, err?.message);
+    return [];
+  }
+};
 
-/** GET /api/tickets/consultant/:consultantId */
-export const getTicketsByConsultant = (consultantId: number): Promise<any[]> =>
-  apiFetch(`/tickets/consultant/${consultantId}`).then(extractArray);
+export const getTicketsByConsultant = async (consultantId: number): Promise<any[]> => {
+  try {
+    const data = await apiFetch(`/tickets/consultant/${consultantId}`);
+    const arr = extractArray(data);
+    console.log(`✅ getTicketsByConsultant(${consultantId}) → ${arr.length} tickets`);
+    return arr;
+  } catch (err: any) {
+    console.error(`❌ getTicketsByConsultant(${consultantId}) failed:`, err?.message);
+    return [];
+  }
+};
 
-/** PATCH /api/tickets/:id/status — body: { status: "OPEN" } */
-export const updateTicketStatus  = (id: number, status: string) =>
+export const updateTicketStatus = async (id: number, status: string) =>
   apiFetch(`/tickets/${id}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
-/** Alias for updateTicketStatus */
 export const patchTicketStatus = updateTicketStatus;
 
-/**
- * PUT /api/tickets/:id/assign — body: { consultantId: 5 }
- * Reassigns to a consultant by numeric ID (matches TicketController).
- */
-export const reassignTicket = (id: number, consultantId: number) =>
-  apiFetch(`/tickets/${id}/assign`, {
+export const assignTicketToConsultant = async (ticketId: number, consultantId: number) =>
+  apiFetch(`/tickets/${ticketId}/assign`, {
     method: "PUT",
     body: JSON.stringify({ consultantId }),
   });
+export const reassignTicket = assignTicketToConsultant;
 
-/** PATCH /api/tickets/:id — generic partial update */
+export const escalateTicket = async (ticketId: number, reason: string): Promise<any> =>
+  apiFetch(`/tickets/${ticketId}/escalate`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+
 export const updateTicket = async (id: number, payload: any) =>
   apiFetch(`/tickets/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
 
-/** DELETE /api/tickets/:id */
 export const deleteTicket = async (id: number) =>
   apiFetch(`/tickets/${id}`, { method: "DELETE" });
 
-/** Alias — close a ticket by setting status to CLOSED */
 export const closeTicket = (id: number) => updateTicketStatus(id, "CLOSED");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TICKET COMMENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /api/tickets/:ticketId/comments */
 export const getTicketComments = async (ticketId: number): Promise<any[]> => {
   const data = await apiFetch(`/tickets/${ticketId}/comments`);
   return extractArray(data);
 };
 
-/**
- * POST /api/tickets/comments
- * Used for both public replies and internal notes.
- *  - isConsultantReply = true  → agent/admin reply visible to user
- *  - isInternal        = true  → private agent note, never shown to user
- */
-export const postTicketComment = (
+export const postTicketComment = async (
   ticketId: number,
   message: string,
-  senderId: number,
-  isConsultantReply = false,
-  isInternal = false
-) =>
-  apiFetch("/tickets/comments", {
-    method: "POST",
-    body: JSON.stringify({ ticketId, message, senderId, isConsultantReply, isInternal }),
-  });
+  senderIdOrOptions?: number | {
+    senderId?: number | null;
+    isConsultantReply?: boolean;
+  } | null,
+  isConsultantReply = false
+): Promise<any> => {
+  let senderId: number | null = null;
+  let consultantReply = isConsultantReply;
 
-/**
- * POST /api/tickets/:id/notes — private agent note, never shown to user.
- * Falls back to postTicketComment with isInternal flag if dedicated endpoint is absent.
- */
+  if (typeof senderIdOrOptions === "number") {
+    senderId = senderIdOrOptions;
+  } else if (senderIdOrOptions && typeof senderIdOrOptions === "object") {
+    senderId = senderIdOrOptions.senderId ?? null;
+    consultantReply = senderIdOrOptions.isConsultantReply ?? false;
+  }
+
+  if (senderId === null) {
+    const stored = localStorage.getItem("fin_user_id");
+    if (stored) senderId = Number(stored);
+  }
+
+  return apiFetch("/tickets/comments", {
+    method: "POST",
+    body: JSON.stringify({
+      ticketId,
+      message,
+      senderId,
+      isConsultantReply: consultantReply,
+    }),
+  });
+};
+
 export const postInternalNote = async (
   ticketId: number,
   noteText: string,
   authorId: number
-) => {
-  try {
-    return await apiFetch(`/tickets/${ticketId}/notes`, {
-      method: "POST",
-      body: JSON.stringify({ authorId, noteText }),
-    });
-  } catch {
-    // Fallback: route through comments with isInternal flag
-    return postTicketComment(ticketId, noteText, authorId, false, true);
-  }
-};
+): Promise<any> =>
+  apiFetch(`/tickets/${ticketId}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ authorId, noteText }),
+  });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TICKET FEEDBACK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * POST /api/tickets/:id  (or /api/tickets/:id/feedback)
- * Submitted after ticket is resolved.
- */
 export const submitTicketFeedback = async (
   ticketId: number,
-  feedbackRating: number,
+  rating: number,
   feedbackText: string
-) => {
-  try {
-    return await apiFetch(`/tickets/${ticketId}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ rating: feedbackRating, feedbackText }),
-    });
-  } catch {
-    // Fallback: POST directly on ticket (original TicketController path)
-    return apiFetch(`/tickets/${ticketId}`, {
-      method: "POST",
-      body: JSON.stringify({ feedbackRating, feedbackText }),
-    });
-  }
-};
+): Promise<any> =>
+  apiFetch(`/tickets/${ticketId}`, {
+    method: "POST",
+    body: JSON.stringify({ feedbackRating: rating, feedbackText }),
+  });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLA HELPERS  (mirrors backend Priority.slaHours() logic)
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getMyUnreadNotifications = async () => {
+  const data = await apiFetch("/notifications");
+  return extractArray(data);
+};
+
+export const markNotificationAsRead = async (id: number) =>
+  apiFetch(`/notifications/${id}/read`, { method: "PUT" });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLA HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const SLA_HOURS: Record<string, number> = {
@@ -603,12 +763,12 @@ export const SLA_HOURS: Record<string, number> = {
 
 export const getSlaInfo = (ticket: any) => {
   if (!ticket?.createdAt) return null;
-  const created  = new Date(ticket.createdAt);
-  const hours    = SLA_HOURS[ticket.priority] ?? 24;
+  const created = new Date(ticket.createdAt);
+  const hours = SLA_HOURS[ticket.priority] ?? 24;
   const deadline = new Date(created.getTime() + hours * 3_600_000);
   const minsLeft = Math.round((deadline.getTime() - Date.now()) / 60_000);
   const breached = ticket.isSlaBreached || minsLeft <= 0;
-  const warning  = !breached && minsLeft < 120;
+  const warning = !breached && minsLeft < 120;
 
   return {
     deadline,
@@ -618,8 +778,8 @@ export const getSlaInfo = (ticket: any) => {
     label: breached
       ? `Overdue by ${Math.abs(minsLeft)} min`
       : minsLeft < 60
-      ? `${minsLeft} min remaining`
-      : `${Math.round(minsLeft / 60)}h remaining`,
+        ? `${minsLeft} min remaining`
+        : `${Math.round(minsLeft / 60)}h remaining`,
     deadlineStr: deadline.toLocaleString("en-IN", {
       day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
     }),
@@ -627,53 +787,309 @@ export const getSlaInfo = (ticket: any) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATUS / PRIORITY STYLES  (shared across all pages)
+// STATUS / PRIORITY STYLES
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getStatusStyle = (status: string) => {
-  const s = status?.toUpperCase();
+  const s = (status ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string }> = {
-    NEW:         { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
-    OPEN:        { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
+    NEW: { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
+    OPEN: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
     IN_PROGRESS: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
-    RESOLVED:    { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
-    CLOSED:      { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
-    ESCALATED:   { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
+    RESOLVED: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
+    CLOSED: { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
+    ESCALATED: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
+    PENDING: { bg: "#FAF5FF", color: "#7C3AED", border: "#C4B5FD" },
   };
   return map[s] ?? { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" };
 };
 
 export const getPriorityStyle = (priority: string) => {
-  const p = priority?.toUpperCase();
+  const p = (priority ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string; dot: string }> = {
-    LOW:    { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
+    LOW: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
     MEDIUM: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D", dot: "#F59E0B" },
-    HIGH:   { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
+    HIGH: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
     URGENT: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5", dot: "#EF4444" },
+    CRITICAL: { bg: "#4A0404", color: "#FCA5A5", border: "#7F1D1D", dot: "#DC2626" },
   };
   return map[p] ?? map.MEDIUM;
 };
 
-export default api;
-
 // ─────────────────────────────────────────────────────────────────────────────
-// FEEDBACKS  (session / booking ratings)
+// DASHBOARD
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** GET /api/feedbacks/booking/:bookingId — fetch existing feedback for a booking */
+export const getDashboardSummaries = async (period: "DAILY" | "WEEKLY" = "WEEKLY") =>
+  apiFetch(`/dashboard/summaries?period=${period}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FEEDBACKS
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const getFeedbackByBooking = async (bookingId: number) =>
   apiFetch(`/feedbacks/booking/${bookingId}`);
 
-/** POST /api/feedbacks — submit new session feedback */
 export const createFeedback = async (payload: {
   userId: number; consultantId: number;
   bookingId: number; meetingId?: number;
   rating: number; comments?: string;
 }) => apiFetch("/feedbacks", { method: "POST", body: JSON.stringify(payload) });
 
-/** PUT /api/feedbacks/:id — update existing session feedback */
 export const updateFeedback = async (id: number, payload: {
   userId: number; consultantId: number;
   bookingId: number; meetingId?: number;
   rating: number; comments?: string;
 }) => apiFetch(`/feedbacks/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN CONFIG — Canned Responses & Ticket Categories
+// Base: AdminConfigController @RequestMapping("/api/admin/config")
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getCannedResponses = async (category?: string): Promise<any[]> => {
+  const query = category ? `?category=${encodeURIComponent(category)}` : "";
+  const data = await apiFetch(`/admin/config/canned-responses${query}`);
+  return extractArray(data);
+};
+
+export const createCannedResponse = async (payload: {
+  title: string;
+  content: string;
+  category?: string;
+}): Promise<any> =>
+  apiFetch("/admin/config/canned-responses", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const deleteCannedResponse = async (id: number): Promise<void> => {
+  await apiFetch(`/admin/config/canned-responses/${id}`, { method: "DELETE" });
+};
+
+export const getTicketCategories = async (): Promise<any[]> => {
+  const data = await apiFetch("/admin/config/categories");
+  return extractArray(data);
+};
+
+export const createTicketCategory = async (payload: {
+  name: string;
+  description?: string;
+}): Promise<any> =>
+  apiFetch("/admin/config/categories", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const toggleTicketCategory = async (id: number): Promise<any> =>
+  apiFetch(`/admin/config/categories/${id}/toggle`, { method: "PATCH" });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN — Ticket Analytics & SLA
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getResolutionAnalytics = async (
+  period: "DAILY" | "WEEKLY" | "MONTHLY" = "WEEKLY"
+): Promise<Record<string, any>> =>
+  apiFetch(`/admin/config/analytics?period=${period}`);
+
+export const getSlaBreachedTickets = async (): Promise<any[]> => {
+  try {
+    const data = await apiFetch("/admin/config/sla-breached");
+    return extractArray(data);
+  } catch (err: any) {
+    console.error("❌ getSlaBreachedTickets failed:", err?.message);
+    return [];
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface BookingNotificationRequest {
+  bookingId: number;
+  userEmail: string;
+  consultantEmail: string;
+  meetingMode: string;
+  amount: number;
+  meetingLink?: string;
+}
+
+export const sendBookingConfirmationEmails = async (
+  payload: BookingNotificationRequest
+): Promise<void> => {
+  try {
+    const token = getToken();
+    const res = await fetch("/api/notifications/booking-confirmation", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "text/plain, application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      console.warn(`⚠️ Booking email returned ${res.status}: ${text}`);
+      return;
+    }
+
+    console.log(`✅ Booking emails dispatched for #${payload.bookingId}: ${text}`);
+  } catch (err: any) {
+    console.warn("⚠️ Booking confirmation email failed (non-fatal):", err?.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SYSTEM SETTINGS — Business Hours, Holidays, Auto-Responder
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface BusinessHoursRequest {
+  dayOfWeek: string;
+  startTime: string;
+  endTime: string;
+  workingDay: boolean;
+}
+
+export interface BusinessHoursResponse {
+  id: number;
+  dayOfWeek: string;
+  // NOTE: Spring returns LocalTime as {hour, minute, second, nano} by default.
+  // Use parseLocalTime() in AdminPage.tsx to safely convert to "HH:mm" string.
+  startTime: string | { hour: number; minute: number; second?: number; nano?: number };
+  endTime: string | { hour: number; minute: number; second?: number; nano?: number };
+  isWorkingDay: boolean;
+}
+
+export interface HolidayRequest {
+  name: string;
+  holidayDate: string;
+}
+
+export interface HolidayResponse {
+  id: number;
+  name: string;
+  holidayDate: string;
+}
+
+export interface AutoResponderDto {
+  enabled: boolean;
+  message: string;
+}
+
+/** GET /api/admin/settings/business-hours */
+export const getBusinessHours = async (): Promise<BusinessHoursResponse[]> => {
+  const data = await apiFetch("/admin/settings/business-hours");
+  return extractArray(data);
+};
+
+/**
+ * FIX 2 (409 Conflict): Records already exist in the DB — POST creates duplicates.
+ * Strategy:
+ *   1. GET existing rows to obtain their IDs (keyed by dayOfWeek).
+ *   2. For rows that already exist → PUT /admin/settings/business-hours/{id}
+ *   3. For rows that are new (shouldn't happen after first run) → POST
+ * Falls back to PUT on the collection if per-row PUT also fails.
+ *
+ * NOTE: startTime / endTime come back from the backend as LocalTime objects
+ * {hour, minute, second, nano}. We always send plain "HH:mm:ss" strings
+ * (Spring's LocalTime deserializer accepts both).
+ */
+export const updateBusinessHours = async (
+  payload: BusinessHoursRequest[]
+): Promise<BusinessHoursResponse[]> => {
+  // Step 1 — load existing rows to get their IDs
+  let existingById: Record<string, number> = {};
+  try {
+    const existing = await apiFetch("/admin/settings/business-hours");
+    extractArray(existing).forEach((r: any) => {
+      if (r.dayOfWeek && r.id) existingById[r.dayOfWeek] = r.id;
+    });
+  } catch { /* non-fatal — proceed without IDs */ }
+
+  // Step 2 — update or create each day
+  const results = await Promise.allSettled(
+    payload.map(async (row) => {
+      const existingId = existingById[row.dayOfWeek];
+      if (existingId) {
+        // Record exists → update it by ID
+        return apiFetch(`/admin/settings/business-hours/${existingId}`, {
+          method: "PUT",
+          body: JSON.stringify(row),
+        });
+      } else {
+        // No existing record → try to create
+        return apiFetch("/admin/settings/business-hours", {
+          method: "POST",
+          body: JSON.stringify(row),
+        });
+      }
+    })
+  );
+
+  const saved = results
+    .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
+    .map(r => r.value);
+
+  const failed = results.filter(r => r.status === "rejected");
+  if (failed.length > 0) {
+    console.warn(`⚠️ updateBusinessHours: ${failed.length}/${payload.length} rows failed`);
+  }
+
+  return saved;
+};
+
+/** GET /api/admin/settings/holidays */
+export const getHolidays = async (): Promise<HolidayResponse[]> => {
+  const data = await apiFetch("/admin/settings/holidays");
+  return extractArray(data);
+};
+
+/** POST /api/admin/settings/holidays */
+export const addHoliday = async (payload: HolidayRequest): Promise<HolidayResponse> =>
+  apiFetch("/admin/settings/holidays", { method: "POST", body: JSON.stringify(payload) });
+
+/** DELETE /api/admin/settings/holidays/:id */
+export const deleteHoliday = async (id: number): Promise<void> => {
+  await apiFetch(`/admin/settings/holidays/${id}`, { method: "DELETE" });
+};
+
+/** GET /api/admin/settings/auto-responder */
+export const getAutoResponder = async (): Promise<AutoResponderDto> =>
+  apiFetch("/admin/settings/auto-responder");
+
+/**
+ * FIX 2 (409 Conflict): Auto-responder record already exists.
+ * Strategy:
+ *   1. GET /admin/settings/auto-responder to check if a record with an ID exists.
+ *   2. If it has an id field → PUT /admin/settings/auto-responder/{id}
+ *   3. If no id → fall back to POST (first-time creation).
+ */
+export const updateAutoResponder = async (payload: AutoResponderDto): Promise<AutoResponderDto> => {
+  // Step 1 — try to find existing record's ID
+  let existingId: number | null = null;
+  try {
+    const existing = await apiFetch("/admin/settings/auto-responder");
+    if (existing?.id) existingId = Number(existing.id);
+  } catch { /* non-fatal */ }
+
+  if (existingId) {
+    // Record exists → update by ID
+    return apiFetch(`/admin/settings/auto-responder/${existingId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // No existing record → create
+  return apiFetch("/admin/settings/auto-responder", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+};
+
+export default api;

@@ -44,33 +44,33 @@ const prettifyName = (raw: string): string => {
 
 const extractUserName = (b: any): string => {
   const raw =
-    b.user?.name       || b.user?.fullName    || b.user?.username   ||
-    b.client?.name     || b.bookedBy?.name    || b.customer?.name   ||
-    b.userName         || b.clientName        || b.userFullName      ||
-    b.bookedByName     || b.user?.email       || b.userEmail        ||
-    (b.userId   ? `User #${b.userId}`   : null) ||
+    b.user?.name || b.user?.fullName || b.user?.username ||
+    b.client?.name || b.bookedBy?.name || b.customer?.name ||
+    b.userName || b.clientName || b.userFullName ||
+    b.bookedByName || b.user?.email || b.userEmail ||
+    (b.userId ? `User #${b.userId}` : null) ||
     (b.clientId ? `User #${b.clientId}` : null) ||
     `Booking #${b.id}`;
   return prettifyName(raw);
 };
 
 const extractAdvisorName = (b: any, consultantNameMap: Record<number, string> = {}): string =>
-  b.consultant?.name    ||
+  b.consultant?.name ||
   b.consultant?.fullName ||
-  b.advisor?.name       ||
-  b.consultantName      ||
-  b.advisorName         ||
-  b.providerName        ||
+  b.advisor?.name ||
+  b.consultantName ||
+  b.advisorName ||
+  b.providerName ||
   consultantNameMap[b.consultantId] ||
   (b.consultantId ? `Consultant #${b.consultantId}` : null) ||
   "Consultant";
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; border: string }> = {
-  CONFIRMED:  { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
-  PENDING:    { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
-  COMPLETED:  { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
-  CANCELLED:  { bg: "#FEF2F2", color: "#EF4444", border: "#FCA5A5" },
-  DEFAULT:    { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
+  CONFIRMED: { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
+  PENDING: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
+  COMPLETED: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
+  CANCELLED: { bg: "#FEF2F2", color: "#EF4444", border: "#FCA5A5" },
+  DEFAULT: { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
 };
 const getStatus = (s: string) => STATUS_STYLES[s] || STATUS_STYLES.DEFAULT;
 
@@ -90,9 +90,9 @@ const authFetch = async (url: string) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function BookingsPage({ isAdmin = false }: Props) {
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
-  const [filter,   setFilter]   = useState<"ALL"|"PENDING"|"CONFIRMED"|"COMPLETED"|"CANCELLED">("ALL");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"ALL" | "PENDING" | "CONFIRMED" | "COMPLETED" | "CANCELLED">("ALL");
 
   useEffect(() => { fetchBookings(); }, [isAdmin]);
 
@@ -111,14 +111,15 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           setLoading(false);
           return;
         }
-        const data = await getBookingsByConsultant(Number(consultantId));
-        raw = Array.isArray(data) ? data : data?.content ?? [];
+        raw = await getBookingsByConsultant(Number(consultantId));
       }
 
       if (!Array.isArray(raw) || raw.length === 0) {
         setBookings([]);
         return;
       }
+
+      if (raw.length > 0) console.log("📋 Booking sample:", JSON.stringify(raw[0], null, 2));
 
       // ── 1. Fetch timeslot details for date/time ───────────────────────────
       const uniqueSlotIds = [...new Set(
@@ -130,7 +131,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         uniqueSlotIds.map(id =>
           authFetch(`/api/timeslots/${id}`)
             .then(s => { slotMap[id] = s; })
-            .catch(() => {})
+            .catch(() => { })
         )
       );
 
@@ -142,25 +143,35 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           .forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
       } catch { /* non-fatal */ }
 
-      // ── 3. Fetch consultant names ─────────────────────────────────────────
+      // ── 3. Fetch consultant names — try /consultants/:id then /users/:id ──
       const uniqueConsultantIds = [...new Set(
         raw.map((b: any) => b.consultantId).filter(Boolean)
       )] as number[];
 
       const consultantNameMap: Record<number, string> = {};
       await Promise.all(
-        uniqueConsultantIds.map(id =>
-          authFetch(`/api/advisors/${id}`)
-            .catch(() => authFetch(`/api/consultants/${id}`))
-            .then(c => { consultantNameMap[id] = c?.name || `Consultant #${id}`; })
-            .catch(() => { consultantNameMap[id] = `Consultant #${id}`; })
-        )
+        uniqueConsultantIds.map(async (id) => {
+          // Try /consultants first, fall back to /users — never throw
+          try {
+            const c = await authFetch(`/api/consultants/${id}`);
+            if (c?.name || c?.fullName) {
+              consultantNameMap[id] = c.name || c.fullName;
+              return;
+            }
+          } catch { /* 404 expected for some IDs */ }
+          try {
+            const u = await authFetch(`/api/users/${id}`);
+            consultantNameMap[id] = u?.name || u?.fullName || u?.username || `Consultant #${id}`;
+          } catch {
+            consultantNameMap[id] = `Consultant #${id}`;
+          }
+        })
       );
 
       // ── 4. Fetch user names ───────────────────────────────────────────────
       const needsUserEnrichment = raw.filter((b: any) => {
         const hasName = b.user?.name || b.user?.fullName || b.user?.username ||
-                        b.userName  || b.clientName;
+          b.userName || b.clientName;
         const uid = b.userId || b.user?.id || b.clientId;
         return !hasName && uid;
       });
@@ -182,14 +193,15 @@ export default function BookingsPage({ isAdmin = false }: Props) {
 
       // ── 5. Map everything together ────────────────────────────────────────
       const mapped: Booking[] = raw.map((b: any) => {
-        const slot     = slotMap[b.timeSlotId];
+        const slot = slotMap[b.timeSlotId];
 
-        // Date: from timeslot first
+        // Date: prefer timeslot data, then booking fields
         const date =
           slot?.slotDate || b.slotDate || b.bookingDate ||
-          b.booking_date || b.date || b.sessionDate || "";
+          b.booking_date || b.date || b.sessionDate ||
+          b.appointmentDate || "";
 
-        // Time range: from master map via timeslot's masterTimeSlotId
+        // Time range: master timeslot → booking fields → slot slotTime
         const masterKey = slot?.masterTimeSlotId || slot?.masterSlotId;
         const time =
           (masterKey && masterMap[masterKey]) ||
@@ -197,31 +209,36 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           b.masterTimeSlot?.timeRange ||
           b.timeRange ||
           (slot?.slotTime ? toAmPm(slot.slotTime.substring(0, 5)) : "") ||
-          (b.slotTime     ? toAmPm(b.slotTime.substring(0, 5))    : "");
+          (b.slotTime ? toAmPm(b.slotTime.substring(0, 5)) : "") ||
+          (b.bookingTime ? toAmPm(b.bookingTime.substring(0, 5)) : "") ||
+          "";
 
-        // User name
+        // User name: inline fields → enriched map
         const uid = b.userId || b.user?.id || b.clientId;
         const rawUserName =
           b.user?.name || b.user?.fullName || b.user?.username ||
           b.client?.name || b.userName || b.clientName ||
           (uid && userMap[uid]) || "";
-        const userName = prettifyName(rawUserName) || (uid ? `User #${uid}` : `Booking #${b.id}`);
+        const userName = prettifyName(rawUserName) ||
+          (uid ? `User #${uid}` : `Booking #${b.id}`);
 
-        // Consultant name
+        // Advisor name: inline → enriched consultant map
         const advisorName = extractAdvisorName(b, consultantNameMap);
 
-        // Status — backend sends "bookingStatus" lowercase
-        const status = (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase();
+        // Status — handle both casing variants from the backend
+        const status = (
+          b.BookingStatus || b.bookingStatus || b.status || "PENDING"
+        ).toUpperCase();
 
         return {
-          id:          b.id,
-          user:        userName,
+          id: b.id,
+          user: userName,
           userInitial: userName.charAt(0).toUpperCase(),
-          advisor:     advisorName,
+          advisor: advisorName,
           date,
           time,
           status,
-          amount:      Number(b.amount || b.charges || b.fee || b.consultantCharges || 0),
+          amount: Number(b.amount || b.charges || b.fee || b.consultantCharges || 0),
           meetingMode: b.meetingMode || b.meeting_mode || b.mode || "",
         };
       });
@@ -239,8 +256,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
   const filtered = filter === "ALL" ? bookings : bookings.filter(b => b.status === filter);
 
   const counts = {
-    ALL:       bookings.length,
-    PENDING:   bookings.filter(b => b.status === "PENDING").length,
+    ALL: bookings.length,
+    PENDING: bookings.filter(b => b.status === "PENDING").length,
     CONFIRMED: bookings.filter(b => b.status === "CONFIRMED").length,
     COMPLETED: bookings.filter(b => b.status === "COMPLETED").length,
     CANCELLED: bookings.filter(b => b.status === "CANCELLED").length,
@@ -267,11 +284,11 @@ export default function BookingsPage({ isAdmin = false }: Props) {
       {!loading && bookings.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(120px,1fr))", gap: 12, marginBottom: 20 }}>
           {[
-            { label: "Total",     value: counts.ALL,                     color: "#2563EB", bg: "#EFF6FF" },
-            { label: "Pending",   value: counts.PENDING,                 color: "#D97706", bg: "#FFFBEB" },
-            { label: "Confirmed", value: counts.CONFIRMED,               color: "#2563EB", bg: "#EFF6FF" },
-            { label: "Completed", value: counts.COMPLETED,               color: "#16A34A", bg: "#F0FDF4" },
-            { label: "Revenue",   value: `₹${revenue.toLocaleString()}`, color: "#16A34A", bg: "#F0FDF4" },
+            { label: "Total", value: counts.ALL, color: "#2563EB", bg: "#EFF6FF" },
+            { label: "Pending", value: counts.PENDING, color: "#D97706", bg: "#FFFBEB" },
+            { label: "Confirmed", value: counts.CONFIRMED, color: "#2563EB", bg: "#EFF6FF" },
+            { label: "Completed", value: counts.COMPLETED, color: "#16A34A", bg: "#F0FDF4" },
+            { label: "Revenue", value: `₹${revenue.toLocaleString()}`, color: "#16A34A", bg: "#F0FDF4" },
           ].map(s => (
             <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 10, padding: "12px 14px" }}>
               <div style={{ fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</div>
@@ -291,12 +308,12 @@ export default function BookingsPage({ isAdmin = false }: Props) {
 
       {/* ── Filter pills ── */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {(["ALL","PENDING","CONFIRMED","COMPLETED","CANCELLED"] as const).map(f => (
+        {(["ALL", "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)} style={{
             padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
             background: filter === f ? "#2563EB" : "#F1F5F9",
-            color:      filter === f ? "#fff"    : "#64748B",
-            border:     filter === f ? "1px solid #2563EB" : "1px solid #E2E8F0",
+            color: filter === f ? "#fff" : "#64748B",
+            border: filter === f ? "1px solid #2563EB" : "1px solid #E2E8F0",
           }}>
             {f} ({counts[f]})
           </button>
