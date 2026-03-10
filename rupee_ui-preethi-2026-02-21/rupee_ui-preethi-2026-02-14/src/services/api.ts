@@ -5,10 +5,7 @@
 
 import axios from "axios";
 
-// Keep as relative path — Vite proxy forwards:
-//   /api      → http://52.55.178.31:8081/api
-//   /uploads  → http://52.55.178.31:8081/uploads
-const BASE_URL = "/api";
+const BASE_URL = (typeof __API_BASE__ !== "undefined") ? __API_BASE__ : "/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOKEN / SESSION HELPERS
@@ -98,11 +95,6 @@ api.interceptors.request.use((config) => {
 // CORE FETCH WRAPPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Authenticated fetch — attaches Bearer token, handles 403 debug output.
- * Does NOT set Content-Type when body is FormData — lets the browser
- * add the multipart boundary automatically (prevents corruption).
- */
 export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const defaultHeaders: Record<string, string> = { Accept: "application/json" };
@@ -136,7 +128,6 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
         console.error("   Calling debugToken() to help diagnose…");
         debugToken();
       } else if (res.status === 404) {
-        // 404s are expected (e.g. consultant/user not found) — warn only, no stack noise
         console.warn(`⚠️ 404 Not Found: ${endpoint}`);
       }
       throw new Error(data?.message || `Request failed with status ${res.status}`);
@@ -151,10 +142,6 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 };
 
-/**
- * Public fetch — no auth token.
- * Used for login, register, OTP, forgot/reset password endpoints.
- */
 const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${BASE_URL}${endpoint}`;
   const res = await fetch(url, {
@@ -178,11 +165,6 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   return data;
 };
 
-/**
- * Extracts an array from any backend response shape.
- * Handles: plain array, { content }, { data }, { tickets }, { bookings }, { items }, { results }
- * Falls back to scanning all keys for the first non-empty array.
- */
 export const extractArray = (data: any): any[] => {
   if (!data) return [];
   if (Array.isArray(data)) return data;
@@ -233,7 +215,6 @@ export const logoutUser = () => clearToken();
 
 export const getCurrentUser = async () => apiFetch("/users/me");
 
-/** POST /api/users/send-otp — registration OTP (public) */
 export const sendRegistrationOtp = async (email: string): Promise<void> => {
   await publicFetch("/users/send-otp", {
     method: "POST",
@@ -241,7 +222,6 @@ export const sendRegistrationOtp = async (email: string): Promise<void> => {
   });
 };
 
-/** POST /api/users/forgot-password — send reset OTP (public) */
 export const sendForgotPasswordOtp = async (email: string): Promise<void> => {
   await publicFetch("/users/forgot-password", {
     method: "POST",
@@ -249,7 +229,6 @@ export const sendForgotPasswordOtp = async (email: string): Promise<void> => {
   });
 };
 
-/** POST /api/users/reset-password — submit new password with OTP (public) */
 export const resetPassword = async (
   email: string,
   otp: string,
@@ -297,18 +276,17 @@ export const getConsultantById = async (consultantId: number) => {
     const data = await apiFetch(`/consultants/${consultantId}`);
     if (data) return data;
   } catch {
-    // 404 or any error — fall through to users endpoint
+    // fall through
   }
   try {
     return await apiFetch(`/users/${consultantId}`);
   } catch {
-    return null; // genuinely not found — always return null, never throw
+    return null;
   }
 };
 
 export const getMyProfile = getConsultantById;
 
-// POST /consultants — multipart/form-data
 export const createConsultant = async (payload: any) => {
   const formData = new FormData();
   const dataPayload = { ...payload };
@@ -323,7 +301,6 @@ export const createConsultant = async (payload: any) => {
   return apiFetch("/consultants", { method: "POST", body: formData });
 };
 
-// PUT /consultants/:id — multipart/form-data
 export const updateConsultant = async (
   consultantId: number,
   data: {
@@ -349,10 +326,6 @@ export const updateConsultant = async (
 export const deleteConsultant = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}`, { method: "DELETE" });
 
-/**
- * Convenience helper: resolve a display name for a consultant/user ID.
- * Tries /consultants/:id then /users/:id, never throws.
- */
 export const resolveConsultantName = async (id: number): Promise<string> => {
   try {
     const d = await getConsultantById(id);
@@ -361,12 +334,14 @@ export const resolveConsultantName = async (id: number): Promise<string> => {
     return `Consultant #${id}`;
   }
 };
+
 export const getAllConsultants = getConsultants;
 export const getAllAdvisors = getConsultants;
 export const getAdvisorById = getConsultantById;
 export const createAdvisor = createConsultant;
 export const updateAdvisor = updateConsultant;
 export const deleteAdvisor = deleteConsultant;
+
 /** @deprecated Use getConsultantUserList instead */
 export const getAgentList = async (): Promise<string[]> => {
   try {
@@ -376,7 +351,6 @@ export const getAgentList = async (): Promise<string[]> => {
     return [];
   }
 };
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ONBOARDING
@@ -438,27 +412,19 @@ export const createBooking = async (payload: {
   slotDate?: string; masterTimeSlotId?: number; slotTime?: string; timeRange?: string;
   userId?: number;
 }) => {
-  // Pre-validate consultant exists before hitting /bookings
-  // This prevents the 500 "Transaction silently rolled back" error
   try {
     const check = await apiFetch(`/consultants/${payload.consultantId}`);
     if (!check?.id) throw new Error("Consultant not found");
   } catch (e: any) {
     throw new Error(`Consultant #${payload.consultantId} is no longer available. Please choose another advisor.`);
   }
-
   return apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
 };
 
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
 export const getAllBookings = async (): Promise<any[]> => {
-  // ── FIX: removed "/bookings/admin" — the backend has no such route.
-  // Spring resolves /bookings/{id} and tries to parse "admin" as a Long → 500.
-  // Only "/bookings" (admin-scoped by JWT role) is a valid direct endpoint.
-  const directEndpoints = [
-    "/bookings",
-  ];
+  const directEndpoints = ["/bookings"];
 
   for (const endpoint of directEndpoints) {
     try {
@@ -471,20 +437,15 @@ export const getAllBookings = async (): Promise<any[]> => {
     }
   }
 
-  // ── Phase 2: aggregate per-consultant ──
   console.warn("getAllBookings: direct endpoints returned 0 — trying per-consultant fallback");
   try {
     let consultants: any[] = [];
     try {
       const d = await apiFetch("/consultants");
       consultants = extractArray(d);
-      console.log(`getAllBookings: got ${consultants.length} consultants from /consultants`);
     } catch { /* non-fatal */ }
 
-    if (consultants.length === 0) {
-      console.warn("getAllBookings: no consultants found — cannot aggregate");
-      return [];
-    }
+    if (consultants.length === 0) return [];
 
     const results = await Promise.allSettled(
       consultants.map((c: any) =>
@@ -496,7 +457,7 @@ export const getAllBookings = async (): Promise<any[]> => {
     const all: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
     const seen = new Set<number>();
     const deduped = all.filter(b => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
-    console.log(`✅ getAllBookings fallback: ${deduped.length} bookings across ${consultants.length} consultants`);
+    console.log(`✅ getAllBookings fallback: ${deduped.length} bookings`);
     return deduped;
   } catch (err: any) {
     console.error("❌ getAllBookings fallback failed:", err?.message);
@@ -524,7 +485,6 @@ export const getBookingsByConsultant = async (consultantId: number): Promise<any
   return extractArray(data);
 };
 
-// ── Timeslot / booking aliases ──
 export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 export const getBookingsByAdvisor = getBookingsByConsultant;
@@ -577,24 +537,19 @@ export const createTicket = async (
     const meId = Number(me?.id ?? me?.userId);
     if (Number.isFinite(meId) && meId > 0) effectiveUserId = meId;
   } catch {
-    // Fallback to payload userId if /users/me is unavailable.
+    // fallback to payload userId
   }
   if (!Number.isFinite(effectiveUserId) || effectiveUserId <= 0) {
     throw new Error("User ID is required");
   }
 
-  // ─── FIX: Use the category exactly as provided by the user.
-  // Previously, resolveBackendCategory() made a network call to /admin/config/categories
-  // and could silently fail, returning a mismatched casing or fallback value that
-  // bypassed the pre-check in CreateTicketModal but still collided with the DB constraint.
-  // We now trust the raw user-selected category string directly.
   const rawCategory = String(payload.category || "").trim();
   const normalizedPriority = String(payload.priority || "MEDIUM").trim().toUpperCase();
   const normalizedDescription = String(payload.description || "").trim();
 
   const ticketPayload: Record<string, any> = {
     userId: effectiveUserId,
-    category: rawCategory,                 // Use exactly what the user selected — no re-resolution
+    category: rawCategory,
     description: normalizedDescription,
     status: "NEW",
     priority: normalizedPriority,
@@ -605,7 +560,6 @@ export const createTicket = async (
   const token = getToken();
   const postTicket = async (bodyPayload: Record<string, any>) => {
     const form = new FormData();
-    // Backend TicketController expects required multipart part name: "ticketData".
     form.append("ticketData", new Blob([JSON.stringify(bodyPayload)], { type: "application/json" }));
     if (file) form.append("file", file);
 
@@ -883,7 +837,6 @@ export const updateFeedback = async (id: number, payload: {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN CONFIG — Canned Responses & Ticket Categories
-// Base: AdminConfigController @RequestMapping("/api/admin/config")
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getCannedResponses = async (category?: string): Promise<any[]> => {
@@ -960,7 +913,7 @@ export const sendBookingConfirmationEmails = async (
 ): Promise<void> => {
   try {
     const token = getToken();
-    const res = await fetch("/api/notifications/booking-confirmation", {
+    const res = await fetch(`${BASE_URL}/notifications/booking-confirmation`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -997,8 +950,6 @@ export interface BusinessHoursRequest {
 export interface BusinessHoursResponse {
   id: number;
   dayOfWeek: string;
-  // NOTE: Spring returns LocalTime as {hour, minute, second, nano} by default.
-  // Use parseLocalTime() in AdminPage.tsx to safely convert to "HH:mm" string.
   startTime: string | { hour: number; minute: number; second?: number; nano?: number };
   endTime: string | { hour: number; minute: number; second?: number; nano?: number };
   isWorkingDay: boolean;
@@ -1020,35 +971,31 @@ export interface AutoResponderDto {
   message: string;
 }
 
-/** GET /api/admin/settings/business-hours */
 export const getBusinessHours = async (): Promise<BusinessHoursResponse[]> => {
   const data = await apiFetch("/admin/settings/business-hours");
   return extractArray(data);
 };
+
 export const updateBusinessHours = async (
   payload: BusinessHoursRequest[]
 ): Promise<BusinessHoursResponse[]> => {
-  // Step 1 — load existing rows to get their IDs
   let existingById: Record<string, number> = {};
   try {
     const existing = await apiFetch("/admin/settings/business-hours");
     extractArray(existing).forEach((r: any) => {
       if (r.dayOfWeek && r.id) existingById[r.dayOfWeek] = r.id;
     });
-  } catch { /* non-fatal — proceed without IDs */ }
+  } catch { /* non-fatal */ }
 
-  // Step 2 — update or create each day
   const results = await Promise.allSettled(
     payload.map(async (row) => {
       const existingId = existingById[row.dayOfWeek];
       if (existingId) {
-        // Record exists → update it by ID
         return apiFetch(`/admin/settings/business-hours/${existingId}`, {
           method: "PUT",
           body: JSON.stringify(row),
         });
       } else {
-        // No existing record → try to create
         return apiFetch("/admin/settings/business-hours", {
           method: "POST",
           body: JSON.stringify(row),
@@ -1069,34 +1016,22 @@ export const updateBusinessHours = async (
   return saved;
 };
 
-/** GET /api/admin/settings/holidays */
 export const getHolidays = async (): Promise<HolidayResponse[]> => {
   const data = await apiFetch("/admin/settings/holidays");
   return extractArray(data);
 };
 
-/** POST /api/admin/settings/holidays */
 export const addHoliday = async (payload: HolidayRequest): Promise<HolidayResponse> =>
   apiFetch("/admin/settings/holidays", { method: "POST", body: JSON.stringify(payload) });
 
-/** DELETE /api/admin/settings/holidays/:id */
 export const deleteHoliday = async (id: number): Promise<void> => {
   await apiFetch(`/admin/settings/holidays/${id}`, { method: "DELETE" });
 };
 
-/** GET /api/admin/settings/auto-responder */
 export const getAutoResponder = async (): Promise<AutoResponderDto> =>
   apiFetch("/admin/settings/auto-responder");
 
-/**
- * FIX 2 (409 Conflict): Auto-responder record already exists.
- * Strategy:
- *   1. GET /admin/settings/auto-responder to check if a record with an ID exists.
- *   2. If it has an id field → PUT /admin/settings/auto-responder/{id}
- *   3. If no id → fall back to POST (first-time creation).
- */
 export const updateAutoResponder = async (payload: AutoResponderDto): Promise<AutoResponderDto> => {
-  // Step 1 — try to find existing record's ID
   let existingId: number | null = null;
   try {
     const existing = await apiFetch("/admin/settings/auto-responder");
@@ -1104,14 +1039,12 @@ export const updateAutoResponder = async (payload: AutoResponderDto): Promise<Au
   } catch { /* non-fatal */ }
 
   if (existingId) {
-    // Record exists → update by ID
     return apiFetch(`/admin/settings/auto-responder/${existingId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     });
   }
 
-  // No existing record → create
   return apiFetch("/admin/settings/auto-responder", {
     method: "POST",
     body: JSON.stringify(payload),
