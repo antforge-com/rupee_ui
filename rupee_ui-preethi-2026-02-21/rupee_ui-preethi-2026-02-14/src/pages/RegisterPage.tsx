@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import styles from "../styles/RegisterPage.module.css";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
-const BASE = "/api";
+const BASE = "http://52.55.178.31:8081/api";
 
 const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   const res = await fetch(`${BASE}${endpoint}`, {

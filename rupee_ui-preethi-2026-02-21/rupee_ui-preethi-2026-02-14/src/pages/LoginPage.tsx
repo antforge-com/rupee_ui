@@ -338,8 +338,8 @@ export default function LoginPage() {
    */
   const handleGoogleCredential = async (idToken: string) => {
     const endpoints = [
-      "/api/users/oauth/google",   // primary — matches your backend GoogleAuthController
-      "/api/auth/google",          // fallback — alternative Spring Security setup
+      "http://52.55.178.31:8081/api/users/oauth/google",   // primary — matches your backend GoogleAuthController
+      "http://52.55.178.31:8081/api/auth/google",          // fallback — alternative Spring Security setup
     ];
 
     let lastError: string = "";
@@ -964,3 +964,5 @@ export default function LoginPage() {
     </div>
   );
 }
+
+

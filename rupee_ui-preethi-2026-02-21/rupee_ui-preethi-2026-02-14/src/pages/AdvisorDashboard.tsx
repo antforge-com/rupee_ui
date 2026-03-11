@@ -24,12 +24,13 @@ import AnalyticsDashboard from './AnalyticsDashboard';
 const resolvePhotoUrl = (path: string | null | undefined): string => {
   if (!path) return '';
   if (path.startsWith('http') || path.startsWith('blob:')) return path;
-  return path.startsWith('/') ? path : `/${path}`;
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  return `http://52.55.178.31:8081${clean}`;
 };
 
 // ── Master Timeslots API ──────────────────────────────────────────────────────
 const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
-  const BASE = '/api';
+  const BASE = 'http://52.55.178.31:8081/api';
   const token = localStorage.getItem('fin_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -1004,7 +1005,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
     setDeletingId(bookingId);
     try {
       const token = localStorage.getItem('fin_token');
-      const res = await fetch(`/api/bookings/${bookingId}`, {
+      const res = await fetch(`http://52.55.178.31:8081/api/bookings/${bookingId}`, {
         method: 'DELETE',
         headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
@@ -1037,7 +1038,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
             const uid = b.userId || b.user?.id || b.clientId;
             if (uid) {
               try {
-                const res = await fetch(`/api/users/${uid}`, { headers: authHeaders });
+                const res = await fetch(`http://52.55.178.31:8081/api/users/${uid}`, { headers: authHeaders });
                 if (res.ok) {
                   const u = await res.json();
                   enrichedBooking.user = { id: u.id, name: u.name || u.fullName || u.identifier, email: u.email || u.identifier, username: u.username || u.identifier };
@@ -1051,7 +1052,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
             const tsId = b.timeSlotId || b.timeslotId || b.time_slot_id || b.slotId || b.slot_id || b.timeSlot?.id || b.timeslot?.id || b.slot?.id;
             if (tsId) {
               try {
-                const tsRes = await fetch(`/api/timeslots/${tsId}`, { headers: authHeaders });
+                const tsRes = await fetch(`http://52.55.178.31:8081/api/timeslots/${tsId}`, { headers: authHeaders });
                 if (tsRes.ok) {
                   const ts = await tsRes.json();
                   enrichedBooking = {
@@ -1422,7 +1423,7 @@ const MySlotsView: React.FC<{
           const tsId = b.timeSlotId || b.timeslotId || b.time_slot_id || b.slotId || b.timeSlot?.id;
           if (!tsId) return b;
           try {
-            const r = await fetch(`/api/timeslots/${tsId}`, { headers: authH });
+            const r = await fetch(`http://52.55.178.31:8081/api/timeslots/${tsId}`, { headers: authH });
             if (!r.ok) return b;
             const ts = await r.json();
             return { ...b, slotDate: b.slotDate || ts.slotDate || ts.date || '', bookingDate: b.bookingDate || ts.slotDate || ts.date || '', slotTime: b.slotTime || ts.slotTime || '', timeRange: b.timeRange || ts.timeRange || ts.masterTimeSlot?.timeRange || '', timeSlot: { ...(b.timeSlot || {}), ...ts } };
@@ -1983,7 +1984,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         if (!clientName && f.userId) {
           try {
             const token = localStorage.getItem('fin_token');
-            const res = await fetch(`/api/users/${f.userId}`, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+            const res = await fetch(`http://52.55.178.31:8081/api/users/${f.userId}`, { headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
             if (res.ok) {
               const u = await res.json();
               const raw = u.name || u.fullName || u.username || u.email || '';
@@ -2356,7 +2357,7 @@ export default function AdvisorDashboard() {
             const tsId = b.timeSlotId || b.timeslotId || b.time_slot_id || b.slotId || b.timeSlot?.id;
             if (!tsId) return b;
             try {
-              const r = await fetch(`/api/timeslots/${tsId}`, { headers: authH });
+              const r = await fetch(`http://52.55.178.31:8081/api/timeslots/${tsId}`, { headers: authH });
               if (!r.ok) return b;
               const ts = await r.json();
               return { ...b, slotDate: b.slotDate || ts.slotDate || ts.date || '', bookingDate: b.bookingDate || ts.slotDate || ts.date || '', slotTime: b.slotTime || ts.slotTime || '', timeRange: b.timeRange || ts.timeRange || ts.masterTimeSlot?.timeRange || '', timeSlot: { ...(b.timeSlot || {}), ...ts } };
@@ -2544,3 +2545,5 @@ export default function AdvisorDashboard() {
     </div>
   );
 }
+
+

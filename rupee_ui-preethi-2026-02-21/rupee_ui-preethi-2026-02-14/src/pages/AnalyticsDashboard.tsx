@@ -111,7 +111,7 @@ const PRIORITY_COLOR: Record<string, string> = {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 const apiFetch = async (endpoint: string) => {
-  const BASE = "/api";
+  const BASE = "http://52.55.178.31:8081/api";
   const token = localStorage.getItem("fin_token");
   const res = await fetch(`${BASE}${endpoint}`, {
     headers: {

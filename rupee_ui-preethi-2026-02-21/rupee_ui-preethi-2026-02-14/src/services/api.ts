@@ -4,7 +4,7 @@
 
 import axios from "axios";
 
-const BASE_URL = "/api";
+const BASE_URL = "http://52.55.178.31:8081/api";
 
 export const TOKEN_KEY       = "fin_token";
 export const setToken        = (token: string) => localStorage.setItem(TOKEN_KEY, token);

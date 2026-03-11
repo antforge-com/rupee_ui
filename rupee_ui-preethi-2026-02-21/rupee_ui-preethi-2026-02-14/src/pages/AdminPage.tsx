@@ -58,7 +58,7 @@ import {
 } from "./NotificationSystem";
 import TicketSummaryChart from "./TicketSummaryChart";
 
-const BASE_URL = "/api";
+const BASE_URL = "http://52.55.178.31:8081/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES  (previously in types.ts)
@@ -2670,7 +2670,7 @@ function AdminPageInner() {
           rating: Number(a.rating || 4.5), reviews: Number(a.reviewCount || 0),
           fee: Number(a.charges || 0), exp: a.experience || "5+ Years",
           shiftStartTime: parseLocalTime(a.shiftStartTime), shiftEndTime: parseLocalTime(a.shiftEndTime),
-          avatar: a.profilePhoto || a.photo || a.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
+          avatar: a.profilePhoto ? (a.profilePhoto.startsWith('http') ? a.profilePhoto : `http://52.55.178.31:8081/${a.profilePhoto.startsWith('/') ? a.profilePhoto.slice(1) : a.profilePhoto}`) : a.photo ? (a.photo.startsWith('http') ? a.photo : `http://52.55.178.31:8081/${a.photo.startsWith('/') ? a.photo.slice(1) : a.photo}`) : `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
         })));
         setBackendStatus("online");
       }
@@ -3072,3 +3072,4 @@ export default function AdminPage() {
     </NotificationProvider>
   );
 }
+
