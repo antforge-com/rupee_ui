@@ -708,7 +708,12 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await getCurrentUser();
+        let raw: any = null;
+        try { raw = await apiFetch(`${BASE_URL}/users/me`); } catch {
+          const sid = localStorage.getItem("fin_user_id");
+          if (sid) try { raw = await apiFetch(`${BASE_URL}/users/${sid}`); } catch { }
+        }
+        if (!raw) { raw = { id: localStorage.getItem("fin_user_id"), role: localStorage.getItem("fin_role") }; }
         if (!raw) { setProfile(null); setLoading(false); return; }
         const userId = raw.id || raw.userId;
         let onboard: any = null;
