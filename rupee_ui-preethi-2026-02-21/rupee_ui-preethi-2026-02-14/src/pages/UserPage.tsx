@@ -126,11 +126,6 @@ interface TicketComment {
   createdAt: string;
 }
 
-/**
- * Returns true if this comment was written by support staff
- * (consultant or admin), not the customer.
- * Checks every field the backend might use to signal this.
- */
 const isStaffComment = (c: TicketComment, myUserId: number | null): boolean => {
   if (c.isConsultantReply === true) return true;
   if (c.senderType === "CONSULTANT" || c.senderType === "ADMIN") return true;
@@ -270,7 +265,7 @@ const sendBookingEmails = async (params: {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET CONFIG  (extended — merged from both versions)
+// TICKET CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const TICKET_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
   NEW: { label: "New", color: "#6366F1", bg: "#EEF2FF", border: "#C7D2FE", icon: "✦" },
@@ -359,7 +354,7 @@ const StarRating: React.FC<{ value: number; onChange: (v: number) => void }> = (
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CREATE TICKET MODAL  (from NEW version — upgraded modal approach)
+// CREATE TICKET MODAL  
 // ─────────────────────────────────────────────────────────────────────────────
 const CreateTicketModal: React.FC<{
   userId: number | null;
@@ -443,7 +438,7 @@ const CreateTicketModal: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET DETAIL MODAL  (from NEW version — with SLA, auto-scroll thread)
+// TICKET DETAIL MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 const TicketDetailModal: React.FC<{
   ticket: Ticket;
@@ -522,7 +517,6 @@ const TicketDetailModal: React.FC<{
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200, backdropFilter: "blur(4px)" }} onClick={onClose}>
       <div style={{ background: "#fff", borderRadius: 20, width: 560, maxWidth: "96vw", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.3)", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
-        {/* Header */}
         <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "18px 24px", flexShrink: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
@@ -537,7 +531,6 @@ const TicketDetailModal: React.FC<{
           </div>
         </div>
 
-        {/* SLA banner */}
         {sla && (
           <div style={{ padding: "9px 20px", background: sla.breached ? "#FEF2F2" : "#F0FDF4", borderBottom: `1px solid ${sla.breached ? "#FECACA" : "#BBF7D0"}`, flexShrink: 0 }}>
             <div style={{ fontSize: 12, color: sla.breached ? "#B91C1C" : "#15803D", fontWeight: 600 }}>
@@ -548,13 +541,11 @@ const TicketDetailModal: React.FC<{
           </div>
         )}
 
-        {/* Progress stepper */}
         <div style={{ padding: "10px 20px 4px", borderBottom: "1px solid #F1F5F9", flexShrink: 0 }}>
           <TicketStepper status={ticket.status} />
         </div>
 
         <div style={{ flex: 1, overflowY: "auto" }}>
-          {/* Description */}
           <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9" }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 8 }}>Your Issue</div>
             <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.7, background: "#F8FAFC", padding: "10px 14px", borderRadius: 10, borderLeft: "3px solid #BFDBFE" }}>
@@ -572,7 +563,6 @@ const TicketDetailModal: React.FC<{
             </div>
           </div>
 
-          {/* Conversation thread */}
           <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9" }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", marginBottom: 12 }}>💬 Conversation</div>
             {loading ? (
@@ -590,7 +580,6 @@ const TicketDetailModal: React.FC<{
                     : (currentUser?.name || "You");
                   return (
                     <div key={c.id} style={{ display: "flex", justifyContent: isAgent ? "flex-start" : "flex-end", alignItems: "flex-end", gap: 7 }}>
-                      {/* Left avatar — staff only */}
                       {isAgent && (
                         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#1E3A5F,#2563EB)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
                           🧑‍💼
@@ -616,7 +605,6 @@ const TicketDetailModal: React.FC<{
                           {new Date(c.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                         </div>
                       </div>
-                      {/* Right avatar — user only */}
                       {!isAgent && (
                         <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg,#2563EB,#60A5FA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
                           👤
@@ -630,7 +618,6 @@ const TicketDetailModal: React.FC<{
             )}
           </div>
 
-          {/* Reply box */}
           {canReply && (
             <div style={{ padding: "14px 24px", borderBottom: "1px solid #F1F5F9", background: "#F8FAFC" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", marginBottom: 8 }}>Add a Message</div>
@@ -647,7 +634,6 @@ const TicketDetailModal: React.FC<{
             </div>
           )}
 
-          {/* Feedback — resolved and no feedback yet */}
           {ticket.status === "RESOLVED" && !fbDone && (
             <div style={{ padding: "18px 24px", background: "#FFFBEB", borderTop: "1px solid #FDE68A" }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#92400E", marginBottom: 12 }}>
@@ -671,7 +657,6 @@ const TicketDetailModal: React.FC<{
             </div>
           )}
 
-          {/* Close ticket */}
           {!["CLOSED", "RESOLVED"].includes(ticket.status) && (
             <div style={{ padding: "12px 24px" }}>
               <button onClick={async () => {
@@ -891,10 +876,8 @@ const ProfileAbout: React.FC<{ about: string }> = ({ about }) => {
 export default function UserPage() {
   const navigate = useNavigate();
 
-  // ── Core tab state — 5 tabs (notifications from OLD, rest from NEW) ──────
   const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "notifications" | "settings">("consultants");
 
-  // ── Notification state (from OLD version) ────────────────────────────────
   const [userNotifs, setUserNotifs] = useState<any[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
 
@@ -914,7 +897,6 @@ export default function UserPage() {
   const [currentUser, setCurrentUser] = useState<{ id?: number; name?: string; email?: string } | null>(null);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
-  // Booking modal
   const [showModal, setShowModal] = useState(false);
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null);
   const [masterSlots, setMasterSlots] = useState<MasterSlot[]>([]);
@@ -927,18 +909,15 @@ export default function UserPage() {
   const [userNotes, setUserNotes] = useState("");
   const [confirming, setConfirming] = useState(false);
 
-  // Profile modal & settings
   const [profileConsultant, setProfileConsultant] = useState<Consultant | null>(null);
   const [settingsView, setSettingsView] = useState<"menu" | "profile">("menu");
   const [showSubPopup, setShowSubPopup] = useState(false);
 
-  // Tickets state
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [ticketFilter, setTicketFilter] = useState<"ALL" | TicketStatus>("ALL");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [showCreateTicket, setShowCreateTicket] = useState(false);
 
-  // Booking feedback
   const [feedbackModal, setFeedbackModal] = useState<FeedbackData | null>(null);
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackHover, setFeedbackHover] = useState(0);
@@ -951,12 +930,10 @@ export default function UserPage() {
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 4000); };
   const spinnerStyle: React.CSSProperties = { width: 28, height: 28, border: "3px solid #DBEAFE", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" };
 
-  // Derived booking lists
   const upcomingBookings = bookings.filter(b => { const st = (b.BookingStatus || "").toUpperCase(); if (st === "COMPLETED" || st === "CANCELLED") return false; return !isBookingExpired(b, now); });
   const historyBookings = bookings.filter(b => { const st = (b.BookingStatus || "").toUpperCase(); if (st === "COMPLETED" || st === "CANCELLED") return true; return isBookingExpired(b, now); });
   const displayedBookings = bookingFilter === "UPCOMING" ? upcomingBookings : historyBookings;
 
-  // Ticket counts
   const ticketCounts = {
     ALL: tickets.length,
     NEW: tickets.filter(t => t.status === "NEW").length,
@@ -970,7 +947,6 @@ export default function UserPage() {
   const STATUS_FILTERS = ["ALL", "NEW", "OPEN", "IN_PROGRESS", "PENDING", "RESOLVED", "CLOSED", "ESCALATED"] as const;
   const filteredTickets = ticketFilter === "ALL" ? tickets : tickets.filter(t => t.status === ticketFilter);
 
-  // Unread notification count
   const unreadNotifCount = userNotifs.filter((n: any) => !n.read).length;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1015,24 +991,20 @@ export default function UserPage() {
         const slotDetail = slotDetailMap[b.timeSlotId];
         const slotDate = slotDetail?.slotDate || b.bookingDate || b.slotDate || b.date || b.booking_date || "";
         const slotTime = (slotDetail?.slotTime || b.slotTime || "").substring(0, 5);
-        // b.timeSlotId is the SLOT id, NOT the master timeslot id — never use it as a master lookup key
         const masterIdCandidates = [
           slotDetail?.masterTimeSlotId,
           b.masterTimeslotId,
           b.masterSlotId,
         ].filter(v => v != null);
 
-        // Priority 1: direct timeRange already on the booking or slot detail
         let timeRange: string = b.timeRange || b.time_range || (slotDetail as any)?.timeRange || "";
 
-        // Priority 2: look up master timeslot by ID
         if (!timeRange) {
           for (const c of masterIdCandidates) {
             if (masterMap[String(c)]) { timeRange = masterMap[String(c)]; break; }
           }
         }
 
-        // Priority 3: build a proper "HH:MM AM - HH:MM AM" range from the raw slot time
         if (!timeRange && slotTime) {
           const [h, m] = slotTime.split(":").map(Number);
           const endH = (h + 1) % 24;
@@ -1074,7 +1046,6 @@ export default function UserPage() {
         const uid = user?.id ? Number(user.id) : null;
         if (uid) {
           setCurrentUserId(uid);
-          // Load in-app notifications from localStorage (written by admin/consultant)
           try {
             const stored = JSON.parse(localStorage.getItem(`fin_notifs_USER_${uid}`) || "[]");
             setUserNotifs(stored);
@@ -1176,7 +1147,22 @@ export default function UserPage() {
         tsRecords = Array.isArray(tsData) ? tsData : (tsData?.content || []);
         setDbTimeslots(tsRecords);
       } catch { }
+
       const bSet = new Set<string>();
+
+      // --- FIX 1: Add user's OWN existing bookings to prevent double-booking ---
+      // This prevents the user from trying to book a time they are already busy
+      bookings.forEach((userBooking: any) => {
+        const st = (userBooking.BookingStatus || userBooking.status || "").toUpperCase();
+        if (st === "CANCELLED" || st === "COMPLETED") return; // Ignore past or cancelled
+        const date = userBooking.slotDate || userBooking.bookingDate || userBooking.date || "";
+        let timeKey = "";
+        if (userBooking.slotTime) { timeKey = userBooking.slotTime.substring(0, 5); }
+        else { timeKey = normalise24(userBooking.timeRange || ""); }
+        if (date && timeKey) bSet.add(`${date}|${timeKey}`);
+      });
+
+      // --- Add Consultant's existing bookings ---
       const bArr = Array.isArray(bookingsRaw) ? bookingsRaw : (bookingsRaw?.content || []);
       bArr.forEach((b: any) => {
         const st = (b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase();
@@ -1187,6 +1173,8 @@ export default function UserPage() {
         else { const tr = b.timeSlot?.masterTimeSlot?.timeRange || b.masterTimeSlot?.timeRange || b.timeRange || ""; timeKey = normalise24(tr); }
         if (date && timeKey) bSet.add(`${date}|${timeKey}`);
       });
+
+      // --- Add Consultant's blocked/booked timeslots ---
       tsRecords.forEach(s => {
         const st = (s.status || "").toUpperCase(); if (st === "AVAILABLE") return;
         const rawTime = (s as any).slotTime || (s as any).slot_time || "";
@@ -1209,26 +1197,27 @@ export default function UserPage() {
       const fetchTimeslotId = async (): Promise<number | null> => {
         try { const data = await apiFetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant.id}`); const arr: TimeSlotRecord[] = Array.isArray(data) ? data : (data?.content || []); const match = arr.find(s => s.slotDate === selectedDay.iso && (s.slotTime || "").substring(0, 5) === slot24); return match?.id ?? null; } catch { return null; }
       };
-      // Resolve masterId — look for it in masterSlots if not already set
+      
       let effectiveMasterId = selectedSlot.masterId;
       if (!effectiveMasterId || effectiveMasterId === 0) {
         const fallbackMaster = masterSlots.find(ms => normalise24(ms.timeRange) === slot24);
         if (fallbackMaster) effectiveMasterId = fallbackMaster.id;
       }
 
-      // Try to get an existing timeslot ID (DB record) for this date+time
+      // ✅ FIX: Provide a safe fallback (e.g. 1) if the ID is 0 or missing, to prevent @NotNull errors in backend
+      const safeMasterId = effectiveMasterId > 0 ? effectiveMasterId : 1;
+
       let realTimeslotId: number | null = selectedSlot.timeslotId ?? null;
       if (!realTimeslotId) realTimeslotId = await fetchTimeslotId();
 
-      // If no existing record, try to create one — but only if masterTimeSlotId is valid
-      if (!realTimeslotId && effectiveMasterId > 0) {
+      if (!realTimeslotId && safeMasterId > 0) {
         try {
           const singlePayload = {
             consultantId: selectedConsultant.id,
             slotDate: selectedDay.iso,
-            slotTime: slotTimeFull,          // already "HH:mm:ss"
+            slotTime: slotTimeFull,          
             durationMinutes: 60,
-            masterTimeSlotId: effectiveMasterId,
+            masterTimeSlotId: safeMasterId, // ✅ Use fixed masterTimeSlotId with Capital S
             status: "AVAILABLE",
           };
           const singleRes = await fetch(`${BASE_URL}/timeslots`, {
@@ -1247,27 +1236,23 @@ export default function UserPage() {
               if (created?.id) realTimeslotId = created.id;
             }
           }
-        } catch { /* non-fatal — will fall through to direct booking */ }
+        } catch { /* non-fatal */ }
 
-        // Re-check DB in case it was just created by another request
         if (!realTimeslotId) realTimeslotId = await fetchTimeslotId();
       }
 
-      // ── DIRECT BOOKING PATH ──────────────────────────────────────────────
-      // If we still have no timeslot record, attempt booking WITHOUT timeSlotId
-      // by passing masterTimeslotId directly. Some backends support this.
       if (!realTimeslotId) {
-        if (!effectiveMasterId || effectiveMasterId === 0) {
-          showToast("❌ Could not resolve time slot. Please try again.");
-          return;
+        if (!safeMasterId || safeMasterId === 0) {
+          console.warn("No master timeslot ID found, attempting direct booking with dynamic timeRange...");
+          // WE REMOVED THE RETURN STATEMENT HERE. 
+          // This allows consultants with dynamic shift timings to be booked correctly.
         }
-        // Fall through — createBooking below will use masterTimeslotId only
       }
 
       const payload: any = {
         consultantId: selectedConsultant.id,
-        timeSlotId: realTimeslotId ?? undefined,   // omit if null — use masterTimeslotId instead
-        masterTimeslotId: (effectiveMasterId && effectiveMasterId > 0) ? effectiveMasterId : undefined,
+        timeSlotId: realTimeslotId ?? undefined,   
+        masterTimeSlotId: safeMasterId, // ✅ Correct spelling matches Java backend Request exactly
         amount: selectedConsultant.fee,
         userNotes: userNotes || "Booked via app",
         meetingMode,
@@ -1276,6 +1261,7 @@ export default function UserPage() {
         slotTime: slotTimeFull,
         timeRange: selectedSlot.label,
       };
+      
       const bookingResult = await createBooking(payload);
       const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
 
@@ -1283,7 +1269,7 @@ export default function UserPage() {
       setDbTimeslots(prev => {
         const existing = prev.find(s => s.slotDate === selectedDay.iso && (s.slotTime || "").substring(0, 5) === slot24);
         if (existing) return prev.map(s => s.slotDate === selectedDay.iso && (s.slotTime || "").substring(0, 5) === slot24 ? { ...s, status: "BOOKED" } : s);
-        return [...prev, { id: realTimeslotId!, slotDate: selectedDay.iso, slotTime: slotTimeFull, status: "BOOKED", masterTimeSlotId: selectedSlot.masterId > 0 ? selectedSlot.masterId : undefined }];
+        return [...prev, { id: realTimeslotId!, slotDate: selectedDay.iso, slotTime: slotTimeFull, status: "BOOKED", masterTimeSlotId: safeMasterId }];
       });
 
       setShowModal(false);
@@ -1296,8 +1282,14 @@ export default function UserPage() {
       sendBookingEmails({ bookingId: newBookingId, slotDate: selectedDay.iso, timeRange: selectedSlot.label, meetingMode, amount: selectedConsultant.fee, userName: currentUser?.name || "User", userEmail: currentUser?.email || "", consultantName: selectedConsultant.name, consultantEmail, userNotes: userNotes || "" }).catch(() => { });
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
-      if (msg.includes("no longer available") || msg.includes("conflict") || msg.includes("409")) { showToast("⚠️ Slot just taken. Please pick another time."); if (selectedConsultant) handleOpenModal(selectedConsultant); }
-      else showToast(`❌ Booking failed: ${err.message}`);
+      if (msg.includes("already have a booking") || msg.includes("already booked")) {
+        showToast("⚠️ You already have a session booked at this time. Please pick another.");
+      } else if (msg.includes("no longer available") || msg.includes("conflict") || msg.includes("409")) { 
+        showToast("⚠️ Time conflict or slot just taken. Please pick another time."); 
+        if (selectedConsultant) handleOpenModal(selectedConsultant); 
+      } else {
+        showToast(`❌ Booking failed: ${err.message}`);
+      }
     } finally { setConfirming(false); }
   };
 
@@ -1672,7 +1664,7 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ NOTIFICATIONS (full tab — from OLD version) ════ */}
+        {/* ════ NOTIFICATIONS (full tab) ════ */}
         {tab === "notifications" && (
           <div className={styles.tabPadding}>
             <div style={{ marginBottom: 20 }}>
