@@ -1262,7 +1262,7 @@ export default function UserPage() {
       const payload: any = {
         consultantId: selectedConsultant.id,
         timeSlotId: realTimeslotId ?? undefined,   // omit if null — use masterTimeslotId instead
-        masterTimeslotId: (effectiveMasterId && effectiveMasterId > 0) ? effectiveMasterId : undefined,
+        masterTimeslotId: effectiveMasterId > 0 ? effectiveMasterId : undefined,
         amount: selectedConsultant.fee,
         userNotes: userNotes || "Booked via app",
         meetingMode,

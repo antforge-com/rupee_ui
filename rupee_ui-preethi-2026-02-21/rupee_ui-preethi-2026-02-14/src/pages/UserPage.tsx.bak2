@@ -1018,7 +1018,7 @@ export default function UserPage() {
         ].filter(v => v != null);
 
         // Priority 1: direct timeRange already on the booking or slot detail
-        let timeRange: string = b.timeRange || b.time_range || (slotDetail as any)?.timeRange || "";
+        let timeRange: string = b.timeRange || b.time_range || slotDetail?.timeRange || "";
 
         // Priority 2: look up master timeslot by ID
         if (!timeRange) {
@@ -1204,73 +1204,38 @@ export default function UserPage() {
       const fetchTimeslotId = async (): Promise<number | null> => {
         try { const data = await apiFetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant.id}`); const arr: TimeSlotRecord[] = Array.isArray(data) ? data : (data?.content || []); const match = arr.find(s => s.slotDate === selectedDay.iso && (s.slotTime || "").substring(0, 5) === slot24); return match?.id ?? null; } catch { return null; }
       };
-      // Resolve masterId — look for it in masterSlots if not already set
+      // Resolve masterId — backend requires masterTimeSlotId, find it if missing
       let effectiveMasterId = selectedSlot.masterId;
-      if (!effectiveMasterId || effectiveMasterId === 0) {
+      if (!effectiveMasterId) {
         const fallbackMaster = masterSlots.find(ms => normalise24(ms.timeRange) === slot24);
         if (fallbackMaster) effectiveMasterId = fallbackMaster.id;
       }
-
-      // Try to get an existing timeslot ID (DB record) for this date+time
       let realTimeslotId: number | null = selectedSlot.timeslotId ?? null;
       if (!realTimeslotId) realTimeslotId = await fetchTimeslotId();
-
-      // If no existing record, try to create one — but only if masterTimeSlotId is valid
-      if (!realTimeslotId && effectiveMasterId > 0) {
+      if (!realTimeslotId) {
         try {
-          const singlePayload = {
-            consultantId: selectedConsultant.id,
-            slotDate: selectedDay.iso,
-            slotTime: slotTimeFull,          // already "HH:mm:ss"
-            durationMinutes: 60,
-            masterTimeSlotId: effectiveMasterId,
-            status: "AVAILABLE",
-          };
-          const singleRes = await fetch(`${BASE_URL}/timeslots`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify(singlePayload),
-          });
-          if (singleRes.ok) {
-            const ct = singleRes.headers.get("content-type") || "";
+          const singlePayload: any = { consultantId: selectedConsultant.id, slotDate: selectedDay.iso, slotTime: slotTimeFull, durationMinutes: 60, status: "AVAILABLE" };
+          if (effectiveMasterId > 0) singlePayload.masterTimeSlotId = effectiveMasterId;
+          const singleRes = await fetch(`${BASE_URL}/timeslots`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(singlePayload) });
+          if (singleRes.ok) { const ct = singleRes.headers.get("content-type") || ""; if (ct.includes("application/json")) { const created = await singleRes.json(); if (created?.id) realTimeslotId = created.id; } }
+        } catch { }
+        if (!realTimeslotId && selectedSlot.masterId > 0) {
+          try {
+            const rawRes = await fetch(`${BASE_URL}/timeslots/bulk`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ timeSlots: [{ consultantId: selectedConsultant.id, slotDate: selectedDay.iso, slotTime: slotTimeFull, durationMinutes: 60, masterTimeSlotId: selectedSlot.masterId, status: "AVAILABLE" }] }) });
+            const ct = rawRes.headers.get("content-type") || "";
             if (ct.includes("application/json")) {
-              const created = await singleRes.json();
-              if (created?.id) realTimeslotId = created.id;
+              const bulkData = await rawRes.json();
+              const items: any[] = Array.isArray(bulkData) ? bulkData : Array.isArray(bulkData?.created) ? bulkData.created : Array.isArray(bulkData?.timeSlots) ? bulkData.timeSlots : bulkData?.id ? [bulkData] : [];
+              const found = items.find(s => s.slotDate === selectedDay.iso && (s.slotTime || "").substring(0, 5) === slot24) || items[0];
+              if (found?.id) realTimeslotId = found.id;
             }
-          }
-        } catch { /* non-fatal — will fall through to direct booking */ }
-
-        // Re-check DB in case it was just created by another request
+          } catch { }
+        }
         if (!realTimeslotId) realTimeslotId = await fetchTimeslotId();
       }
+      if (!realTimeslotId) { showToast("❌ Could not resolve time slot. Please try again."); return; }
 
-      // ── DIRECT BOOKING PATH ──────────────────────────────────────────────
-      // If we still have no timeslot record, attempt booking WITHOUT timeSlotId
-      // by passing masterTimeslotId directly. Some backends support this.
-      if (!realTimeslotId) {
-        if (!effectiveMasterId || effectiveMasterId === 0) {
-          showToast("❌ Could not resolve time slot. Please try again.");
-          return;
-        }
-        // Fall through — createBooking below will use masterTimeslotId only
-      }
-
-      const payload: any = {
-        consultantId: selectedConsultant.id,
-        timeSlotId: realTimeslotId ?? undefined,   // omit if null — use masterTimeslotId instead
-        masterTimeslotId: (effectiveMasterId && effectiveMasterId > 0) ? effectiveMasterId : undefined,
-        amount: selectedConsultant.fee,
-        userNotes: userNotes || "Booked via app",
-        meetingMode,
-        bookingDate: selectedDay.iso,
-        slotDate: selectedDay.iso,
-        slotTime: slotTimeFull,
-        timeRange: selectedSlot.label,
-      };
+      const payload: any = { consultantId: selectedConsultant.id, timeSlotId: realTimeslotId, amount: selectedConsultant.fee, userNotes: userNotes || "Booked via app", meetingMode, bookingDate: selectedDay.iso, slotDate: selectedDay.iso, slotTime: slotTimeFull, timeRange: selectedSlot.label, masterTimeslotId: selectedSlot.masterId > 0 ? selectedSlot.masterId : undefined };
       const bookingResult = await createBooking(payload);
       const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
 
