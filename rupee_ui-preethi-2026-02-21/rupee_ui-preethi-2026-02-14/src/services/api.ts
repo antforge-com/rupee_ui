@@ -6,21 +6,21 @@ import axios from "axios";
 
 const BASE_URL = "http://52.55.178.31:8081/api";
 
-export const TOKEN_KEY       = "fin_token";
-export const setToken        = (token: string) => localStorage.setItem(TOKEN_KEY, token);
-export const getToken        = ()              => localStorage.getItem(TOKEN_KEY) || "";
-export const clearToken      = () => {
+export const TOKEN_KEY = "fin_token";
+export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
+export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
+export const clearToken = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem("fin_role");
   localStorage.removeItem("fin_user_id");
   localStorage.removeItem("fin_consultant_id");
 };
-export const setRole         = (role: string) => localStorage.setItem("fin_role", role);
-export const getRole         = ()             => localStorage.getItem("fin_role");
-export const setUserId       = (id: number)   => localStorage.setItem("fin_user_id", String(id));
-export const getUserId       = ()             => localStorage.getItem("fin_user_id");
-export const setConsultantId = (id: number)   => localStorage.setItem("fin_consultant_id", String(id));
-export const getConsultantId = ()             => localStorage.getItem("fin_consultant_id");
+export const setRole = (role: string) => localStorage.setItem("fin_role", role);
+export const getRole = () => localStorage.getItem("fin_role");
+export const setUserId = (id: number) => localStorage.setItem("fin_user_id", String(id));
+export const getUserId = () => localStorage.getItem("fin_user_id");
+export const setConsultantId = (id: number) => localStorage.setItem("fin_consultant_id", String(id));
+export const getConsultantId = () => localStorage.getItem("fin_consultant_id");
 
 export const debugToken = () => {
   console.group("🔍 AUTH DEBUG");
@@ -42,10 +42,10 @@ export const debugToken = () => {
     const jwtPayload = JSON.parse(atob(parts[1]));
     console.log("✅ Token payload:", jwtPayload);
     console.log("   Roles/Authorities:", {
-      role:        jwtPayload.role,
-      roles:       jwtPayload.roles,
+      role: jwtPayload.role,
+      roles: jwtPayload.roles,
       authorities: jwtPayload.authorities,
-      scope:       jwtPayload.scope,
+      scope: jwtPayload.scope,
     });
     const exp = jwtPayload.exp ? new Date(jwtPayload.exp * 1000) : null;
     if (exp) {
@@ -66,6 +66,18 @@ export const api = axios.create({
   baseURL: BASE_URL,
   headers: { "Content-Type": "application/json" },
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      console.error("🔐 401 Unauthorized — token expired, redirecting to login");
+      clearToken();
+      window.location.href = "/login";
+    }
+    return Promise.reject(error);
+  }
+);
 
 api.interceptors.request.use((config) => {
   const token = getToken();
@@ -99,7 +111,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
     });
 
     const contentType = res.headers.get("content-type");
-    const data: any   = contentType?.includes("application/json")
+    const data: any = contentType?.includes("application/json")
       ? await res.json()
       : { message: await res.text() };
 
@@ -132,13 +144,13 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
       ...((options.headers as Record<string, string>) || {}),
     },
   });
-  const ct   = res.headers.get("content-type");
+  const ct = res.headers.get("content-type");
   const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
   if (!res.ok) {
     const fieldErrors = (data?.fieldErrors as Record<string, string> | undefined)
       ? Object.entries(data.fieldErrors as Record<string, string>)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(", ")
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")
       : null;
     throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
   }
@@ -147,13 +159,13 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
 
 export const extractArray = (data: any): any[] => {
   if (!data) return [];
-  if (Array.isArray(data))          return data;
-  if (Array.isArray(data.content))  return data.content;
-  if (Array.isArray(data.data))     return data.data;
-  if (Array.isArray(data.tickets))  return data.tickets;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.content)) return data.content;
+  if (Array.isArray(data.data)) return data.data;
+  if (Array.isArray(data.tickets)) return data.tickets;
   if (Array.isArray(data.bookings)) return data.bookings;
-  if (Array.isArray(data.items))    return data.items;
-  if (Array.isArray(data.results))  return data.results;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.results)) return data.results;
   for (const key of Object.keys(data)) {
     if (Array.isArray(data[key]) && data[key].length > 0) return data[key];
   }
@@ -166,10 +178,10 @@ export const loginUser = async (identifier: string, password: string) => {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
   });
-  if (data?.token)        setToken(data.token);
-  if (data?.role)         setRole(data.role);
-  if (data?.id)           setUserId(Number(data.id));
-  if (data?.userId)       setUserId(Number(data.userId));
+  if (data?.token) setToken(data.token);
+  if (data?.role) setRole(data.role);
+  if (data?.id) setUserId(Number(data.id));
+  if (data?.userId) setUserId(Number(data.userId));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   debugToken();
   return data;
@@ -180,9 +192,9 @@ export const registerUser = async (payload: any) => {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (data?.token)        setToken(data.token);
-  if (data?.role)         setRole(data.role);
-  if (data?.id)           setUserId(Number(data.id));
+  if (data?.token) setToken(data.token);
+  if (data?.role) setRole(data.role);
+  if (data?.id) setUserId(Number(data.id));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   return data;
 };
@@ -219,7 +231,7 @@ export const resetPassword = async (
 export const changePassword = async (payload: any) =>
   apiFetch("/users/me/password", { method: "PUT", body: JSON.stringify(payload) });
 
-export const getAllUsers    = async ()             => apiFetch("/users");
+export const getAllUsers = async () => apiFetch("/users");
 export const getUsersByRole = async (role: string) => apiFetch(`/users/role/${role}`);
 
 export const getAgentList = async (): Promise<string[]> => {
@@ -237,24 +249,24 @@ export const updateUser = async (id: number, payload: object) =>
 export const deleteUser = async (id: number) =>
   apiFetch(`/users/${id}`, { method: "DELETE" });
 
-export const getConsultants   = async () => apiFetch("/consultants");
+export const getConsultants = async () => apiFetch("/consultants");
 export const getAllConsultants = getConsultants;
-export const getAdvisors      = getConsultants;
-export const getAllAdvisors    = getConsultants;
+export const getAdvisors = getConsultants;
+export const getAllAdvisors = getConsultants;
 
 export const getConsultantById = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}`);
 export const getAdvisorById = getConsultantById;
-export const getMyProfile   = getConsultantById;
+export const getMyProfile = getConsultantById;
 
 export const createConsultant = async (payload: any) => {
-  const formData    = new FormData();
+  const formData = new FormData();
   const dataPayload = { ...payload };
-  let   file: File | null = null;
+  let file: File | null = null;
 
   if (dataPayload.file) { file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
+  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
@@ -267,17 +279,17 @@ export const updateConsultant = async (
   data: {
     name?: string; designation?: string; charges?: number; email?: string;
     skills?: string[]; shiftStartTime?: string | null; shiftEndTime?: string | null;
-    description?: string; rating?: number | null; [key: string]: any;
+    description?: string; rating?: number | null;[key: string]: any;
   },
   explicitFile?: File | null
 ): Promise<any> => {
-  const formData    = new FormData();
+  const formData = new FormData();
   const dataPayload = { ...data };
-  let   file: File | null = explicitFile || null;
+  let file: File | null = explicitFile || null;
 
   if (dataPayload.file) { if (!file) file = dataPayload.file as File; delete dataPayload.file; }
   if (dataPayload.shiftStartTime?.length === 5) dataPayload.shiftStartTime += ":00";
-  if (dataPayload.shiftEndTime?.length   === 5) dataPayload.shiftEndTime   += ":00";
+  if (dataPayload.shiftEndTime?.length === 5) dataPayload.shiftEndTime += ":00";
 
   formData.append("data", new Blob([JSON.stringify(dataPayload)], { type: "application/json" }));
   if (file) formData.append("file", file);
@@ -289,10 +301,10 @@ export const deleteConsultant = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}`, { method: "DELETE" });
 export const deleteAdvisor = deleteConsultant;
 
-export const getOnboarding    = async (id: number)                  => apiFetch(`/onboarding/${id}`);
+export const getOnboarding = async (id: number) => apiFetch(`/onboarding/${id}`);
 export const updateOnboarding = async (id: number, payload: object) =>
   apiFetch(`/onboarding/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-export const deleteOnboarding = async (id: number)                  =>
+export const deleteOnboarding = async (id: number) =>
   apiFetch(`/onboarding/${id}`, { method: "DELETE" });
 
 export const getTimeslotById = async (id: number) => apiFetch(`/timeslots/${id}`);
@@ -300,7 +312,7 @@ export const getTimeslotById = async (id: number) => apiFetch(`/timeslots/${id}`
 export const getTimeslotsByConsultant = async (consultantId: number) => {
   const data = await apiFetch(`/timeslots/consultant/${consultantId}`);
   if (Array.isArray(data)) return data;
-  if (data?.content)       return data.content;
+  if (data?.content) return data.content;
   return [];
 };
 export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
@@ -316,7 +328,7 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
 export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 
 export const createTimeslot = async (payload: {
-  consultantId: number; slotDate: string; slotTime: string;
+  consultantId: number; slotDate: string; //slotTime: string;
   durationMinutes: number; masterTimeSlotId?: number;
 }) => apiFetch("/timeslots", { method: "POST", body: JSON.stringify(payload) });
 
@@ -341,7 +353,7 @@ export const getAllBookings = async (): Promise<any[]> => {
   const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
   for (const endpoint of directEndpoints) {
     try {
-      const response  = await api.get(endpoint);
+      const response = await api.get(endpoint);
       const extracted = extractArray(response.data);
       if (extracted.length > 0) return extracted;
       if (endpoint === "/bookings") return [];
@@ -420,7 +432,7 @@ export const createTicket = async (
 
   const form = new FormData();
   const blob = new Blob([JSON.stringify(ticketPayload)], { type: "application/json" });
-  form.append("data",       blob);
+  form.append("data", blob);
   form.append("ticketData", blob);
   if (file) form.append("file", file);
 
@@ -510,7 +522,7 @@ export const updateTicketStatus = async (id: number, status: string): Promise<an
       },
       body: status,
     });
-    const ct   = res.headers.get("content-type");
+    const ct = res.headers.get("content-type");
     const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
     if (!res.ok) throw new Error(data?.message || `Status ${res.status}`);
     console.log(`✅ updateTicketStatus(${id}, ${status}) via text/plain body`);
@@ -568,9 +580,9 @@ export const postTicketComment = async (
   if (typeof senderIdOrOptions === "number") {
     senderId = senderIdOrOptions;
   } else if (senderIdOrOptions && typeof senderIdOrOptions === "object") {
-    senderId        = senderIdOrOptions.senderId ?? null;
+    senderId = senderIdOrOptions.senderId ?? null;
     consultantReply = senderIdOrOptions.isConsultantReply ?? false;
-    authorRole      = senderIdOrOptions.authorRole ?? "CUSTOMER";
+    authorRole = senderIdOrOptions.authorRole ?? "CUSTOMER";
   }
 
   if (senderId === null) {
@@ -713,12 +725,12 @@ export const SLA_HOURS: Record<string, number> = {
 
 export const getSlaInfo = (ticket: any) => {
   if (!ticket?.createdAt) return null;
-  const created  = new Date(ticket.createdAt);
-  const hours    = SLA_HOURS[ticket.priority] ?? 24;
+  const created = new Date(ticket.createdAt);
+  const hours = SLA_HOURS[ticket.priority] ?? 24;
   const deadline = new Date(created.getTime() + hours * 3_600_000);
   const minsLeft = Math.round((deadline.getTime() - Date.now()) / 60_000);
   const breached = ticket.isSlaBreached || minsLeft <= 0;
-  const warning  = !breached && minsLeft < 120;
+  const warning = !breached && minsLeft < 120;
 
   return {
     deadline,
@@ -728,8 +740,8 @@ export const getSlaInfo = (ticket: any) => {
     label: breached
       ? `Overdue by ${Math.abs(minsLeft)} min`
       : minsLeft < 60
-      ? `${minsLeft} min remaining`
-      : `${Math.round(minsLeft / 60)}h remaining`,
+        ? `${minsLeft} min remaining`
+        : `${Math.round(minsLeft / 60)}h remaining`,
     deadlineStr: deadline.toLocaleString("en-IN", {
       day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
     }),
@@ -739,13 +751,13 @@ export const getSlaInfo = (ticket: any) => {
 export const getStatusStyle = (status: string) => {
   const s = (status ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string }> = {
-    NEW:         { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
-    OPEN:        { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
+    NEW: { bg: "#EFF6FF", color: "#2563EB", border: "#93C5FD" },
+    OPEN: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA" },
     IN_PROGRESS: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D" },
-    RESOLVED:    { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
-    CLOSED:      { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
-    ESCALATED:   { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
-    PENDING:     { bg: "#FAF5FF", color: "#7C3AED", border: "#C4B5FD" },
+    RESOLVED: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC" },
+    CLOSED: { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
+    ESCALATED: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5" },
+    PENDING: { bg: "#FAF5FF", color: "#7C3AED", border: "#C4B5FD" },
   };
   return map[s] ?? { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" };
 };
@@ -753,10 +765,10 @@ export const getStatusStyle = (status: string) => {
 export const getPriorityStyle = (priority: string) => {
   const p = (priority ?? "").toUpperCase();
   const map: Record<string, { bg: string; color: string; border: string; dot: string }> = {
-    LOW:      { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
-    MEDIUM:   { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D", dot: "#F59E0B" },
-    HIGH:     { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
-    URGENT:   { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5", dot: "#EF4444" },
+    LOW: { bg: "#F0FDF4", color: "#16A34A", border: "#86EFAC", dot: "#22C55E" },
+    MEDIUM: { bg: "#FFFBEB", color: "#D97706", border: "#FCD34D", dot: "#F59E0B" },
+    HIGH: { bg: "#FFF7ED", color: "#EA580C", border: "#FED7AA", dot: "#F97316" },
+    URGENT: { bg: "#FEF2F2", color: "#DC2626", border: "#FCA5A5", dot: "#EF4444" },
     CRITICAL: { bg: "#4A0404", color: "#FCA5A5", border: "#7F1D1D", dot: "#DC2626" },
   };
   return map[p] ?? map.MEDIUM;
@@ -787,10 +799,10 @@ export const initiateGoogleOAuth = () => {
 export const handleOAuthCallback = (): {
   token: string; role: string; userId: number; consultantId?: number;
 } | null => {
-  const params      = new URLSearchParams(window.location.search);
-  const token       = params.get("token");
-  const role        = params.get("role");
-  const userId      = params.get("userId");
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token");
+  const role = params.get("role");
+  const userId = params.get("userId");
   if (!token || !role || !userId) return null;
   setToken(token);
   setRole(role);
@@ -807,10 +819,10 @@ export const loginWithGoogleToken = async (googleIdToken: string) => {
     method: "POST",
     body: JSON.stringify({ idToken: googleIdToken }),
   });
-  if (data?.token)        setToken(data.token);
-  if (data?.role)         setRole(data.role);
-  if (data?.id)           setUserId(Number(data.id));
-  if (data?.userId)       setUserId(Number(data.userId));
+  if (data?.token) setToken(data.token);
+  if (data?.role) setRole(data.role);
+  if (data?.id) setUserId(Number(data.id));
+  if (data?.userId) setUserId(Number(data.userId));
   if (data?.consultantId) setConsultantId(Number(data.consultantId));
   debugToken();
   return data;
@@ -906,8 +918,8 @@ const _today = () => new Date().toISOString().slice(0, 10);
 
 export const triggerDownload = (blob: Blob, filename: string, type: string): void => {
   const url = URL.createObjectURL(new Blob([blob], { type }));
-  const a   = document.createElement("a");
-  a.href     = url;
+  const a = document.createElement("a");
+  a.href = url;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
@@ -967,24 +979,24 @@ export const exportSingleTicketPdf = async (id: number): Promise<void> => {
 
 export const ticketsToExportRows = (tickets: any[]): Record<string, any>[] =>
   tickets.map(t => ({
-    "Ticket ID":      t.id,
-    "Title":          t.title || t.category || "",
-    "Description":    t.description || "",
-    "Category":       t.category || "",
-    "Priority":       t.priority || "",
-    "Status":         t.status || "",
-    "Submitted By":   t.user?.name || t.user?.username || t.userName || (t.userId ? `User #${t.userId}` : ""),
-    "Assigned To":    t.agentName || t.consultantName || "",
-    "Created At":     t.createdAt ? new Date(t.createdAt).toLocaleString("en-IN") : "",
-    "Updated At":     t.updatedAt ? new Date(t.updatedAt).toLocaleString("en-IN") : "",
-    "SLA Breached":   t.isSlaBreached ? "Yes" : "No",
-    "Escalated":      t.isEscalated   ? "Yes" : "No",
+    "Ticket ID": t.id,
+    "Title": t.title || t.category || "",
+    "Description": t.description || "",
+    "Category": t.category || "",
+    "Priority": t.priority || "",
+    "Status": t.status || "",
+    "Submitted By": t.user?.name || t.user?.username || t.userName || (t.userId ? `User #${t.userId}` : ""),
+    "Assigned To": t.agentName || t.consultantName || "",
+    "Created At": t.createdAt ? new Date(t.createdAt).toLocaleString("en-IN") : "",
+    "Updated At": t.updatedAt ? new Date(t.updatedAt).toLocaleString("en-IN") : "",
+    "SLA Breached": t.isSlaBreached ? "Yes" : "No",
+    "Escalated": t.isEscalated ? "Yes" : "No",
     "Feedback Rating": t.feedbackRating ?? "",
-    "Feedback Text":   t.feedbackText  ?? "",
+    "Feedback Text": t.feedbackText ?? "",
   }));
 
 export const clientExportTicketsExcel = async (tickets: any[], filename?: string): Promise<void> => {
-  const rows  = ticketsToExportRows(tickets);
+  const rows = ticketsToExportRows(tickets);
   const fname = filename || `tickets_${_today()}.xlsx`;
   try {
     const XLSX = (window as any).XLSX;
@@ -1006,7 +1018,7 @@ export const clientExportTicketsExcel = async (tickets: any[], filename?: string
 };
 
 export const clientExportTicketsPdf = async (tickets: any[], filename?: string): Promise<void> => {
-  const rows  = ticketsToExportRows(tickets);
+  const rows = ticketsToExportRows(tickets);
   const fname = filename || `tickets_${_today()}.pdf`;
   try {
     const jsPDF = (window as any).jspdf?.jsPDF || (window as any).jsPDF;

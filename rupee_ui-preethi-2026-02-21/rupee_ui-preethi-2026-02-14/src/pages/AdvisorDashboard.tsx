@@ -1396,7 +1396,7 @@ const MySlotsView: React.FC<{
     try {
       let masterLookup: Record<number, string> = {};
       try {
-        const mData = await apiFetch('/master-timeslots');
+        const mData = await apiFetch('/master-timeslots?page=0&size=1000');
         const mArr = extractArray(mData);
         mArr.forEach((m: any) => { if (m.id && m.timeRange) masterLookup[m.id] = m.timeRange; });
         setMasterSlots(mArr);
@@ -2545,10 +2545,3 @@ export default function AdvisorDashboard() {
     </div>
   );
 }
-
-
-
-
-
-
-
