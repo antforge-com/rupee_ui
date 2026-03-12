@@ -268,7 +268,7 @@ const sendBookingEmails = async (params: {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET CONFIG  (extended — merged from both versions)
+// TICKET CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const TICKET_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
   NEW: { label: "New", color: "#6366F1", bg: "#EEF2FF", border: "#C7D2FE", icon: "✦" },
@@ -1306,7 +1306,6 @@ export default function UserPage() {
         userNotes: userNotes || "Booked via app",
         meetingMode,
       };
-
       const bookingResult = await createBooking(payload);
       const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
 
@@ -1329,11 +1328,14 @@ export default function UserPage() {
 
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
-      if (msg.includes("no longer available") || msg.includes("conflict") || msg.includes("409")) {
-        showToast("⚠️ Slot just taken. Please pick another time.");
+      if (msg.includes("already have a booking") || msg.includes("already booked")) {
+        showToast("⚠️ You already have a session booked at this time. Please pick another.");
+      } else if (msg.includes("no longer available") || msg.includes("conflict") || msg.includes("409")) {
+        showToast("⚠️ Time conflict or slot just taken. Please pick another time.");
         if (selectedConsultant) handleOpenModal(selectedConsultant);
+      } else {
+        showToast(`❌ Booking failed: ${err.message}`);
       }
-      else showToast(`❌ Booking failed: ${err.message}`);
     } finally { setConfirming(false); }
   };
   const handleLogout = () => { logoutUser(); navigate("/login", { replace: true }); };
