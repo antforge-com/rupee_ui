@@ -1,10 +1,3 @@
-/**
- * AdminPage.tsx
- * ─────────────────────────────────────────────────────────────────────────────
- * Consolidated file — types.ts and data.ts have been removed and merged here.
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -125,7 +118,6 @@ interface InternalNote {
   noteText: string;
   createdAt: string;
 }
-
 interface Ticket {
   id: number;
   title?: string;

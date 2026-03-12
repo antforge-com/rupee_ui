@@ -1197,16 +1197,6 @@ export default function UserPage() {
     setConfirming(true);
     try {
       const slot24 = selectedSlot.start24h;
-
-      // 1. Format for backend's LocalTime object expected by Swagger
-      const [hStr, mStr] = slot24.split(":");
-      const slotTimeObj = {
-        hour: Number(hStr),
-        minute: Number(mStr),
-        second: 0,
-        nano: 0
-      };
-
       const token = getToken();
 
       const fetchTimeslotId = async (): Promise<number | null> => {
