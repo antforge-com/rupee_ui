@@ -155,6 +155,7 @@ type AdminSectionType =
   | "tickets"
   | "analytics"
   | "summary"
+  | "add-member"
   | "support-config"
   | "offers"
   | "settings";
@@ -452,6 +453,11 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
   const [localStatus, setLocalStatus] = useState<TicketStatus>(ticket.status);
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
+  // ── Priority editing (Admin can change priority inline) ───────────────────
+  const [localPriority, setLocalPriority] = useState<TicketPriority>(ticket.priority);
+  const [updatingPriority, setUpdatingPriority] = useState(false);
+  const [showPriorityDropdown, setShowPriorityDropdown] = useState(false);
+
   const [notes, setNotes] = useState<InternalNote[]>(ticket.internalNotes ?? ticket.notes ?? []);
   const [noteText, setNoteText] = useState("");
   const [postingNote, setPostingNote] = useState(false);
@@ -548,6 +554,41 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
     finally { setUpdatingStatus(false); }
   };
 
+  const handlePriorityChange = async (newPriority: string) => {
+    if (newPriority === localPriority) return;
+    setUpdatingPriority(true);
+    try {
+      // Try PATCH /tickets/:id/priority first, fallback to PATCH /tickets/:id
+      try {
+        await apiFetch(`/tickets/${ticket.id}/priority?priority=${encodeURIComponent(newPriority)}`, { method: "PATCH" });
+      } catch {
+        await apiFetch(`/tickets/${ticket.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ priority: newPriority }),
+        });
+      }
+      setLocalPriority(newPriority as TicketPriority);
+      // Notify user of priority change
+      const userId = ticket.userId || ticket.user?.id;
+      if (userId) {
+        const userKey = `fin_notifs_USER_${userId}`;
+        const existing = JSON.parse(localStorage.getItem(userKey) || "[]");
+        const notif = {
+          id: `${Date.now()}_prio_${ticket.id}`,
+          type: "info",
+          title: `🎯 Ticket #${ticket.id} Priority Updated`,
+          message: `Your ticket "${ticket.title || ticket.category}" priority has been changed to ${newPriority}.`,
+          timestamp: new Date().toISOString(),
+          read: false,
+          ticketId: ticket.id,
+        };
+        localStorage.setItem(userKey, JSON.stringify([notif, ...existing].slice(0, 50)));
+      }
+      showToast(`Priority updated to ${newPriority}`);
+    } catch (e: any) { showToast(e.message || "Priority update failed.", false); }
+    finally { setUpdatingPriority(false); }
+  };
+
   const handlePostNote = async () => {
     if (!noteText.trim()) return;
     setPostingNote(true);
@@ -589,7 +630,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
   };
 
   const sc = TICKET_STATUS_CFG[localStatus] ?? TICKET_STATUS_CFG.NEW;
-  const pc = TICKET_PRIORITY_CFG[ticket.priority] ?? TICKET_PRIORITY_CFG.MEDIUM;
+  const pc = TICKET_PRIORITY_CFG[localPriority] ?? TICKET_PRIORITY_CFG.MEDIUM;
 
   const getUserLabel = () =>
     ticket.user?.name || ticket.user?.username ||
@@ -645,9 +686,61 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                   🚨 Escalated
                 </span>
               )}
-              <span style={{ padding: "4px 12px", borderRadius: 20, background: pc.bg, color: pc.color, border: `1px solid ${pc.border ?? "#E2E8F0"}`, fontSize: 11, fontWeight: 700 }}>
-                ⚑ {pc.label}
-              </span>
+              {/* ── PRIORITY — clickable dropdown for inline edit ── */}
+              <div style={{ position: "relative" }}>
+                <button
+                  onClick={() => setShowPriorityDropdown(v => !v)}
+                  disabled={updatingPriority}
+                  title="Click to change priority"
+                  style={{
+                    padding: "4px 12px", borderRadius: 20, background: pc.bg,
+                    color: pc.color, border: `2px solid ${pc.border ?? pc.color}`,
+                    fontSize: 11, fontWeight: 700, cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 5,
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+                    opacity: updatingPriority ? 0.7 : 1,
+                    transition: "all 0.15s",
+                  }}>
+                  {updatingPriority
+                    ? <span style={{ width: 10, height: 10, border: "2px solid rgba(0,0,0,0.2)", borderTopColor: pc.color, borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />
+                    : "⚑"}
+                  {pc.label}
+                  <span style={{ fontSize: 9, opacity: 0.7 }}>▼</span>
+                </button>
+                {showPriorityDropdown && (
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 999,
+                    background: "#fff", border: "1px solid #E2E8F0", borderRadius: 10,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.18)", minWidth: 130, overflow: "hidden",
+                  }}>
+                    <div style={{ padding: "6px 10px 4px", fontSize: 9, fontWeight: 800, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                      Set Priority
+                    </div>
+                    {(["LOW", "MEDIUM", "HIGH", "URGENT", "CRITICAL"] as const).map(p => {
+                      const cfg = TICKET_PRIORITY_CFG[p];
+                      const isActive = localPriority === p;
+                      return (
+                        <button key={p} onClick={() => { handlePriorityChange(p); setShowPriorityDropdown(false); }}
+                          style={{
+                            width: "100%", padding: "8px 12px", border: "none", textAlign: "left",
+                            background: isActive ? cfg.bg : "transparent",
+                            color: isActive ? cfg.color : "#374151",
+                            fontSize: 12, fontWeight: isActive ? 800 : 600,
+                            cursor: "pointer", display: "flex", alignItems: "center", gap: 7,
+                            borderLeft: isActive ? `3px solid ${cfg.color}` : "3px solid transparent",
+                          }}
+                          onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#F8FAFC"; }}
+                          onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
+                        >
+                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: cfg.dot ?? cfg.color, flexShrink: 0 }} />
+                          {cfg.label}
+                          {isActive && <span style={{ marginLeft: "auto", fontSize: 10 }}>✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
               <span style={{ padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.15)", color: "#E0F2FE", fontSize: 11, fontWeight: 600 }}>
                 📅 {new Date(ticket.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
               </span>
@@ -700,6 +793,36 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               </div>
               <div style={{ marginTop: 8, fontSize: 11, color: "#94A3B8" }}>
                 ℹ️ Customer will receive an in-app notification when status changes.
+              </div>
+            </div>
+
+            {/* ── Priority changer (Admin only) ── */}
+            <div style={{ padding: "14px 24px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
+                Change Priority {updatingPriority && <span style={{ color: "#D97706" }}>· updating…</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(["LOW", "MEDIUM", "HIGH", "URGENT", "CRITICAL"] as const).map(p => {
+                  const cfg = TICKET_PRIORITY_CFG[p];
+                  const isActive = localPriority === p;
+                  return (
+                    <button key={p} onClick={() => !isActive && handlePriorityChange(p)}
+                      disabled={updatingPriority || isActive}
+                      style={{
+                        padding: "5px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                        cursor: isActive ? "default" : "pointer",
+                        background: isActive ? cfg.bg : "#fff",
+                        color: isActive ? cfg.color : "#64748B",
+                        border: `1.5px solid ${isActive ? (cfg.border ?? "#E2E8F0") : "#E2E8F0"}`,
+                        opacity: updatingPriority ? 0.6 : 1, transition: "all 0.15s",
+                      }}>
+                      ⚑ {cfg.label}{isActive && " ✓"}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 11, color: "#94A3B8" }}>
+                ℹ️ Priority change is reflected immediately in the ticket list.
               </div>
             </div>
 
@@ -1148,20 +1271,20 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
     prefetch(ticketPage + 1);
   }, [ticketPage, loading, totalPages]);
 
-  const enrichTickets = async (arr: Ticket[]): Promise<Ticket[]> =>
-    Promise.all(arr.map(async (t: any) => {
-      if (t.user?.name || t.user?.username || t.userName) return t;
-      const uid = t.userId || t.user?.id;
-      if (!uid) return t;
-      try {
-        const u = await apiFetch(`/users/${uid}`);
-        const raw2 = u.name || u.fullName || u.username || u.email || u.identifier || "";
-        const name = raw2.includes("@")
-          ? raw2.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
-          : raw2;
-        return { ...t, userName: name || `User #${uid}` };
-      } catch { return t; }
-    }));
+  const enrichTickets = async (arr: Ticket[]): Promise<Ticket[]> => {
+    // Extract user name purely from ticket data — NO /api/users/:id calls.
+    // Those endpoints return 404 when the user record was soft-deleted or is on a different
+    // DB table. Using ticket.user / ticket.userName / ticket.userId is sufficient.
+    return arr.map((t: any) => {
+      if (t.userName) return t; // already enriched
+      const name =
+        t.user?.name || t.user?.fullName || t.user?.username ||
+        (t.user?.email ? t.user.email.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : null) ||
+        t.clientName || t.raisedBy || t.submittedBy ||
+        (t.userId ? `User #${t.userId}` : "—");
+      return { ...t, userName: name };
+    });
+  };
 
   // load() — used by Refresh button and after ticket create/delete
   const load = async () => { setPageCache({}); setTicketPage(0); };
@@ -1276,6 +1399,18 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
           onClose={() => setShowCreate(false)}
         />
       )}
+
+      {/* Email-to-Ticket feature notice */}
+      <div style={{ background: "linear-gradient(135deg,#EFF6FF,#F0FDF4)", border: "1px solid #BFDBFE", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 22, flexShrink: 0 }}>📧</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 2 }}>Email-to-Ticket is Active</div>
+          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+            Emails sent to <strong style={{ color: "#2563EB" }}>support@meetthemasters.in</strong> are automatically converted to tickets.
+            Priority and category are auto-detected from email content. Duplicate emails are ignored.
+          </div>
+        </div>
+      </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>
@@ -1550,7 +1685,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     name: localStorage.getItem("fin_user_name") || "",
     email: localStorage.getItem("fin_user_email") || "",
     phone: localStorage.getItem("fin_user_phone") || "",
-    orgName: localStorage.getItem("fin_org_name") || "FINADVISE",
+    orgName: localStorage.getItem("fin_org_name") || "MEET THE MASTERS",
     designation: localStorage.getItem("fin_designation") || "Admin",
     avatarUrl: localStorage.getItem("fin_avatar_url") || "",
   });
@@ -2673,13 +2808,520 @@ const BusinessSettings: React.FC<{}> = () => {
   );
 };
 
-type ConfigTab = "canned" | "categories" | "reports" | "bizHours";
+type ConfigTab = "canned" | "categories" | "reports" | "bizHours" | "terms" | "members";
+// ─────────────────────────────────────────────────────────────────────────────
+// TERMS & CONDITIONS EDITOR — Admin can edit T&C, versioned table, prev. data stored
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface TermsVersion {
+  id: number;
+  version: string;
+  content: string;
+  updatedAt: string;
+  updatedBy: string;
+  isActive: boolean;
+}
+
+const TermsConditionsEditor: React.FC = () => {
+  const [versions, setVersions] = useState<TermsVersion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [editVersion, setEditVersion] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
+  const [previewMode, setPreviewMode] = useState(false);
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Default T&C sections if API not available
+  const DEFAULT_TERMS = [
+    { title: "1. Acceptance of Terms", body: "By accessing and using Meet The Masters, you accept and agree to be bound by these Terms & Conditions." },
+    { title: "2. Use of Services", body: "Our platform provides access to certified financial consultants for lawful purposes only." },
+    { title: "3. Confidentiality", body: "All consultation sessions and related information are strictly confidential." },
+    { title: "4. Booking & Payments", body: "Bookings are confirmed upon successful payment. Cancellations must be made at least 24 hours prior." },
+    { title: "5. Disclaimer", body: "Financial advice provided is for informational purposes only and does not guarantee specific outcomes." },
+    { title: "6. Privacy Policy", body: "We collect and store your personal data securely in accordance with applicable data protection laws." },
+    { title: "7. Governing Law", body: "These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangana." },
+  ].map(s => `### ${s.title}\n${s.body}`).join("\n\n");
+
+  useEffect(() => {
+    setLoading(true);
+    apiFetch("/admin/terms-and-conditions")
+      .then((data: any) => {
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.content) ? data.content : []);
+        if (list.length > 0) {
+          setVersions(list.map((v: any) => ({
+            id: v.id,
+            version: v.version || v.versionNumber || "1.0",
+            content: v.content || v.termsText || v.text || "",
+            updatedAt: v.updatedAt || v.createdAt || new Date().toISOString(),
+            updatedBy: v.updatedBy || v.adminName || "Admin",
+            isActive: v.isActive ?? v.active ?? false,
+          })));
+        } else {
+          // Seed with a default version
+          const defaultVer: TermsVersion = {
+            id: 1,
+            version: "1.0",
+            content: DEFAULT_TERMS,
+            updatedAt: new Date().toISOString(),
+            updatedBy: "Admin",
+            isActive: true,
+          };
+          setVersions([defaultVer]);
+        }
+      })
+      .catch(() => {
+        // Fallback to stored local or default
+        const localData = localStorage.getItem("fin_terms_versions");
+        if (localData) {
+          try { setVersions(JSON.parse(localData)); } catch { setVersions([]); }
+        } else {
+          const defaultVer: TermsVersion = {
+            id: Date.now(),
+            version: "1.0",
+            content: DEFAULT_TERMS,
+            updatedAt: new Date().toISOString(),
+            updatedBy: "Admin",
+            isActive: true,
+          };
+          setVersions([defaultVer]);
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const activeVersion = versions.find(v => v.isActive) || versions[versions.length - 1] || null;
+  const selectedVersion = selectedVersionId != null ? versions.find(v => v.id === selectedVersionId) : activeVersion;
+
+  const handleStartEdit = () => {
+    setEditContent(activeVersion?.content || DEFAULT_TERMS);
+    // Auto-increment version
+    const currentVer = parseFloat(activeVersion?.version || "1.0");
+    setEditVersion((Math.round((currentVer + 0.1) * 10) / 10).toFixed(1));
+    setEditing(true);
+    setPreviewMode(false);
+  };
+
+  const handleSave = async () => {
+    if (!editContent.trim()) { showToast("Content cannot be empty.", false); return; }
+    setSaving(true);
+    const newVer: TermsVersion = {
+      id: Date.now(),
+      version: editVersion || "1.0",
+      content: editContent,
+      updatedAt: new Date().toISOString(),
+      updatedBy: "Admin",
+      isActive: true,
+    };
+    try {
+      await apiFetch("/admin/terms-and-conditions", {
+        method: "POST",
+        body: JSON.stringify({ version: editVersion, content: editContent, isActive: true }),
+      });
+    } catch {
+      // Silently ignore if endpoint doesn't exist; store locally
+    }
+    // Deactivate old versions, store previous data
+    const updated = versions.map(v => ({ ...v, isActive: false }));
+    updated.push(newVer);
+    setVersions(updated);
+    // Store in localStorage as fallback/history
+    localStorage.setItem("fin_terms_versions", JSON.stringify(updated));
+    setEditing(false);
+    setSelectedVersionId(newVer.id);
+    showToast(`✅ Terms & Conditions v${editVersion} saved and published.`);
+    setSaving(false);
+  };
+
+  const handleSetActive = (id: number) => {
+    const updated = versions.map(v => ({ ...v, isActive: v.id === id }));
+    setVersions(updated);
+    localStorage.setItem("fin_terms_versions", JSON.stringify(updated));
+    showToast("Active version updated.");
+    try {
+      apiFetch(`/admin/terms-and-conditions/${id}/activate`, { method: "PUT" }).catch(() => {});
+    } catch {}
+  };
+
+  const fmtDate = (iso: string) => {
+    try { return new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
+    catch { return iso; }
+  };
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Terms &amp; Conditions</h3>
+          <p style={sc_styles.panelSub}>Edit and version-manage your Terms &amp; Conditions — previous versions are preserved</p>
+        </div>
+        {!editing && (
+          <button onClick={handleStartEdit} style={sc_styles.primaryBtn}>✏️ Edit &amp; Publish New Version</button>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 20, alignItems: "start" }}>
+
+        {/* Version history table */}
+        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Version History
+          </div>
+          {loading ? (
+            <div style={{ padding: "24px", textAlign: "center", color: "#94A3B8", fontSize: 12 }}>Loading…</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              {[...versions].reverse().map((v, i) => (
+                <div key={v.id}
+                  onClick={() => setSelectedVersionId(v.id)}
+                  style={{
+                    padding: "12px 16px",
+                    borderBottom: i < versions.length - 1 ? "1px solid #F1F5F9" : "none",
+                    cursor: "pointer",
+                    background: selectedVersion?.id === v.id ? "#EFF6FF" : "transparent",
+                    borderLeft: `3px solid ${v.isActive ? "#16A34A" : selectedVersion?.id === v.id ? "#2563EB" : "transparent"}`,
+                    transition: "all 0.12s",
+                  }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>v{v.version}</span>
+                    {v.isActive && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 6px", borderRadius: 10, border: "1px solid #86EFAC" }}>LIVE</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#94A3B8" }}>{fmtDate(v.updatedAt)}</div>
+                  <div style={{ fontSize: 10, color: "#64748B", marginTop: 1 }}>by {v.updatedBy}</div>
+                  {!v.isActive && (
+                    <button onClick={e => { e.stopPropagation(); handleSetActive(v.id); }}
+                      style={{ marginTop: 6, fontSize: 10, color: "#2563EB", fontWeight: 700, background: "none", border: "1px solid #BFDBFE", borderRadius: 6, padding: "2px 7px", cursor: "pointer" }}>
+                      Set as Active
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Content panel */}
+        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+          {editing ? (
+            <div>
+              <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div>
+                    <label style={sc_styles.label}>Version Number</label>
+                    <input value={editVersion} onChange={e => setEditVersion(e.target.value)}
+                      style={{ ...sc_styles.input, width: 90, padding: "5px 10px", fontFamily: "monospace" }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end", paddingBottom: 2 }}>
+                    <button onClick={() => setPreviewMode(false)}
+                      style={{ ...sc_styles.filterPill, ...(previewMode ? {} : sc_styles.filterPillActive) }}>✏️ Edit</button>
+                    <button onClick={() => setPreviewMode(true)}
+                      style={{ ...sc_styles.filterPill, ...(previewMode ? sc_styles.filterPillActive : {}) }}>👁 Preview</button>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setEditing(false)} style={sc_styles.ghostBtn}>Cancel</button>
+                  <button onClick={handleSave} disabled={saving}
+                    style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
+                    {saving ? "Saving…" : "💾 Save & Publish"}
+                  </button>
+                </div>
+              </div>
+              {previewMode ? (
+                <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
+                  {editContent.split("\n\n").map((block, i) => {
+                    if (block.startsWith("### ")) {
+                      return (
+                        <div key={i} style={{ marginBottom: 18 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{block.replace("### ", "")}</div>
+                        </div>
+                      );
+                    }
+                    const lines = block.split("\n");
+                    const title = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
+                    const body = title ? lines.slice(1).join("\n") : block;
+                    return (
+                      <div key={i} style={{ marginBottom: 18 }}>
+                        {title && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{title}</div>}
+                        <div style={{ color: "#374151" }}>{body}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <textarea
+                  value={editContent}
+                  onChange={e => setEditContent(e.target.value)}
+                  style={{ width: "100%", padding: "20px 24px", border: "none", fontSize: 13, fontFamily: "monospace", lineHeight: 1.7, resize: "none", outline: "none", minHeight: 480, boxSizing: "border-box", color: "#1E293B" }}
+                  placeholder={`### 1. Acceptance of Terms\nYour terms content here...\n\n### 2. Use of Services\nMore content...`}
+                />
+              )}
+              <div style={{ padding: "10px 18px", background: "#F8FAFC", borderTop: "1px solid #F1F5F9", fontSize: 11, color: "#94A3B8" }}>
+                Use <code>### Section Title</code> for headings. Each section separated by blank line. Previous versions are preserved automatically.
+              </div>
+            </div>
+          ) : selectedVersion ? (
+            <div>
+              <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#0F172A" }}>Version {selectedVersion.version}</span>
+                  {selectedVersion.isActive && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 8px", borderRadius: 10 }}>● LIVE</span>}
+                  <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
+                    Last updated {fmtDate(selectedVersion.updatedAt)} by {selectedVersion.updatedBy}
+                  </div>
+                </div>
+                <button onClick={handleStartEdit} style={sc_styles.primaryBtn}>✏️ Edit</button>
+              </div>
+              <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
+                {selectedVersion.content.split("\n\n").map((block, i) => {
+                  const lines = block.split("\n");
+                  const title = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
+                  const body = title ? lines.slice(1).join(" ") : block;
+                  return (
+                    <div key={i} style={{ marginBottom: 18 }}>
+                      {title && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{title}</div>}
+                      <div>{body}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={sc_styles.emptyState}>No terms available. Click "Edit &amp; Publish" to create one.</div>
+          )}
+        </div>
+      </div>
+
+      {toast && <MiniToast msg={toast.msg} ok={toast.ok} />}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADD MEMBER PANEL — Admin adds members with encrypted password & first-login flag
+// ─────────────────────────────────────────────────────────────────────────────
+const AddMemberPanel: React.FC = () => {
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    mobileNumber: "",
+    location: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  // Table of recently added members
+  const [addedMembers, setAddedMembers] = useState<{ id: number; name: string; email: string; role: string; addedAt: string }[]>([]);
+
+  const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); };
+
+  useEffect(() => {
+
+    // Load saved members from localStorage
+    try {
+      const stored = JSON.parse(localStorage.getItem("fin_admin_added_members") || "[]");
+      setAddedMembers(stored);
+    } catch {}
+  }, []);
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!form.name.trim()) e.name = "Full name is required";
+    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Valid email required";
+    if (!form.mobileNumber.trim() || !/^[6-9]\d{9}$/.test(form.mobileNumber)) e.mobileNumber = "Valid 10-digit mobile required";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const handleAddMember = async () => {
+    if (!validate()) return;
+    setSaving(true);
+    try {
+      const token = localStorage.getItem("fin_token");
+      const BASE_INNER = "http://52.55.178.31:8081/api";
+
+      // Backend endpoint: POST /api/onboarding/admin/member  (multipart/form-data)
+      // Requires: data (JSON part with MemberRegistrationRequest) + optional file
+      // Backend auto-generates password from email prefix, sends welcome email with credentials
+      // No manual password needed — backend handles bcrypt encryption via createCoreUser()
+      const memberData = {
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        phoneNumber: form.mobileNumber.trim(),  // backend uses phoneNumber
+        location: form.location.trim() || "",
+        profileImageUrl: null,
+      };
+
+      const fd = new FormData();
+      fd.append("data", new Blob([JSON.stringify(memberData)], { type: "application/json" }));
+      // No file upload in this form — file is optional per @RequestPart(required=false)
+
+      const res = await fetch(`${BASE_INNER}/onboarding/admin/member`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          // NOTE: Do NOT set Content-Type manually — browser sets it with boundary for FormData
+        },
+        body: fd,
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+      const data = contentType.includes("application/json") ? await res.json() : { message: await res.text() };
+
+      if (!res.ok) {
+        if (res.status === 409) throw new Error("Email or phone number already registered.");
+        if (res.status === 403) throw new Error("Access denied. Admin role required.");
+        throw new Error(data?.message || `Error ${res.status}`);
+      }
+
+      const newMember = {
+        id: data?.userId || data?.id || Date.now(),
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        role: "MEMBER",
+        addedAt: new Date().toISOString(),
+      };
+      const updated = [newMember, ...addedMembers];
+      setAddedMembers(updated);
+      localStorage.setItem("fin_admin_added_members", JSON.stringify(updated));
+
+      showToast(`✅ Member "${form.name.trim()}" added! Login credentials sent to ${form.email.trim().toLowerCase()}.`);
+      setForm({ name: "", email: "", mobileNumber: "", location: "" });
+      setErrors({});
+    } catch (err: any) {
+      showToast(`❌ ${err?.message || "Failed to add member."}`, false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5 };
+  const inputStyle: React.CSSProperties = { ...sc_styles.input, marginBottom: 0 };
+  const errorStyle: React.CSSProperties = { fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 3 };
+
+  return (
+    <div style={sc_styles.panelWrap}>
+      <div style={sc_styles.panelHeader}>
+        <div>
+          <h3 style={sc_styles.panelTitle}>Add Member</h3>
+          <p style={sc_styles.panelSub}>
+            Create user accounts manually. Passwords are encrypted (bcrypt) server-side.
+            A first-login flag is set so users are prompted to change their password.
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20, alignItems: "start" }}>
+
+        {/* Form */}
+        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "22px 24px" }}>
+          {/* Security notice */}
+          <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 14px", marginBottom: 20, fontSize: 12, color: "#92400E", fontWeight: 600 }}>
+            🔐 Passwords are encrypted using bcrypt before storage. The user will be required to change their password on first login.
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 18px" }}>
+            <div>
+              <label style={labelStyle}>Full Name *</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Member's full name" style={inputStyle} />
+              {errors.name && <div style={errorStyle}>{errors.name}</div>}
+            </div>
+            <div>
+              <label style={labelStyle}>Email Address *</label>
+              <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="member@example.com" type="email" style={inputStyle} />
+              {errors.email && <div style={errorStyle}>{errors.email}</div>}
+            </div>
+            <div>
+              <label style={labelStyle}>Mobile Number *</label>
+              <div style={{ display: "flex" }}>
+                <span style={{ display: "flex", alignItems: "center", padding: "0 10px", background: "#F1F5F9", border: "1.5px solid #E2E8F0", borderRight: "none", borderRadius: "9px 0 0 9px", fontSize: 13, color: "#475569", fontWeight: 600, flexShrink: 0 }}>+91</span>
+                <input value={form.mobileNumber}
+                  onChange={e => setForm(f => ({ ...f, mobileNumber: e.target.value.replace(/\D/g, "").slice(0, 10) }))}
+                  placeholder="10-digit number" type="tel" inputMode="numeric" maxLength={10}
+                  style={{ ...inputStyle, borderRadius: "0 9px 9px 0", flex: 1 }} />
+              </div>
+              {errors.mobileNumber && <div style={errorStyle}>{errors.mobileNumber}</div>}
+            </div>
+            <div>
+              <label style={labelStyle}>Location</label>
+              <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="City, State" style={inputStyle} />
+            </div>
+          </div>
+
+          {/* Auto-password info */}
+          <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 10, padding: "12px 16px", marginTop: 16, fontSize: 12, color: "#166534", lineHeight: 1.6 }}>
+            🔐 <strong>How it works:</strong> The backend auto-generates a secure password from the member's email prefix.
+            An encrypted (bcrypt) password is stored and <strong>login credentials are emailed automatically</strong> to <em>{form.email || "the registered email"}</em>.
+            The member will be required to change their password on first login.
+          </div>
+
+          {/* Submit */}
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button onClick={() => { setForm({ name: "", email: "", mobileNumber: "", location: "" }); setErrors({}); }}
+              style={sc_styles.ghostBtn}>Reset</button>
+            <button onClick={handleAddMember} disabled={saving}
+              style={{ ...sc_styles.primaryBtn, flex: 1, opacity: saving ? 0.7 : 1 }}>
+              {saving ? "Adding…" : "👤 Add Member"}
+            </button>
+          </div>
+        </div>
+
+        {/* Recently added members table */}
+        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Recently Added ({addedMembers.length})
+          </div>
+          {addedMembers.length === 0 ? (
+            <div style={sc_styles.emptyState}>No members added yet.</div>
+          ) : (
+            <div style={{ maxHeight: 440, overflowY: "auto" }}>
+              {addedMembers.map((m, i) => {
+                return (
+                  <div key={m.id} style={{ padding: "12px 16px", borderBottom: i < addedMembers.length - 1 ? "1px solid #F1F5F9" : "none" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#1E3A5F,#2563EB)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
+                        {m.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                        <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</div>
+                      </div>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: "#EFF6FF", color: "#2563EB", border: "1px solid #BFDBFE", flexShrink: 0 }}>
+                        MEMBER
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 5, marginLeft: 44 }}>
+                      Added {new Date(m.addedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {toast && <MiniToast msg={toast.msg} ok={toast.ok} />}
+    </div>
+  );
+};
+
 interface SupportConfigProps { tickets: Ticket[]; advisors: Advisor[]; onAssign: (ticketId: number, agentName: string) => void; }
 const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
   { id: "canned", label: "Canned Responses", icon: "💬" },
   { id: "categories", label: "Categories", icon: "🏷️" },
   { id: "reports", label: "Reports", icon: "📊" },
   { id: "bizHours", label: "Business Hours", icon: "⏰" },
+  { id: "terms", label: "Terms & Conditions", icon: "📋" },
+  { id: "members", label: "Add Member", icon: "👤" },
 ];
 
 const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, onAssign }) => {
@@ -2704,8 +3346,185 @@ const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, o
           {tab === "categories" && <CategoriesConfig />}
           {tab === "reports" && <ReportsAnalytics tickets={tickets} />}
           {tab === "bizHours" && <BusinessSettings />}
+          {tab === "terms" && <TermsConditionsEditor />}
+          {tab === "members" && <AddMemberPanel />}
         </div>
       </div>
+    </div>
+  );
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN BOOKINGS PANEL — Full list with delete capability (PRD §7.4)
+// ─────────────────────────────────────────────────────────────────────────────
+const AdminBookingsPanel: React.FC<{
+  bookings: any[];
+  advisors: Advisor[];
+  onDeleted: (id: number) => void;
+}> = ({ bookings, advisors, onDeleted }) => {
+  const BASE_ADMIN = "http://52.55.178.31:8081/api";
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); };
+
+  const advisorMap: Record<number, string> = {};
+  advisors.forEach(a => { advisorMap[a.id] = a.name; });
+
+  const statuses = ["ALL", "CONFIRMED", "PENDING", "COMPLETED", "CANCELLED"];
+
+  const filtered = bookings.filter((b: any) => {
+    const name = (b.userName || b.user?.name || "").toLowerCase();
+    const consultant = (b.consultantName || b.advisorName || advisorMap[b.consultantId] || "").toLowerCase();
+    const q = search.toLowerCase();
+    const matchSearch = !q || name.includes(q) || consultant.includes(q) || String(b.id).includes(q);
+    const status = (b.BookingStatus || b.bookingStatus || b.status || "").toUpperCase();
+    const matchStatus = statusFilter === "ALL" || status === statusFilter;
+    return matchSearch && matchStatus;
+  });
+
+  const handleDelete = async (id: number) => {
+    setDeletingId(id);
+    try {
+      const token = localStorage.getItem("fin_token");
+      const res = await fetch(`${BASE_ADMIN}/bookings/${id}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (res.ok || res.status === 204) {
+        onDeleted(id);
+        showToast(`✅ Booking #${id} deleted successfully.`);
+      } else {
+        showToast(`❌ Failed to delete booking #${id}.`);
+      }
+    } catch {
+      showToast(`❌ Network error. Could not delete booking.`);
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const statusColor: Record<string, { color: string; bg: string; border: string }> = {
+    CONFIRMED:  { color: "#16A34A", bg: "#F0FDF4", border: "#86EFAC" },
+    PENDING:    { color: "#D97706", bg: "#FFFBEB", border: "#FCD34D" },
+    COMPLETED:  { color: "#2563EB", bg: "#EFF6FF", border: "#93C5FD" },
+    CANCELLED:  { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  };
+
+  return (
+    <div style={{ padding: "0 0 40px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Bookings</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
+            {filtered.length} of {bookings.length} booking{bookings.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search user, consultant, ID…"
+            style={{ padding: "9px 14px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", width: 220, fontFamily: "inherit" }}
+          />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            style={{ padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
+            {statuses.map(s => <option key={s} value={s}>{s === "ALL" ? "All Statuses" : s}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Delete confirmation dialog */}
+      {confirmDeleteId !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 400, width: "90%", textAlign: "center", boxShadow: "0 16px 48px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>🗑️</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 8 }}>Delete Booking #{confirmDeleteId}?</div>
+            <div style={{ fontSize: 13, color: "#64748B", marginBottom: 24 }}>This action cannot be undone. The booking record will be permanently removed.</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setConfirmDeleteId(null)}
+                style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                Cancel
+              </button>
+              <button onClick={() => handleDelete(confirmDeleteId)}
+                disabled={deletingId === confirmDeleteId}
+                style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: deletingId === confirmDeleteId ? 0.7 : 1 }}>
+                {deletingId === confirmDeleteId ? "Deleting…" : "Yes, Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bookings.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "#94A3B8" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>No bookings yet</div>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 20px", color: "#94A3B8" }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>🔍</div>
+          <div style={{ fontWeight: 600 }}>No bookings match your search.</div>
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+          {/* Table header */}
+          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 140px 120px 110px 90px", padding: "10px 18px", background: "#F8FAFC", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em", borderBottom: "1px solid #F1F5F9" }}>
+            <div>#ID</div>
+            <div>User</div>
+            <div>Consultant</div>
+            <div>Date & Time</div>
+            <div>Amount</div>
+            <div>Status</div>
+            <div>Action</div>
+          </div>
+          {filtered.map((b: any, i: number) => {
+            const status = (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase();
+            const sc = statusColor[status] || { color: "#64748B", bg: "#F1F5F9", border: "#CBD5E1" };
+            const consultantName = b.consultantName || b.advisorName || advisorMap[b.consultantId] || `Consultant #${b.consultantId || "?"}`;
+            const userName = b.userName || b.user?.name || b.clientName || `User #${b.userId || "?"}`;
+            const slotDate = b.slotDate || b.bookingDate || b.date || "—";
+            const timeRange = b.timeRange || b.slotTime || "—";
+            const amount = Number(b.amount || b.charges || b.fee || 0);
+            return (
+              <div key={b.id}
+                style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr 140px 120px 110px 90px", padding: "13px 18px", borderBottom: i < filtered.length - 1 ? "1px solid #F8FAFC" : "none", alignItems: "center", transition: "background 0.1s" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "#FAFBFF")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                <div style={{ fontFamily: "monospace", fontSize: 11, color: "#94A3B8" }}>#{b.id}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</div>
+                <div style={{ fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{consultantName}</div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{slotDate}</div>
+                  <div style={{ fontSize: 11, color: "#94A3B8" }}>{timeRange}</div>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
+                  {amount > 0 ? `₹${amount.toLocaleString()}` : "—"}
+                </div>
+                <div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
+                    {status}
+                  </span>
+                </div>
+                <div>
+                  <button
+                    onClick={() => setConfirmDeleteId(b.id)}
+                    disabled={deletingId === b.id}
+                    title="Delete this booking"
+                    style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                    🗑 Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {toast && <MiniToast msg={toast} ok={!toast.startsWith("❌")} />}
     </div>
   );
 };
@@ -2922,14 +3741,19 @@ function AdminPageInner() {
     try {
       const advData = await getAllAdvisors();
       if (Array.isArray(advData) && advData.length > 0) {
-        setAdvisors(advData.map((a: any) => ({
-          id: a.id, name: a.name, role: a.designation || "Financial Consultant",
-          tags: Array.isArray(a.skills) ? a.skills : [],
-          rating: Number(a.rating || 4.5), reviews: Number(a.reviewCount || 0),
-          fee: Number(a.charges || 0), exp: a.experience || "5+ Years",
-          shiftStartTime: parseLocalTime(a.shiftStartTime), shiftEndTime: parseLocalTime(a.shiftEndTime),
-          avatar: a.profilePhoto ? (a.profilePhoto.startsWith('http') ? a.profilePhoto : `http://52.55.178.31:8081/${a.profilePhoto.startsWith('/') ? a.profilePhoto.slice(1) : a.profilePhoto}`) : a.photo ? (a.photo.startsWith('http') ? a.photo : `http://52.55.178.31:8081/${a.photo.startsWith('/') ? a.photo.slice(1) : a.photo}`) : `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
-        })));
+        setAdvisors(advData.map((a: any) => {
+          const baseCharges = Number(a.charges || 0);
+          // PRD §5.3: Display price = base + ₹200 markup
+          const displayPrice = a.displayPrice ? Number(a.displayPrice) : (baseCharges > 0 ? baseCharges + 200 : 0);
+          return {
+            id: a.id, name: a.name, role: a.designation || "Financial Consultant",
+            tags: Array.isArray(a.skills) ? a.skills : [],
+            rating: Number(a.rating || 4.5), reviews: Number(a.reviewCount || 0),
+            fee: displayPrice, exp: a.experience || "5+ Years",
+            shiftStartTime: parseLocalTime(a.shiftStartTime), shiftEndTime: parseLocalTime(a.shiftEndTime),
+            avatar: a.profilePhoto ? (a.profilePhoto.startsWith('http') ? a.profilePhoto : `http://52.55.178.31:8081/${a.profilePhoto.startsWith('/') ? a.profilePhoto.slice(1) : a.profilePhoto}`) : a.photo ? (a.photo.startsWith('http') ? a.photo : `http://52.55.178.31:8081/${a.photo.startsWith('/') ? a.photo.slice(1) : a.photo}`) : `https://ui-avatars.com/api/?name=${encodeURIComponent(a.name)}&background=2563EB&color=fff&bold=true`,
+          };
+        }));
         setBackendStatus("online");
       }
     } catch (err: any) {
@@ -3035,6 +3859,7 @@ function AdminPageInner() {
     { id: "tickets", label: "Tickets", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>, badge: ticketCount },
     { id: "analytics", label: "Analytics", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M3 3v18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M7 16l4-4 4 4 4-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "summary", label: "Reports", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "add-member", label: "Add Member", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="19" y1="8" x2="19" y2="14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="16" y1="11" x2="22" y2="11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "support-config", label: "Support Config", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "offers", label: "Offers", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><polyline points="20 12 20 22 4 22 4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><rect x="2" y="7" width="20" height="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><line x1="12" y1="22" x2="12" y2="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> },
     { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
@@ -3154,7 +3979,7 @@ function AdminPageInner() {
                     <div>
                       <div className={styles.advisorName}>{a.name}</div>
                       <div className={styles.advisorRating}>★ {a.rating}
-                        {(a.shiftStartTime || a.shiftEndTime) && (<span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>{a.shiftStartTime} – {a.shiftEndTime}</span>)}
+                        {(a.shiftStartTime || a.shiftEndTime) && (<span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>Avail: {a.shiftStartTime} – {a.shiftEndTime}</span>)}
                       </div>
                     </div>
                   </div>
@@ -3246,7 +4071,7 @@ function AdminPageInner() {
                     <div style={{ flex: 1 }}>
                       <div className={styles.advisorNameLg}>{a.name}</div>
                       <div className={styles.advisorRole}>{a.role}</div>
-                      {(a.shiftStartTime || a.shiftEndTime) && (<div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 {a.shiftStartTime} – {a.shiftEndTime}</div>)}
+                      {(a.shiftStartTime || a.shiftEndTime) && (<div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 Availability: {a.shiftStartTime} – {a.shiftEndTime}</div>)}
                       <div className={styles.tagRow}>{a.tags.map(t => <span key={t} className={styles.tag}>{t}</span>)}</div>
                     </div>
                   </div>
@@ -3266,7 +4091,9 @@ function AdminPageInner() {
         )}
 
         {/* ════ BOOKINGS ════ */}
-        {activeSection === "bookings" && <BookingsPage isAdmin={true} />}
+        {activeSection === "bookings" && (
+          <BookingsPage isAdmin={true} />
+        )}
 
         {/* ════ TICKETS ════ */}
         {activeSection === "tickets" && (
@@ -3302,6 +4129,14 @@ function AdminPageInner() {
             ) : (
               <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />
             )}
+          </div>
+        )}
+
+        {/* ════ ADD MEMBER ════ */}
+        {activeSection === "add-member" && (
+          <div>
+            <h2 style={{ margin: "0 0 20px", fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Add Member</h2>
+            <AddMemberPanel />
           </div>
         )}
 

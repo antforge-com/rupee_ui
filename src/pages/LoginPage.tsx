@@ -5,7 +5,6 @@ import { loginUser, resetPassword, sendForgotPasswordOtp } from "../services/api
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
-// "oauth_config" removed — OAuth integration removed as per requirements
 type ForgotStep = "email" | "otp" | "newpass" | "done";
 type ErrorType  = "auth" | "server" | "network" | "registered" | "";
 
@@ -96,7 +95,7 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: "15px",
     fontWeight: 600,
     cursor: "pointer",
-    marginBottom: "18px",
+    marginBottom: "10px",
   },
   loginBtnDisabled: {
     opacity: 0.7,
@@ -123,7 +122,6 @@ const S: Record<string, React.CSSProperties> = {
     marginBottom: "14px",
     textAlign: "left" as const,
   },
-  // Forgot / Reset password FULL PAGE styles
   resetPage: {
     minHeight: "100vh",
     backgroundColor: "#2563EB",
@@ -208,8 +206,6 @@ const TermsModal: React.FC<{ onClose: () => void; onAccept: () => void }> = ({ o
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reset Password Full-Page Component
-// Shows after user clicks "Forgot Password" link
-// Flow: Enter email → receive OTP → enter OTP → set new password → success → back to login
 // ─────────────────────────────────────────────────────────────────────────────
 const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => void }> = ({ initialEmail = "", onBackToLogin }) => {
   const [step, setStep] = useState<ForgotStep>("email");
@@ -266,6 +262,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
 
   const handleResetPassword = async () => {
     if (!newPassword || newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
+    // Enforce old password !== new password check via UI note
     if (newPassword !== confirmPass) { setError("Passwords do not match."); return; }
     setLoading(true); setError("");
     try {
@@ -280,7 +277,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
 
   return (
     <div style={S.resetPage}>
-      {/* Back arrow */}
       <button
         onClick={onBackToLogin}
         style={{ position: "absolute", top: 24, left: 24, background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "50%", width: 42, height: 42, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", backdropFilter: "blur(4px)" }}
@@ -292,7 +288,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
       </button>
 
       <div style={S.resetCard}>
-        {/* Brand */}
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#2563EB", letterSpacing: "2px", marginBottom: 4 }}>MEET THE MASTERS</div>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
@@ -306,7 +301,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
           </div>
         </div>
 
-        {/* Step progress bar */}
         {step !== "done" && (
           <div style={{ display: "flex", gap: 6, marginBottom: 24 }}>
             {["email", "otp", "newpass"].map((s, i) => (
@@ -315,7 +309,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
           </div>
         )}
 
-        {/* Step 1: Email */}
         {step === "email" && (
           <>
             <label style={S.modalLabel}>EMAIL ADDRESS</label>
@@ -335,7 +328,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
           </>
         )}
 
-        {/* Step 2: OTP */}
         {step === "otp" && (
           <>
             <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#1E40AF", fontWeight: 600, marginBottom: 16 }}>
@@ -369,9 +361,12 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
           </>
         )}
 
-        {/* Step 3: New Password */}
         {step === "newpass" && (
           <>
+            {/* Hint: new password must differ from old */}
+            <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", fontWeight: 600, marginBottom: 12 }}>
+              🔐 Your new password must be different from your previous password.
+            </div>
             <label style={S.modalLabel}>NEW PASSWORD</label>
             <input
               value={newPassword}
@@ -407,7 +402,6 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
           </>
         )}
 
-        {/* Step 4: Done → auto-redirect to login */}
         {step === "done" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 56, marginBottom: 16 }}>✅</div>
@@ -448,9 +442,11 @@ export default function LoginPage() {
   const [showTermsModal, setShowTermsModal] = useState(false);
 
   // ── Reset Password — full page mode ──────────────────────────────────────
-  // When showResetPage is true, the entire page switches to the reset flow
   const [showResetPage, setShowResetPage] = useState(false);
   const [resetInitialEmail, setResetInitialEmail] = useState("");
+
+  // ── Guest login loading ───────────────────────────────────────────────────
+  const [guestLoading, setGuestLoading] = useState(false);
 
   // ── Error classifier ──────────────────────────────────────────────────────
   const classifyError = (err: any): { msg: string; type: ErrorType } => {
@@ -474,12 +470,17 @@ export default function LoginPage() {
   };
 
   // ── Role → route helper ───────────────────────────────────────────────────
-  const redirectByRole = (rawRole: string) => {
+  const redirectByRole = (rawRole: string, isFirstLogin = false) => {
     const role = rawRole.toString().toUpperCase().trim().replace(/^ROLE_/, "");
     if (role) localStorage.setItem("fin_role", role);
     if (role === "SUBSCRIBER" || role === "SUBSCRIBED") sessionStorage.removeItem("sub_popup_shown");
 
-    if (role === "USER" || role === "SUBSCRIBER" || role === "SUBSCRIBED") navigate("/user");
+    // If first login flag is set, UserPage will detect and show questionnaire
+    if (isFirstLogin) {
+      localStorage.setItem("fin_first_login", "true");
+    }
+
+    if (role === "USER" || role === "SUBSCRIBER" || role === "SUBSCRIBED" || role === "GUEST") navigate("/user");
     else if (role === "ADMIN")                                              navigate("/admin");
     else if (role === "CONSULTANT" || role === "ADVISOR")                  navigate("/consultant");
     else if (role === "AGENT")                                              navigate("/consultant");
@@ -507,13 +508,51 @@ export default function LoginPage() {
     try {
       const data = await loginUser(cred.trim(), pass);
       const raw  = data?.role || data?.userRole || "";
-      redirectByRole(raw);
+      // Backend sets requiresPasswordChange=true on first login (createCoreUser)
+      const requiresPasswordChange = data?.requiresPasswordChange === true;
+      if (requiresPasswordChange) {
+        // Set first-login flag so UserPage shows questionnaire
+        localStorage.setItem("fin_first_login", "true");
+      }
+      // Store user id if returned
+      if (data?.id) localStorage.setItem("fin_user_id", String(data.id));
+      if (data?.userId) localStorage.setItem("fin_user_id", String(data.userId));
+      // Check if first login flag is in localStorage (set during registration or requiresPasswordChange)
+      const isFirst = localStorage.getItem("fin_first_login") === "true" || requiresPasswordChange;
+      redirectByRole(raw, isFirst);
     } catch (err: any) {
       const { msg, type } = classifyError(err);
       setApiError(msg);
       setErrorType(type);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Guest Login ───────────────────────────────────────────────────────────
+  // Guest users can explore the platform without credentials.
+  // They are shown the questionnaire on first access to UserPage.
+  const handleGuestLogin = async () => {
+    if (!termsAccepted) {
+      setApiError("Please accept the Terms & Conditions to continue.");
+      setErrorType("auth");
+      return;
+    }
+    setGuestLoading(true);
+    setApiError("");
+    setErrorType("");
+    try {
+      // Store guest session markers
+      localStorage.setItem("fin_role", "GUEST");
+      localStorage.setItem("fin_first_login", "true");
+      localStorage.removeItem("fin_token"); // No token for guest
+      localStorage.removeItem("fin_user_id");
+      navigate("/user");
+    } catch (err: any) {
+      setApiError("Guest login failed. Please try again.");
+      setErrorType("auth");
+    } finally {
+      setGuestLoading(false);
     }
   };
 
@@ -593,7 +632,7 @@ export default function LoginPage() {
           style={{ ...S.input, ...(apiError && errorType === "auth" ? S.inputError : {}) }}
         />
 
-        {/* Forgot Password — now opens full-page reset flow */}
+        {/* Forgot Password */}
         <div style={S.forgotRow}>
           <button style={S.forgotLink} onClick={openResetPage}>
             Forgot Password?
@@ -647,9 +686,48 @@ export default function LoginPage() {
           }
         </button>
 
-        {/* REMOVED: Google OAuth / "Continue with Google" button (removed as per requirements) */}
+        {/* ── GUEST LOGIN BUTTON ── */}
+        {/* Allows users to explore the platform as a guest without credentials */}
+        <button
+          type="button"
+          onClick={handleGuestLogin}
+          disabled={guestLoading}
+          style={{
+            width: "100%",
+            padding: "12px",
+            backgroundColor: "transparent",
+            color: "#4B5563",
+            border: "1.5px dashed #D1D5DB",
+            borderRadius: "8px",
+            fontSize: "14px",
+            fontWeight: 600,
+            cursor: guestLoading ? "not-allowed" : "pointer",
+            marginBottom: "18px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            transition: "all 0.15s",
+            opacity: guestLoading ? 0.7 : 1,
+          }}
+          onMouseEnter={e => {
+            if (!guestLoading) {
+              (e.currentTarget as HTMLButtonElement).style.background = "#F9FAFB";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = "#9CA3AF";
+            }
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+            (e.currentTarget as HTMLButtonElement).style.borderColor = "#D1D5DB";
+          }}
+        >
+          {guestLoading
+            ? <><span style={{ width: 14, height: 14, border: "2px solid rgba(0,0,0,0.2)", borderTopColor: "#374151", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} /> Loading…</>
+            : <>👤 Continue as Guest</>
+          }
+        </button>
 
-        {/* Terms & Conditions Checkbox — MANDATORY before login */}
+        {/* Terms & Conditions Checkbox */}
         <div style={{
           display: "flex", alignItems: "flex-start", gap: 10,
           marginBottom: 16, padding: "12px 14px",

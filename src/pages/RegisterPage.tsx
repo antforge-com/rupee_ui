@@ -58,8 +58,6 @@ interface Plan {
   tag?: string;
 }
 
-// CHANGED: Removed IncomeItem and ExpenseItem interfaces as per requirements
-
 const isFree = (plan: Plan) => plan.discountPrice === 0;
 
 const sanitizeEmail = (raw: string): string =>
@@ -70,9 +68,9 @@ const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 // Mobile number validation — 10-digit Indian mobile
 const MOBILE_REGEX = /^[6-9]\d{9}$/;
 
-// ── Display name for "Free" tier → "Members" (CHANGED as per requirements)
+// CHANGED: "Members" → "Guest" for the free tier display
 const getPlanDisplayName = (plan: Plan): string => {
-  if (isFree(plan)) return "Members";
+  if (isFree(plan)) return "Guest";
   return plan.name;
 };
 
@@ -80,16 +78,13 @@ export default function RegisterPage() {
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
-  // REMOVED: dob, identifier states (DOB and PAN removed as per requirements)
-  const [mobileNumber, setMobileNumber] = useState(""); // ADDED: mandatory mobile number
+  const [mobileNumber, setMobileNumber] = useState("");
   const [email, setEmail] = useState("");
   const [location, setLocation] = useState("");
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [plansLoading, setPlansLoading] = useState(true);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-
-  // REMOVED: incomeItems, expenseItems, showIncomePopup, showExpensePopup, popupLabel, popupAmount states
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -267,7 +262,6 @@ export default function RegisterPage() {
 
     if (!name.trim()) e.name = "Full name is required";
 
-    // ADDED: Mobile number mandatory validation
     const cleanMobile = mobileNumber.replace(/\s/g, "");
     if (!cleanMobile) {
       e.mobileNumber = "Mobile number is required";
@@ -283,9 +277,6 @@ export default function RegisterPage() {
     } else if (!emailVerified) {
       e.email = "Please verify your email before submitting";
     }
-
-    // REMOVED: DOB validation (removed as per requirements)
-    // REMOVED: PAN/Aadhar identifier validation (removed as per requirements)
 
     if (!selectedPlan) e.plan = "Please select a subscription plan";
 
@@ -308,13 +299,13 @@ export default function RegisterPage() {
         name: name.trim(),
         email: cleanEmail,
         otp: confirmedOtp,
-        // REMOVED: dob field
-        // REMOVED: identifier (PAN) field
-        mobileNumber: cleanMobile,           // ADDED: mobile number
+        // Backend UserRegistrationRequest uses `phoneNumber` field (NOT mobileNumber)
+        phoneNumber: cleanMobile,
+        mobileNumber: cleanMobile, // Keep both for compatibility
         location: location.trim() || "",
         subscriptionPlanId: planId,
         subscribed: !isFree(selectedPlan!),
-        // REMOVED: incomes and expenses arrays
+        isGuest: isFree(selectedPlan!),
       };
 
       console.log("📤 Sending Payload:", JSON.stringify(registerPayload, null, 2));
@@ -326,11 +317,15 @@ export default function RegisterPage() {
 
       if (data?.token) {
         localStorage.setItem("fin_token", data.token);
-        const registeredRole = data.role
-          ? data.role.toString().toUpperCase().trim().replace(/^ROLE_/, "")
-          : (!isFree(selectedPlan!) ? "SUBSCRIBER" : "USER");
+        const rawRole = data.role || data.userRole || "";
+        const registeredRole = rawRole
+          ? rawRole.toString().toUpperCase().trim().replace(/^ROLE_/, "")
+          : (!isFree(selectedPlan!) ? "SUBSCRIBER" : "GUEST");
         localStorage.setItem("fin_role", registeredRole);
         if (data.id) localStorage.setItem("fin_user_id", String(data.id));
+        if (data.userId) localStorage.setItem("fin_user_id", String(data.userId));
+        // Flag first-time login so user page can show questionnaire
+        localStorage.setItem("fin_first_login", "true");
       }
 
       setSuccess(true);
@@ -360,7 +355,6 @@ export default function RegisterPage() {
                 ? `Subscribed to ${selectedPlan.name}!`
                 : "Account Created!"}
             </div>
-            {/* ADDED: Inform user that credentials email has been sent */}
             <div className={styles.successSub}>
               Your login credentials have been sent to your email. Redirecting to login…
             </div>
@@ -381,8 +375,6 @@ export default function RegisterPage() {
         <div style={{ width: 36 }} />
       </div>
 
-      {/* REMOVED: Income/Expense popup overlay (removed as per requirements) */}
-
       <div className={styles.content}>
 
         {/* ── Personal Details ── */}
@@ -394,7 +386,7 @@ export default function RegisterPage() {
             placeholder="Enter your full name" className={`${styles.input} ${errors.name ? styles.inputError : ""}`} />
           {errors.name && <div className={styles.errorMsg}>{errors.name}</div>}
 
-          {/* ADDED: Mobile Number — mandatory field */}
+          {/* Mobile Number */}
           <label className={styles.label} style={{ marginTop: 14 }}>MOBILE NUMBER <span className={styles.required}>*</span></label>
           <div style={{ display: "flex", gap: 0 }}>
             <span style={{
@@ -598,26 +590,23 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {/* REMOVED: Date of Birth field */}
-          {/* REMOVED: PAN/Aadhar identifier field */}
-
           <label className={styles.label} style={{ marginTop: 14 }}>LOCATION <span className={styles.optional}>(Optional)</span></label>
           <input value={location} onChange={e => setLocation(e.target.value)} placeholder="City, State" className={styles.input} />
         </div>
 
-        {/* REMOVED: Income section (removed as per requirements) */}
-        {/* REMOVED: Expenses section (removed as per requirements) */}
-
         {/* ── Subscription Plans ── */}
         <div className={styles.section}>
           <div className={styles.sectionTitle}>Choose Your Plan</div>
+
+          {/* REMOVED: "Members — basic access only" chip as per requirements */}
+          {/* Only show the subscribed badge */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
             <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "8px 14px", fontSize: 12, color: "#1E40AF", fontWeight: 600 }}>
-              ✅ Subscribed — full access to consultant bookings & features
+              ✅ Subscribed — full access to consultant bookings &amp; features
             </div>
-            {/* CHANGED: "Free" label renamed to "Members" */}
+            {/* CHANGED: "Members" → "Guest" with free access indicator */}
             <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "8px 14px", fontSize: 12, color: "#64748B", fontWeight: 600 }}>
-              ○ Members — basic access only
+              👤 Guest — explore with limited access
             </div>
           </div>
 
@@ -637,7 +626,7 @@ export default function RegisterPage() {
               {plans.map(plan => {
                 const free = isFree(plan);
                 const selected = selectedPlan?.id === plan.id;
-                // CHANGED: display "Members" instead of "Free"
+                // CHANGED: free tier label is now "Guest"
                 const displayName = getPlanDisplayName(plan);
                 return (
                   <div key={plan.id}
@@ -646,18 +635,21 @@ export default function RegisterPage() {
                     className={styles.planCard}
                   >
                     {plan.tag && <span style={{ position: "absolute", top: -10, right: 14, background: "#2563EB", color: "#fff", fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 20, letterSpacing: "0.06em" }}>{plan.tag}</span>}
+                    {/* "FREE" badge for guest tier */}
+                    {free && <span style={{ position: "absolute", top: -10, right: 14, background: "#64748B", color: "#fff", fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 20, letterSpacing: "0.06em" }}>FREE</span>}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          {/* CHANGED: Show "Members" instead of plan.name when free */}
+                          {/* CHANGED: Show "Guest" instead of plan.name when free */}
                           <span style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>{displayName}</span>
                           {!free && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC" }}>SUBSCRIBED</span>}
+                          {free && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#F1F5F9", color: "#64748B", border: "1px solid #E2E8F0" }}>GUEST</span>}
                         </div>
                         <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>{plan.features}</div>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
-                        {/* CHANGED: Show "Members" label for free tier price display */}
-                        <div style={{ fontSize: 18, fontWeight: 800, color: free ? "#94A3B8" : "#2563EB" }}>{free ? "Members" : `₹${plan.discountPrice}`}</div>
+                        {/* CHANGED: Show "Guest" label for free tier price display */}
+                        <div style={{ fontSize: 18, fontWeight: 800, color: free ? "#94A3B8" : "#2563EB" }}>{free ? "Free" : `₹${plan.discountPrice}`}</div>
                         <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${selected ? "#2563EB" : "#CBD5E1"}`, display: "flex", alignItems: "center", justifyContent: "center", background: selected ? "#2563EB" : "#fff" }}>
                           {selected && <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff" }} />}
                         </div>
@@ -671,21 +663,21 @@ export default function RegisterPage() {
           {errors.plan && <div className={styles.errorMsg}>{errors.plan}</div>}
           {selectedPlan && (
             <div style={{ marginTop: 12, padding: "12px 16px", background: isFree(selectedPlan) ? "#F8FAFC" : "#F0FDF4", border: `1px solid ${isFree(selectedPlan) ? "#E2E8F0" : "#86EFAC"}`, borderRadius: 10, fontSize: 13, color: isFree(selectedPlan) ? "#64748B" : "#166534", fontWeight: 600 }}>
-              {/* CHANGED: "Free account" → "Members account" */}
+              {/* CHANGED: "Free account" → "Guest account" */}
               {isFree(selectedPlan)
-                ? "○ You're signing up as a Member — basic features only."
+                ? "👤 You're signing up as a Guest — explore with limited features."
                 : `✅ You'll be subscribed to ${selectedPlan.name} (₹${selectedPlan.discountPrice}) — full access enabled.`}
             </div>
           )}
         </div>
 
-        {/* ADDED: Info about credentials email being sent */}
+        {/* Note about credentials email */}
         <div style={{
           background: "#F0FDF4", border: "1px solid #86EFAC",
           borderRadius: 10, padding: "12px 16px", marginBottom: 12,
           fontSize: 13, color: "#166534",
         }}>
-          📧 <strong>Note:</strong> After registration, your login credentials (username & password) will be sent to your registered email address.
+          📧 <strong>Note:</strong> After registration, your login credentials (username &amp; password) will be sent to your registered email address.
         </div>
 
         {apiError && (
@@ -706,7 +698,7 @@ export default function RegisterPage() {
               ? "Verify Email to Continue"
               : selectedPlan && !isFree(selectedPlan)
                 ? `Subscribe & Create Account (₹${selectedPlan.discountPrice})`
-                : "Create Members Account"
+                : "Create Guest Account"
           }
         </button>
 

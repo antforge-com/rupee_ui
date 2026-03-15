@@ -322,7 +322,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
     <div className="advisor-modal-overlay">
       <div className="advisor-card" style={{ maxWidth: 680, width: "100%" }}>
         <div className="advisor-header">
-          <h1 className="brand-title">FINADVISE</h1>
+          <h1 className="brand-title">MEET THE MASTERS</h1>
           <p className="brand-subtitle">ADD NEW CONSULTANT</p>
         </div>
 
@@ -339,7 +339,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
 
           <div className="form-group">
             <label>EMAIL (LOGIN ID) <span className="required">*</span></label>
-            <input type="email" name="email" placeholder="e.g. name@finadvise.com"
+            <input type="email" name="email" placeholder="e.g. name@meetthemasters.com"
               value={formData.email} onChange={handleChange} disabled={loading} />
           </div>
 

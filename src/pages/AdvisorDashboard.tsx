@@ -565,7 +565,11 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       <div style={{ width: selected ? 340 : '100%', flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #E2E8F0', transition: 'width 0.2s', overflow: 'hidden' }}>
         <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #F1F5F9' }}>
-          <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
+          <h2 style={{ margin: '0 0 10px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
+          {/* Email-to-ticket info for consultants */}
+          <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: '#1E40AF' }}>
+            📧 <strong>Email-to-Ticket:</strong> Users can email <strong>support@meetthemasters.in</strong> — emails auto-convert to tickets assigned to you.
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 12 }}>
             {[
               { l: 'Total', v: stats.total, c: '#2563EB', bg: '#EFF6FF' },
@@ -1292,7 +1296,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                     {amount > 0 && <span style={{ color: '#16A34A', fontWeight: 600 }}>₹{amount.toLocaleString()}</span>}
                   </div>
                   <div style={{ fontSize: 11, color: '#94A3B8' }}>
-                    🔗 Room: <span style={{ fontFamily: 'monospace', color: '#2563EB' }}>finadvise-booking-{booking.id}</span>
+                    🔗 Room: <span style={{ fontFamily: 'monospace', color: '#2563EB' }}>meetthemasters-booking-{booking.id}</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1300,7 +1304,7 @@ const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
                     {status || 'UNKNOWN'}
                   </span>
                   {status !== 'CANCELLED' && (
-                    <a href={booking.meetingLink || booking.jitsiLink || booking.joinUrl || `https://meet.jit.si/finadvise-booking-${booking.id}`}
+                    <a href={booking.meetingLink || booking.jitsiLink || booking.joinUrl || `https://meet.jit.si/meetthemasters-booking-${booking.id}`}
                       target="_blank" rel="noreferrer"
                       style={{ padding: '7px 16px', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(37,99,235,0.3)' }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

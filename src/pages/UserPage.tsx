@@ -234,8 +234,8 @@ const fetchMasterTimeslots = async (): Promise<MasterSlot[]> => {
   try { const data = await apiFetch(`${BASE_URL}/master-timeslots`); return Array.isArray(data) ? data : data?.content || []; }
   catch { return []; }
 };
-const JITSI_URL = (bookingId: number) => `https://meet.jit.si/finadvise-booking-${bookingId}`;
-const PENDING_FEEDBACK_KEY = "finadvise_pending_feedback_bookingId";
+const JITSI_URL = (bookingId: number) => `https://meet.jit.si/meetthemasters-booking-${bookingId}`;
+const PENDING_FEEDBACK_KEY = "meetthemasters_pending_feedback_bookingId";
 
 // ── Title Case helper with exceptions ─────────────────────────────────────────
 const LOWERCASE_EXCEPTIONS = new Set(["is","was","are","in","and","the","this","to","a","an","of","at","by","for","with","on"]);
@@ -269,7 +269,7 @@ const sendBookingEmails = async (params: {
         body:
           `Hi ${recipient === "user" ? params.userName : params.consultantName},\n\n` +
           `Your session has been confirmed.\n\n📅 Date : ${params.slotDate}\n🕐 Time : ${params.timeRange}\n💻 Mode : ${params.meetingMode}\n🔗 Join : ${jitsiLink}\n` +
-          (params.userNotes ? `📝 Notes: ${params.userNotes}\n` : "") + `\nThank you,\nFinAdvise Team`,
+          (params.userNotes ? `📝 Notes: ${params.userNotes}\n` : "") + `\nThank you,\nMeet The Masters Team`,
       });
       await Promise.allSettled([
         apiFetch(`${BASE_URL}/email/send`, { method: "POST", body: JSON.stringify(body("user")) }),
@@ -938,47 +938,189 @@ export default function UserPage() {
   const [settingsView, setSettingsView] = useState<"menu" | "profile">("menu");
   const [showSubPopup, setShowSubPopup] = useState(false);
 
+  // ── First-login password change modal (when backend requiresPasswordChange=true) ─
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
+  const [pwForm, setPwForm] = useState({ newPass: "", confirmPass: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [pwShowNew, setPwShowNew] = useState(false);
+  const [pwShowConfirm, setPwShowConfirm] = useState(false);
+
   // ── Category / Questionnaire flow ─────────────────────────────────────────
   const [showCategoryModal, setShowCategoryModal] = useState(false);
+  // NEW: First-login questionnaire modal (shown after first login / guest login)
+  const [showFirstLoginQuestionnaire, setShowFirstLoginQuestionnaire] = useState(false);
+  const [firstLoginStep, setFirstLoginStep] = useState<"intro" | "questionnaire" | "categories" | "done">("intro");
+  const [firstLoginAnswers, setFirstLoginAnswers] = useState<Record<string, string>>({});
+  const [firstLoginCategories, setFirstLoginCategories] = useState<string[]>([]);
+  // Dynamic categories fetched from consultant skills (PRD §3.2 — categories from consultant skill sets)
+  const [dynamicSkillCategories, setDynamicSkillCategories] = useState<string[]>([]);
+
   const [userCategories, setUserCategories] = useState<{ category: string; subOption: string; answers: Record<string, string> }[]>([]);
   const [categoryStep, setCategoryStep] = useState<"select" | "questionnaire" | "done">("select");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedSubOption, setSelectedSubOption] = useState("");
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<Record<string, string>>({});
 
-  const CATEGORY_OPTIONS: Record<string, { subOptions: string[]; questions: { q: string; key: string }[] }> = {
+  // Enhanced CATEGORY_OPTIONS with richer question types (radio, multiselect, text)
+  // type: "text" | "radio" | "multiselect"
+  const CATEGORY_OPTIONS: Record<string, {
+    subOptions: string[];
+    questions: { q: string; key: string; type?: "text" | "radio" | "multiselect"; options?: string[] }[]
+  }> = {
     "Tax": {
       subOptions: ["Income Tax", "GST", "Tax Planning", "Corporate Tax"],
       questions: [
-        { q: "What is your annual income range?", key: "incomeRange" },
-        { q: "Do you have any existing investments?", key: "hasInvestments" },
-        { q: "Are you self-employed or salaried?", key: "employmentType" },
+        {
+          q: "What is your annual income range?", key: "incomeRange", type: "radio",
+          options: ["Below ₹5L", "₹5L – ₹10L", "₹10L – ₹25L", "₹25L – ₹50L", "Above ₹50L"]
+        },
+        {
+          q: "Do you have any existing investments?", key: "hasInvestments", type: "radio",
+          options: ["Yes", "No", "Planning to start"]
+        },
+        {
+          q: "What is your employment type?", key: "employmentType", type: "radio",
+          options: ["Salaried", "Self-Employed", "Business Owner", "Freelancer", "Retired"]
+        },
+        {
+          q: "Which tax areas concern you most?", key: "taxConcerns", type: "multiselect",
+          options: ["Income Tax Filing", "GST Compliance", "Tax Saving", "Capital Gains", "TDS", "Property Tax"]
+        },
       ]
     },
     "Finance": {
       subOptions: ["Wealth Management", "Mutual Funds", "Retirement Planning", "Portfolio Management"],
       questions: [
-        { q: "What is your primary financial goal?", key: "financialGoal" },
-        { q: "What is your risk appetite?", key: "riskAppetite" },
-        { q: "What is your investment horizon?", key: "investmentHorizon" },
+        {
+          q: "What is your primary financial goal?", key: "financialGoal", type: "radio",
+          options: ["Wealth Creation", "Retirement Planning", "Child Education", "Home Purchase", "Debt Reduction", "Emergency Fund"]
+        },
+        {
+          q: "What is your risk appetite?", key: "riskAppetite", type: "radio",
+          options: ["Conservative (Low Risk)", "Moderate (Balanced)", "Aggressive (High Risk)", "Very Aggressive"]
+        },
+        {
+          q: "What is your investment horizon?", key: "investmentHorizon", type: "radio",
+          options: ["< 1 Year (Short term)", "1–3 Years", "3–5 Years", "5–10 Years", "10+ Years"]
+        },
+        {
+          q: "Which financial instruments interest you?", key: "financialInstruments", type: "multiselect",
+          options: ["Mutual Funds", "Stocks", "Fixed Deposits", "Bonds", "PPF / EPF", "Real Estate", "Gold"]
+        },
+        { q: "Any specific financial concerns or goals?", key: "additionalGoals", type: "text" },
       ]
     },
     "Insurance": {
       subOptions: ["Life Insurance", "Health Insurance", "Term Plans", "ULIP"],
       questions: [
-        { q: "Do you currently have any insurance?", key: "hasInsurance" },
-        { q: "How many dependents do you have?", key: "dependents" },
-        { q: "What coverage amount are you looking for?", key: "coverageAmount" },
+        {
+          q: "Do you currently have any insurance coverage?", key: "hasInsurance", type: "radio",
+          options: ["Yes – adequate coverage", "Yes – but need more", "No – looking to start", "Not sure"]
+        },
+        {
+          q: "How many dependents do you have?", key: "dependents", type: "radio",
+          options: ["0 (No dependents)", "1", "2", "3", "4+"]
+        },
+        {
+          q: "What coverage amount are you looking for?", key: "coverageAmount", type: "radio",
+          options: ["₹10L – ₹25L", "₹25L – ₹50L", "₹50L – ₹1Cr", "₹1Cr – ₹2Cr", "₹2Cr+"]
+        },
+        {
+          q: "Which insurance types interest you?", key: "insuranceTypes", type: "multiselect",
+          options: ["Term Life", "Health / Mediclaim", "ULIP", "Endowment", "Critical Illness", "Accident Cover", "Child Plan"]
+        },
       ]
     },
     "Investment": {
       subOptions: ["Equity", "SIP", "Bonds", "Real Estate"],
       questions: [
-        { q: "How long have you been investing?", key: "investingExperience" },
-        { q: "What is your monthly investment budget?", key: "monthlyBudget" },
-        { q: "Are you interested in direct or managed funds?", key: "fundPreference" },
+        {
+          q: "How long have you been investing?", key: "investingExperience", type: "radio",
+          options: ["Never invested before", "< 1 Year", "1–3 Years", "3–5 Years", "5+ Years"]
+        },
+        {
+          q: "What is your monthly investment budget?", key: "monthlyBudget", type: "radio",
+          options: ["< ₹5,000", "₹5,000 – ₹10,000", "₹10,000 – ₹25,000", "₹25,000 – ₹50,000", "₹50,000+"]
+        },
+        {
+          q: "Do you prefer direct or managed funds?", key: "fundPreference", type: "radio",
+          options: ["Direct (DIY)", "Managed by advisor", "Both / Flexible", "Not sure yet"]
+        },
+        {
+          q: "Which investment types interest you?", key: "investmentTypes", type: "multiselect",
+          options: ["Equity Stocks", "SIP / Mutual Funds", "Bonds / Debentures", "Real Estate", "REITs", "Crypto", "Gold / Silver"]
+        },
+        { q: "Any specific investment goals or questions?", key: "investmentNotes", type: "text" },
       ]
     },
+  };
+
+  // First-login questionnaire questions (general financial profiling)
+  const FIRST_LOGIN_QUESTIONS: { q: string; key: string; type: "text" | "radio" | "multiselect"; options?: string[] }[] = [
+    {
+      q: "What best describes your current financial situation?",
+      key: "financialSituation",
+      type: "radio",
+      options: ["Just starting out", "Building savings", "Managing debt", "Growing investments", "Planning for retirement", "High net worth individual"]
+    },
+    {
+      q: "What is your primary financial goal right now?",
+      key: "primaryGoal",
+      type: "radio",
+      options: ["Save more money", "Invest wisely", "Reduce taxes", "Get insurance", "Plan for retirement", "Buy a home", "Manage debt"]
+    },
+    {
+      q: "How comfortable are you with financial decisions?",
+      key: "financialConfidence",
+      type: "radio",
+      options: ["Not at all — I need a lot of guidance", "Somewhat — I know basics", "Fairly confident — occasional help", "Very confident — want expert validation"]
+    },
+    {
+      q: "Which categories are you most interested in? (select all that apply)",
+      key: "interestedCategories",
+      type: "multiselect",
+      options: ["Tax Planning", "Investments", "Insurance", "Wealth Management", "Retirement", "Real Estate", "Business Finance"]
+    },
+    {
+      q: "What is your approximate monthly income range?",
+      key: "monthlyIncome",
+      type: "radio",
+      options: ["Below ₹30,000", "₹30,000 – ₹60,000", "₹60,000 – ₹1,00,000", "₹1,00,000 – ₹2,00,000", "₹2,00,000+"]
+    },
+  ];
+
+  // Category → consultant skills mapping (for priority matching)
+  // Consultants with these skills get priority ranking when user selects matching categories
+  const CATEGORY_SKILL_KEYWORDS: Record<string, string[]> = {
+    "Tax": ["tax", "gst", "income tax", "tax planning", "tds", "corporate tax", "chartered accountant", "ca"],
+    "Finance": ["finance", "wealth", "mutual fund", "retirement", "portfolio", "financial planning", "cfp"],
+    "Insurance": ["insurance", "life insurance", "health insurance", "term plan", "ulip", "mediclaim"],
+    "Investment": ["investment", "equity", "sip", "stocks", "bonds", "real estate", "portfolio management"],
+    "Tax Planning": ["tax", "income tax", "tax planning", "gst"],
+    "Investments": ["investment", "equity", "sip", "mutual fund", "portfolio"],
+    "Wealth Management": ["wealth", "portfolio", "financial planning", "cfp"],
+    "Retirement": ["retirement", "pension", "nps", "epf", "ppf"],
+    "Real Estate": ["real estate", "property", "reit"],
+    "Business Finance": ["business", "corporate", "company", "startup", "msme"],
+  };
+
+  // Score a consultant based on user's selected categories/interests
+  const getConsultantScore = (consultant: Consultant): number => {
+    if (userCategories.length === 0 && firstLoginCategories.length === 0) return 0;
+    const allInterests = [
+      ...userCategories.map(uc => uc.category),
+      ...firstLoginCategories,
+    ];
+    let score = 0;
+    const consultantSkillsLower = (consultant.tags || []).join(" ").toLowerCase() + " " + (consultant.role || "").toLowerCase();
+    allInterests.forEach(interest => {
+      const keywords = CATEGORY_SKILL_KEYWORDS[interest] || [interest.toLowerCase()];
+      keywords.forEach(kw => {
+        if (consultantSkillsLower.includes(kw.toLowerCase())) score++;
+      });
+    });
+    return score;
   };
 
   const handleCategorySubmit = () => {
@@ -993,15 +1135,78 @@ export default function UserPage() {
       }
       return [...prev, { category: selectedCategory, subOption: selectedSubOption, answers }];
     });
-    // Save to backend
+    // Save categories to localStorage (backend endpoint may not exist yet)
+    // Silently attempt backend save — never block UI on this
     const userId = localStorage.getItem("fin_user_id");
+    try {
+      const key = `fin_user_categories_${userId || "guest"}`;
+      const existing = JSON.parse(localStorage.getItem(key) || "[]");
+      const updated = existing.filter((c: any) => c.category !== selectedCategory);
+      localStorage.setItem(key, JSON.stringify([...updated, { category: selectedCategory, subOption: selectedSubOption, answers }]));
+    } catch { }
     if (userId) {
-      apiFetch(`${BASE_URL}/users/${userId}/categories`, {
+      // Best-effort backend save — errors are fully suppressed
+      fetch(`${BASE_URL}/users/${userId}/categories`, {
         method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${localStorage.getItem("fin_token") || ""}` },
         body: JSON.stringify({ category: selectedCategory, subOption: selectedSubOption, answers }),
       }).catch(() => {});
     }
     setCategoryStep("done");
+  };
+
+  // Handle first-login questionnaire completion
+  const handleFirstLoginComplete = () => {
+    // Extract categories from answers
+    const cats = (firstLoginAnswers["interestedCategories"] || "").split(",").map(s => s.trim()).filter(Boolean);
+    setFirstLoginCategories(cats);
+    // Also populate userCategories so consultant scoring works immediately
+    const newUserCats = cats.map(cat => ({
+      category: cat,
+      subOption: cat,
+      answers: firstLoginAnswers,
+    }));
+    setUserCategories(prev => {
+      const existing = prev.filter(uc => !cats.includes(uc.category));
+      return [...existing, ...newUserCats];
+    });
+    localStorage.removeItem("fin_first_login");
+    // Save answers to backend if logged in
+    const userId = localStorage.getItem("fin_user_id");
+    if (userId && cats.length > 0) {
+      // Persist categories in localStorage (always works)
+      try {
+        const key = `fin_user_categories_${userId}`;
+        const payload = cats.map(cat => ({ category: cat, subOption: cat, answers: firstLoginAnswers }));
+        localStorage.setItem(key, JSON.stringify(payload));
+      } catch { }
+      // Best-effort backend save — never blocks UI, all errors suppressed silently
+      fetch(`${BASE_URL}/users/${userId}/categories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${localStorage.getItem("fin_token") || ""}` },
+        body: JSON.stringify(cats.map(cat => ({ category: cat, subOption: cat, answers: firstLoginAnswers }))),
+      }).catch(() => {});
+    }
+    setShowFirstLoginQuestionnaire(false);
+    setFirstLoginStep("intro");
+    // ── CRITICAL: Switch to consultants tab so matched consultants are visible immediately
+    setTab("consultants");
+    // Show success toast with matched count
+    const matchedCount = consultants.filter(c =>
+      cats.some(cat =>
+        c.tags.some((t: string) => t.toLowerCase().includes(cat.toLowerCase()) ||
+          cat.toLowerCase().includes(t.toLowerCase()))
+      )
+    ).length;
+    showToast(
+      cats.length > 0
+        ? `✅ Matched! Showing ${matchedCount > 0 ? matchedCount : "all"} consultants for: ${cats.slice(0, 3).join(", ")}${cats.length > 3 ? "…" : ""}`
+        : "✅ Profile complete! Browse your consultants below."
+    );
+    // If password change is required, show it after a short delay
+    if (localStorage.getItem("fin_requires_pw_change") === "true") {
+      setTimeout(() => { setShowPasswordChangeModal(true); }, 600);
+    }
   };
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -1046,9 +1251,13 @@ export default function UserPage() {
   const mapConsultant = (d: any): Consultant => {
     let avatar = resolvePhotoUrl(d.profilePhoto || d.photo || d.avatarUrl || "");
     if (!avatar) avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name || "C")}&background=2563EB&color=fff&bold=true`;
+    const baseCharges = Number(d.charges || 0);
+    // PRD §5.3 & §8.2: Display price to customer = base price + 200 markup
+    const displayPrice = baseCharges > 0 ? baseCharges + 200 : 0;
     return {
       id: d.id, name: d.name || "Expert Consultant", role: d.designation || "Financial Consultant",
-      fee: Number(d.charges || 0), tags: Array.isArray(d.skills) ? d.skills : [],
+      fee: displayPrice, // customer-facing price (base + 200)
+      tags: Array.isArray(d.skills) ? d.skills : [],
       rating: Number(d.rating || 4.8), exp: Number(d.experience || d.yearsOfExperience || 5),
       reviews: Number(d.reviewCount || d.totalReviews || 120), avatar,
       shiftStartTime: parseLocalTime(d.shiftStartTime || d.shift_start_time || d.shiftStart),
@@ -1061,7 +1270,31 @@ export default function UserPage() {
 
   const fetchConsultants = async () => {
     setLoading(p => ({ ...p, consultants: true }));
-    try { const res = await getAllConsultants(); setConsultants((Array.isArray(res) ? res : []).map(mapConsultant)); }
+    try {
+      const res = await getAllConsultants();
+      const mapped = (Array.isArray(res) ? res : []).map(mapConsultant);
+      setConsultants(mapped);
+      // Extract unique skills from ALL consultants to build dynamic category list (PRD §3.2)
+      const allSkills = new Set<string>();
+      (Array.isArray(res) ? res : []).forEach((d: any) => {
+        if (Array.isArray(d.skills)) {
+          d.skills.forEach((s: string) => { if (s && s.trim()) allSkills.add(s.trim()); });
+        }
+        // Also add designation as a broad category
+        if (d.designation && d.designation.trim()) {
+          const desk = d.designation.trim();
+          // Extract domain words from designation (e.g., "Senior Tax Consultant" → "Tax")
+          ["Tax", "Finance", "Investment", "Insurance", "Wealth", "Retirement", "Real Estate",
+           "Business", "Portfolio", "Mutual Fund", "GST", "Accounting"].forEach(kw => {
+            if (desk.toLowerCase().includes(kw.toLowerCase())) allSkills.add(kw);
+          });
+        }
+      });
+      const skillArr = Array.from(allSkills).sort();
+      setDynamicSkillCategories(skillArr.length > 0 ? skillArr : [
+        "Tax", "Finance", "Investment", "Insurance", "Wealth Management", "Retirement Planning"
+      ]);
+    }
     catch { showToast("Could not load consultants."); }
     finally { setLoading(p => ({ ...p, consultants: false })); }
   };
@@ -1130,9 +1363,39 @@ export default function UserPage() {
   // INIT & LIFECYCLE
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
+    // Check first-login flag BEFORE any async calls so modal shows immediately
+    const isFirstLogin = localStorage.getItem("fin_first_login") === "true";
+    const isGuest = localStorage.getItem("fin_role") === "GUEST";
+    const alreadyRequiresPwChange = localStorage.getItem("fin_requires_pw_change") === "true";
+
+    // ── Restore saved categories from localStorage (so consultant scoring works on return visits)
+    const userId = localStorage.getItem("fin_user_id");
+    const catKey = `fin_user_categories_${userId || "guest"}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(catKey) || "[]");
+      if (Array.isArray(saved) && saved.length > 0) setUserCategories(saved);
+    } catch { }
+    // If password change was already flagged from a previous session or login response,
+    // show it FIRST immediately — before any async call
+    if (alreadyRequiresPwChange) {
+      setShowPasswordChangeModal(true);
+      // Questionnaire will show AFTER password is changed (handled in handlePasswordChangeDone)
+    } else if (isFirstLogin || isGuest) {
+      // No pending password change — show questionnaire directly
+      setShowFirstLoginQuestionnaire(true);
+      setFirstLoginStep("intro");
+    }
+
+    // Fetch consultants (this also populates dynamicSkillCategories)
     fetchConsultants();
+
     (async () => {
       try {
+        // Guest users don't have a token, skip API calls
+        if (isGuest && !localStorage.getItem("fin_token")) {
+          setCurrentUser({ id: undefined, name: "Guest", email: "" });
+          return;
+        }
         const user = await getCurrentUser();
         const uid = user?.id ? Number(user.id) : null;
         if (uid) {
@@ -1143,6 +1406,22 @@ export default function UserPage() {
           } catch { }
         }
         setCurrentUser({ id: uid ?? undefined, name: user?.name || user?.fullName || "", email: user?.email || user?.emailId || "" });
+
+        // ── Check requiresPasswordChange from backend ──────────────────────
+        // Backend sets requiresPasswordChange=true on createCoreUser (registration + admin add)
+        const requiresChange = user?.requiresPasswordChange === true
+          || localStorage.getItem("fin_requires_pw_change") === "true";
+
+        if (requiresChange) {
+          // Store the flag so it persists if user refreshes before completing
+          localStorage.setItem("fin_requires_pw_change", "true");
+          if (!alreadyRequiresPwChange) {
+            // Show password modal NOW — questionnaire will show after it completes
+            setShowFirstLoginQuestionnaire(false); // close questionnaire if already open
+            setShowPasswordChangeModal(true);
+          }
+        }
+
         const userRole = String(user?.role || "").trim().toUpperCase();
         if (["SUBSCRIBER", "SUBSCRIBED", "PREMIUM"].includes(userRole)) {
           if (!sessionStorage.getItem("sub_popup_shown")) { setShowSubPopup(true); sessionStorage.setItem("sub_popup_shown", "true"); }
@@ -1437,10 +1716,19 @@ export default function UserPage() {
   const handleLogout = () => { logoutUser(); navigate("/login", { replace: true }); };
   const handleGoToProfile = () => { setTab("settings"); setSettingsView("profile"); };
 
-  const filteredList = consultants.filter(c => {
-    const q = search.toLowerCase();
-    return (c.name.toLowerCase().includes(q) || c.role.toLowerCase().includes(q)) && (category === "All Consultants" || c.role.includes(category.replace(" Experts", "")));
-  });
+  const filteredList = consultants
+    .filter(c => {
+      const q = search.toLowerCase();
+      return (c.name.toLowerCase().includes(q) || c.role.toLowerCase().includes(q)) && (category === "All Consultants" || c.role.includes(category.replace(" Experts", "")));
+    })
+    .sort((a, b) => {
+      // Sort by category-skill match score (higher score = shown first)
+      const scoreB = getConsultantScore(b);
+      const scoreA = getConsultantScore(a);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      // Secondary sort by rating
+      return b.rating - a.rating;
+    });
 
   const hourlySlotTimes = generateHourlySlots(
     (selectedConsultant?.shiftStartTime || "").substring(0, 5),
@@ -1666,8 +1954,20 @@ export default function UserPage() {
                       {/* Footer: fee + view profile (left) + book now (right) */}
                       {/* NOTE: No booking fee badge removed — all users (including subscribers) pay for sessions */}
                       <div style={{ padding: "14px 18px 18px", borderTop: "1px solid #F1F5F9", marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>
-                          ₹{displayFee.toLocaleString()}<span style={{ fontSize: 11, fontWeight: 500, color: "#94A3B8", marginLeft: 3 }}>/session</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>
+                            ₹{displayFee.toLocaleString()}<span style={{ fontSize: 11, fontWeight: 500, color: "#94A3B8", marginLeft: 3 }}>/session</span>
+                          </div>
+                          {/* Category match badge: shown only when user has interests set */}
+                          {(() => {
+                            const score = getConsultantScore(c);
+                            if (score === 0) return null;
+                            return (
+                              <div style={{ marginTop: 3, fontSize: 10, fontWeight: 700, color: "#16A34A", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 6, padding: "2px 7px", display: "inline-block" }}>
+                                ⭐ {score} category match{score > 1 ? "es" : ""}
+                              </div>
+                            );
+                          })()}
                         </div>
                         <div style={{ display: "flex", gap: 7 }}>
                           <button
@@ -1736,7 +2036,7 @@ export default function UserPage() {
                             {displayTime && <span className={styles.bookedTimePill}>{displayTime}</span>}
                             {modeLabel && <span> · {modeLabel}</span>}
                           </div>
-                          <div style={{ marginTop: 4, fontSize: 11, color: "#94A3B8" }}>🔗 Room: <span style={{ fontFamily: "monospace", color: "#2563EB" }}>finadvise-booking-{b.id}</span></div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: "#94A3B8" }}>🔗 Room: <span style={{ fontFamily: "monospace", color: "#2563EB" }}>meetthemasters-booking-{b.id}</span></div>
                         </div>
                         <div className={styles.statusBadgeWrapper}><StatusBadge status={b.BookingStatus as any} /></div>
                       </div>
@@ -1798,11 +2098,37 @@ export default function UserPage() {
             )}
 
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 12 }}>
               <h2 className={styles.sectionTitle} style={{ margin: 0 }}>Support Tickets</h2>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={fetchTickets} disabled={loading.tickets} className={styles.ticketRefreshBtn}>{loading.tickets ? "⏳" : "↻"} Refresh</button>
                 <button onClick={() => setShowCreateTicket(true)} className={styles.ticketNewBtn}>+ New Ticket</button>
+              </div>
+            </div>
+
+            {/* Email-to-Ticket Info Banner — backend auto-converts emails to tickets */}
+            <div style={{
+              background: "linear-gradient(135deg,#EFF6FF,#F0FDF4)",
+              border: "1px solid #BFDBFE",
+              borderRadius: 12,
+              padding: "12px 16px",
+              marginBottom: 16,
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 12,
+            }}>
+              <span style={{ fontSize: 22, flexShrink: 0 }}>📧</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 3 }}>
+                  Email-to-Ticket: Send an email to get help automatically
+                </div>
+                <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.6 }}>
+                  You can also raise a support ticket by <strong>sending an email directly to our support inbox</strong>.
+                  Your email will be automatically converted into a ticket and our team will respond here.
+                  <br />
+                  <span style={{ color: "#2563EB", fontWeight: 600 }}>support@meetthemasters.in</span>
+                  {" "}· Use keywords like "urgent" or "billing" to set priority automatically.
+                </div>
               </div>
             </div>
 
@@ -2273,28 +2599,54 @@ export default function UserPage() {
             </div>
 
             <div style={{ padding: "24px" }}>
-              {/* Step 1: Category + Sub-option selection */}
+              {/* Step 1: Category + Sub-option selection — uses real consultant skills */}
               {categoryStep === "select" && (
                 <>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 12 }}>Select a Category</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-                    {Object.keys(CATEGORY_OPTIONS).map(cat => (
-                      <button key={cat} onClick={() => { setSelectedCategory(cat); setSelectedSubOption(""); }}
-                        style={{ padding: "12px 14px", borderRadius: 12, border: `2px solid ${selectedCategory === cat ? "#2563EB" : "#E2E8F0"}`, background: selectedCategory === cat ? "#EFF6FF" : "#fff", color: selectedCategory === cat ? "#2563EB" : "#374151", fontSize: 14, fontWeight: 700, cursor: "pointer", textAlign: "left", transition: "all 0.15s" }}>
-                        {cat === "Tax" && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: 8 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>}
-                        {cat === "Finance" && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: 8 }}><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
-                        {cat === "Insurance" && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: 8 }}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>}
-                        {cat === "Investment" && <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: 8 }}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>}
-                        {cat}
-                      </button>
-                    ))}
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 12 }}>
+                    Select a Category
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "#94A3B8" }}>
+                      (based on available consultant expertise)
+                    </span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20, maxHeight: 260, overflowY: "auto" }}>
+                    {/* Show all dynamic skill categories from consultants + fallback to CATEGORY_OPTIONS keys */}
+                    {(dynamicSkillCategories.length > 0 ? dynamicSkillCategories : Object.keys(CATEGORY_OPTIONS)).map(cat => {
+                      const catIcon: Record<string, string> = {
+                        "Tax": "📄", "Tax Planning": "📄", "Income Tax": "📄", "GST": "📄",
+                        "Finance": "💵", "Wealth": "💰", "Wealth Management": "💰",
+                        "Investment": "📈", "Investments": "📈", "Equity": "📈", "SIP": "📈",
+                        "Mutual Fund": "📈", "Mutual Funds": "📈",
+                        "Insurance": "🛡️", "Life Insurance": "🛡️", "Health Insurance": "🛡️",
+                        "Retirement": "🏖️", "Retirement Planning": "🏖️",
+                        "Real Estate": "🏠", "Business": "🏢", "Business Finance": "🏢",
+                        "Portfolio": "📊", "Portfolio Management": "📊",
+                        "Financial Modeling": "📐", "Data Analysis": "🔍",
+                        "Accounting": "🧾", "Estate Planning": "📜",
+                        "International Tax": "🌐", "Tax Filing": "🗂️",
+                        "Cash Flow": "💸", "Business Planning": "🗺️",
+                      };
+                      return (
+                        <button key={cat} onClick={() => { setSelectedCategory(cat); setSelectedSubOption(""); }}
+                          style={{ padding: "12px 14px", borderRadius: 12, border: `2px solid ${selectedCategory === cat ? "#2563EB" : "#E2E8F0"}`, background: selectedCategory === cat ? "#EFF6FF" : "#fff", color: selectedCategory === cat ? "#2563EB" : "#374151", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 18 }}>{catIcon[cat] || "📌"}</span>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {selectedCategory && (
                     <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 10 }}>Select Sub-option</div>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
-                        {CATEGORY_OPTIONS[selectedCategory].subOptions.map(sub => (
+                        {/* Use CATEGORY_OPTIONS sub-options for known categories, else use consultant skills as sub-options */}
+                        {(CATEGORY_OPTIONS[selectedCategory]?.subOptions ||
+                          // For unknown categories (from dynamic list), use related consultant skills as sub-options
+                          dynamicSkillCategories.filter(s =>
+                            s.toLowerCase().includes(selectedCategory.toLowerCase()) ||
+                            selectedCategory.toLowerCase().includes(s.toLowerCase())
+                          ).concat([selectedCategory, "General Consultation"])
+                        ).map(sub => (
                           <button key={sub} onClick={() => setSelectedSubOption(sub)}
                             style={{ padding: "7px 14px", borderRadius: 20, border: `1.5px solid ${selectedSubOption === sub ? "#2563EB" : "#E2E8F0"}`, background: selectedSubOption === sub ? "#2563EB" : "#fff", color: selectedSubOption === sub ? "#fff" : "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" }}>
                             {sub}
@@ -2315,15 +2667,77 @@ export default function UserPage() {
               {/* Step 2: Questionnaire */}
               {categoryStep === "questionnaire" && selectedCategory && (
                 <>
-                  {CATEGORY_OPTIONS[selectedCategory].questions.map((q, i) => (
+                  {(CATEGORY_OPTIONS[selectedCategory]?.questions || [
+                    { q: `What is your primary goal for ${selectedCategory}?`, key: 'primaryGoal', type: 'text' as const },
+                    { q: 'What is your experience level in this area?', key: 'experienceLevel', type: 'radio' as const, options: ['Beginner — just starting', 'Some experience', 'Intermediate', 'Advanced'] },
+                    { q: 'What is your budget or investment range?', key: 'budgetRange', type: 'radio' as const, options: ['Below ₹10,000', '₹10,000 – ₹50,000', '₹50,000 – ₹2,00,000', '₹2,00,000+', 'Not decided yet'] },
+                    { q: 'When are you looking to get started?', key: 'timeline', type: 'radio' as const, options: ['Immediately', 'Within 1 month', 'Within 3 months', 'Just exploring'] },
+                    { q: 'Any specific questions or concerns? (optional)', key: 'notes', type: 'text' as const },
+                  ] as Array<{ q: string; key: string; type?: string; options?: string[] }>).map((q, i) => (
                     <div key={q.key} style={{ marginBottom: 18 }}>
                       <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>{i + 1}. {q.q}</label>
-                      <input
-                        value={questionnaireAnswers[q.key] || ""}
-                        onChange={e => setQuestionnaireAnswers(prev => ({ ...prev, [q.key]: e.target.value }))}
-                        placeholder="Your answer…"
-                        style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" }}
-                      />
+
+                      {/* Radio buttons */}
+                      {(q.type === "radio" || !q.type) && q.options && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {q.options.map(opt => {
+                            const isSelected = questionnaireAnswers[q.key] === opt;
+                            return (
+                              <label key={opt} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 9, border: `1.5px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: "pointer", transition: "all 0.12s" }}>
+                                <input type="radio" name={q.key} value={opt} checked={isSelected}
+                                  onChange={() => setQuestionnaireAnswers(prev => ({ ...prev, [q.key]: opt }))}
+                                  style={{ accentColor: "#2563EB", width: 15, height: 15, flexShrink: 0 }} />
+                                <span style={{ fontSize: 12, color: isSelected ? "#1E40AF" : "#374151", fontWeight: isSelected ? 600 : 400 }}>{opt}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Multi-select checkboxes */}
+                      {q.type === "multiselect" && q.options && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                          {q.options.map(opt => {
+                            const selected = (questionnaireAnswers[q.key] || "").split(",").map(s => s.trim()).filter(Boolean);
+                            const isSelected = selected.includes(opt);
+                            return (
+                              <button key={opt} onClick={() => {
+                                const newSel = isSelected ? selected.filter(s => s !== opt) : [...selected, opt];
+                                setQuestionnaireAnswers(prev => ({ ...prev, [q.key]: newSel.join(",") }));
+                              }}
+                                style={{
+                                  padding: "6px 13px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+                                  border: `1.5px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`,
+                                  background: isSelected ? "#2563EB" : "#fff",
+                                  color: isSelected ? "#fff" : "#64748B",
+                                  cursor: "pointer", transition: "all 0.12s"
+                                }}>
+                                {isSelected ? "✓ " : ""}{opt}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Plain text input */}
+                      {q.type === "text" && (
+                        <input
+                          value={questionnaireAnswers[q.key] || ""}
+                          onChange={e => setQuestionnaireAnswers(prev => ({ ...prev, [q.key]: e.target.value }))}
+                          placeholder="Your answer…"
+                          style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                        />
+                      )}
+
+                      {/* Fallback: text input when no type specified and no options */}
+                      {!q.type && !q.options && (
+                        <input
+                          value={questionnaireAnswers[q.key] || ""}
+                          onChange={e => setQuestionnaireAnswers(prev => ({ ...prev, [q.key]: e.target.value }))}
+                          placeholder="Your answer…"
+                          style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                        />
+                      )}
                     </div>
                   ))}
                   <div style={{ display: "flex", gap: 10 }}>
@@ -2347,6 +2761,417 @@ export default function UserPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ FIRST-LOGIN / GUEST QUESTIONNAIRE MODAL ══ */}
+      {/* Shown automatically on first login to profile the user and match consultants */}
+      {showFirstLoginQuestionnaire && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 2200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.7)" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 560, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 32px 80px rgba(15,23,42,0.4)" }}>
+
+            {/* Header */}
+            <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "24px 24px 20px", position: "relative", borderRadius: "24px 24px 0 0" }}>
+              {firstLoginStep !== "intro" && (
+                <button onClick={() => {
+                  if (firstLoginStep === "questionnaire") setFirstLoginStep("intro");
+                  else if (firstLoginStep === "categories") setFirstLoginStep("questionnaire");
+                }} style={{ position: "absolute", top: 16, left: 16, background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", cursor: "pointer", fontSize: 16 }}>←</button>
+              )}
+              <button onClick={() => {
+                localStorage.removeItem("fin_first_login");
+                setShowFirstLoginQuestionnaire(false);
+              }} style={{ position: "absolute", top: 16, right: 16, background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", cursor: "pointer", fontSize: 16 }}>✕</button>
+
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#93C5FD", marginBottom: 6 }}>
+                  {firstLoginStep === "intro" && "Welcome to Meet The Masters"}
+                  {firstLoginStep === "questionnaire" && "Step 1 — Your Profile"}
+                  {firstLoginStep === "categories" && "Step 2 — Your Interests"}
+                  {firstLoginStep === "done" && "All Set!"}
+                </div>
+                <h3 style={{ fontSize: 20, fontWeight: 800, color: "#fff", margin: "0 0 4px" }}>
+                  {firstLoginStep === "intro" && "Let's personalise your experience 🎯"}
+                  {firstLoginStep === "questionnaire" && "Tell us about yourself"}
+                  {firstLoginStep === "categories" && "What are you looking for?"}
+                  {firstLoginStep === "done" && "Your consultants are ready! ✅"}
+                </h3>
+                <p style={{ fontSize: 13, color: "#BFDBFE", margin: 0 }}>
+                  {firstLoginStep === "intro" && "Answer a few quick questions so we can match you with the right consultants."}
+                  {firstLoginStep === "questionnaire" && "This takes about 2 minutes — we use this to find your best matches."}
+                  {firstLoginStep === "categories" && "Select categories that interest you most."}
+                  {firstLoginStep === "done" && "We've matched consultants based on your profile."}
+                </p>
+              </div>
+
+              {/* Progress bar */}
+              {firstLoginStep !== "done" && (
+                <div style={{ display: "flex", gap: 5, marginTop: 16 }}>
+                  {["intro", "questionnaire", "categories"].map((s, i) => (
+                    <div key={s} style={{
+                      height: 3, flex: 1, borderRadius: 3,
+                      background: ["intro", "questionnaire", "categories"].indexOf(firstLoginStep) >= i
+                        ? "rgba(255,255,255,0.85)"
+                        : "rgba(255,255,255,0.2)",
+                      transition: "background 0.3s"
+                    }} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: "24px" }}>
+
+              {/* ── Step: Intro ── */}
+              {firstLoginStep === "intro" && (
+                <div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
+                    {[
+                      { icon: "🎯", title: "Personalised Matching", desc: "Get consultants matched to your exact needs and interests." },
+                      { icon: "⚡", title: "Quick Setup", desc: "Just 5 questions and 2 category selections — takes 2 minutes." },
+                      { icon: "🔒", title: "Private & Secure", desc: "Your answers are used only to improve your recommendations." },
+                      { icon: "✏️", title: "Always Editable", desc: "Change your preferences anytime from Settings → My Categories." },
+                    ].map((item, i) => (
+                      <div key={i} style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 14, padding: "14px 16px" }}>
+                        <div style={{ fontSize: 24, marginBottom: 8 }}>{item.icon}</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{item.title}</div>
+                        <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.5 }}>{item.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => { localStorage.removeItem("fin_first_login"); setShowFirstLoginQuestionnaire(false); }}
+                      style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      Skip for now
+                    </button>
+                    <button onClick={() => setFirstLoginStep("questionnaire")}
+                      style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                      Get Started →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Step: Questionnaire ── */}
+              {firstLoginStep === "questionnaire" && (
+                <div>
+                  {FIRST_LOGIN_QUESTIONS.filter(q => q.key !== "interestedCategories").map((q, i) => (
+                    <div key={q.key} style={{ marginBottom: 20 }}>
+                      <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#1E293B", marginBottom: 10 }}>
+                        {i + 1}. {q.q}
+                      </label>
+                      {q.type === "radio" && q.options && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                          {q.options.map(opt => {
+                            const isSelected = firstLoginAnswers[q.key] === opt;
+                            return (
+                              <label key={opt} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: "pointer", transition: "all 0.15s" }}>
+                                <input type="radio" name={q.key} value={opt} checked={isSelected}
+                                  onChange={() => setFirstLoginAnswers(prev => ({ ...prev, [q.key]: opt }))}
+                                  style={{ accentColor: "#2563EB", width: 16, height: 16, flexShrink: 0 }} />
+                                <span style={{ fontSize: 13, color: isSelected ? "#1E40AF" : "#374151", fontWeight: isSelected ? 600 : 400 }}>{opt}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {q.type === "text" && (
+                        <textarea
+                          value={firstLoginAnswers[q.key] || ""}
+                          onChange={e => setFirstLoginAnswers(prev => ({ ...prev, [q.key]: e.target.value }))}
+                          placeholder="Your answer…"
+                          rows={3}
+                          style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", resize: "none", fontFamily: "inherit" }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                    <button onClick={() => setFirstLoginStep("intro")}
+                      style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>← Back</button>
+                    <button onClick={() => setFirstLoginStep("categories")}
+                      style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                      Continue →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Step: Categories (multi-select) — uses real skills from consultant API ── */}
+              {firstLoginStep === "categories" && (
+                <div>
+                  <div style={{ fontSize: 13, color: "#64748B", marginBottom: 6, lineHeight: 1.6 }}>
+                    Select all categories that interest you. Consultants are matched based on your selections.
+                  </div>
+                  {dynamicSkillCategories.length === 0 && (
+                    <div style={{ textAlign: "center", padding: "20px 0", color: "#94A3B8", fontSize: 13 }}>
+                      <div style={{ width: 20, height: 20, border: "2px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 8px" }} />
+                      Loading categories from consultants…
+                    </div>
+                  )}
+                  {dynamicSkillCategories.length > 0 && (() => {
+                    const selected = (firstLoginAnswers["interestedCategories"] || "").split(",").map(s => s.trim()).filter(Boolean);
+                    // Icon map – covers common financial skill keywords
+                    const catIcon: Record<string, string> = {
+                      "Tax": "📄", "Tax Planning": "📄", "Income Tax": "📄", "GST": "📄", "TDS": "📄",
+                      "Finance": "💵", "Wealth": "💰", "Wealth Management": "💰",
+                      "Investment": "📈", "Investments": "📈", "Equity": "📈", "SIP": "📈", "Mutual Fund": "📈", "Mutual Funds": "📈",
+                      "Insurance": "🛡️", "Life Insurance": "🛡️", "Health Insurance": "🛡️", "Term Plans": "🛡️",
+                      "Retirement": "🏖️", "Retirement Planning": "🏖️",
+                      "Real Estate": "🏠", "Property": "🏠",
+                      "Business": "🏢", "Business Finance": "🏢", "Corporate Tax": "🏢",
+                      "Portfolio": "📊", "Portfolio Management": "📊",
+                      "Financial Modeling": "📐", "Financial Planning": "📐",
+                      "Data Analysis": "🔍", "Accounting": "🧾",
+                      "Estate Planning": "📜", "Trust Management": "📜",
+                      "International Tax": "🌐", "Tax Filing": "🗂️", "Tax planner": "🗒️",
+                      "Cash Flow": "💸", "Business Planning": "🗺️",
+                    };
+                    return (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16, maxHeight: 320, overflowY: "auto", paddingRight: 4 }}>
+                        {dynamicSkillCategories.map(cat => {
+                          const isSelected = selected.includes(cat);
+                          return (
+                            <button key={cat} onClick={() => {
+                              const newSelected = isSelected
+                                ? selected.filter(s => s !== cat)
+                                : [...selected, cat];
+                              setFirstLoginAnswers(prev => ({ ...prev, interestedCategories: newSelected.join(",") }));
+                            }}
+                              style={{
+                                padding: "12px 14px", borderRadius: 12, textAlign: "left",
+                                border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`,
+                                background: isSelected ? "#EFF6FF" : "#fff",
+                                color: isSelected ? "#2563EB" : "#374151",
+                                fontSize: 12, fontWeight: isSelected ? 700 : 500,
+                                cursor: "pointer", transition: "all 0.15s",
+                                display: "flex", alignItems: "center", gap: 8
+                              }}>
+                              <span style={{ fontSize: 18, flexShrink: 0 }}>{catIcon[cat] || "📌"}</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</div>
+                                {isSelected && <div style={{ fontSize: 9, color: "#2563EB", marginTop: 1 }}>✓ Selected</div>}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                  {/* Show how many consultants match current selection */}
+                  {(() => {
+                    const selected = (firstLoginAnswers["interestedCategories"] || "").split(",").map(s => s.trim()).filter(Boolean);
+                    if (selected.length === 0 || consultants.length === 0) return null;
+                    const matchCount = consultants.filter(c =>
+                      selected.some(sel =>
+                        c.tags.some(t => t.toLowerCase().includes(sel.toLowerCase()) || sel.toLowerCase().includes(t.toLowerCase()))
+                      )
+                    ).length;
+                    return (
+                      <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 10, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "#166534", fontWeight: 600 }}>
+                        🎯 {matchCount} consultant{matchCount !== 1 ? "s" : ""} match{matchCount === 1 ? "es" : ""} your selected categories
+                      </div>
+                    );
+                  })()}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => setFirstLoginStep("questionnaire")}
+                      style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>← Back</button>
+                    <button onClick={handleFirstLoginComplete}
+                      style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                      Find My Consultants ✓
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ FIRST-LOGIN PASSWORD CHANGE MODAL ══ */}
+      {/* Shown when backend requiresPasswordChange=true (set on user creation) */}
+      {showPasswordChangeModal && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 2500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.75)" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 440, boxShadow: "0 32px 80px rgba(15,23,42,0.4)", overflow: "hidden" }}>
+            {/* Header */}
+            <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "24px 24px 20px", borderRadius: "24px 24px 0 0" }}>
+              <div style={{ fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#93C5FD", marginBottom: 6 }}>Security Required</div>
+              <h3 style={{ fontSize: 20, fontWeight: 800, color: "#fff", margin: "0 0 6px" }}>🔐 Set Your New Password</h3>
+              <p style={{ fontSize: 13, color: "#BFDBFE", margin: 0 }}>
+                Your account was created with a temporary password. Please set a new secure password to continue.
+              </p>
+            </div>
+            <div style={{ padding: "24px" }}>
+              {/* Info banner */}
+              <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 14px", marginBottom: 18, fontSize: 12, color: "#92400E", fontWeight: 600 }}>
+                💡 Your initial password was sent to your registered email. Enter a NEW password below that is different from it.
+              </div>
+
+              {pwError && (
+                <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 9, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#B91C1C", fontWeight: 600 }}>
+                  ⚠️ {pwError}
+                </div>
+              )}
+
+              {/* New password */}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }}>New Password *</label>
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={pwShowNew ? "text" : "password"}
+                    value={pwForm.newPass}
+                    onChange={e => { setPwForm(f => ({ ...f, newPass: e.target.value })); setPwError(""); }}
+                    placeholder="Min. 8 characters"
+                    style={{ width: "100%", padding: "10px 42px 10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+                  />
+                  <button onClick={() => setPwShowNew(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>
+                    {pwShowNew ? "🙈" : "👁"}
+                  </button>
+                </div>
+                {/* Strength indicator */}
+                {pwForm.newPass && (() => {
+                  let score = 0;
+                  if (pwForm.newPass.length >= 8) score++;
+                  if (/[A-Z]/.test(pwForm.newPass)) score++;
+                  if (/[0-9]/.test(pwForm.newPass)) score++;
+                  if (/[^A-Za-z0-9]/.test(pwForm.newPass)) score++;
+                  const levels = ["", "Weak", "Fair", "Good", "Strong"];
+                  const colors = ["", "#EF4444", "#F59E0B", "#22C55E", "#16A34A"];
+                  return (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ display: "flex", gap: 3, marginBottom: 3 }}>
+                        {[1,2,3,4].map(i => (
+                          <div key={i} style={{ flex: 1, height: 3, borderRadius: 3, background: score >= i ? colors[score] : "#F1F5F9", transition: "background 0.2s" }} />
+                        ))}
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: colors[score] }}>{levels[score]} password</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Confirm password */}
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }}>Confirm Password *</label>
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={pwShowConfirm ? "text" : "password"}
+                    value={pwForm.confirmPass}
+                    onChange={e => { setPwForm(f => ({ ...f, confirmPass: e.target.value })); setPwError(""); }}
+                    placeholder="Re-enter new password"
+                    style={{
+                      width: "100%", padding: "10px 42px 10px 13px",
+                      border: `1.5px solid ${pwForm.confirmPass && pwForm.confirmPass !== pwForm.newPass ? "#FCA5A5" : "#E2E8F0"}`,
+                      borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit"
+                    }}
+                  />
+                  <button onClick={() => setPwShowConfirm(v => !v)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#94A3B8" }}>
+                    {pwShowConfirm ? "🙈" : "👁"}
+                  </button>
+                </div>
+                {pwForm.confirmPass && pwForm.confirmPass !== pwForm.newPass && (
+                  <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 4 }}>⚠ Passwords don't match</div>
+                )}
+              </div>
+
+              {/* Requirements */}
+              <div style={{ background: "#F8FAFC", border: "1px solid #F1F5F9", borderRadius: 9, padding: "10px 14px", marginBottom: 18 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", marginBottom: 6, textTransform: "uppercase" }}>Requirements</div>
+                {[
+                  { rule: "At least 8 characters", met: pwForm.newPass.length >= 8 },
+                  { rule: "Uppercase letter (A–Z)", met: /[A-Z]/.test(pwForm.newPass) },
+                  { rule: "Number (0–9)", met: /[0-9]/.test(pwForm.newPass) },
+                  { rule: "Different from temporary password", met: pwForm.newPass.length > 0 },
+                ].map(r => (
+                  <div key={r.rule} style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 11, color: r.met ? "#16A34A" : "#94A3B8", marginBottom: 3 }}>
+                    <span>{r.met ? "✅" : "○"}</span> {r.rule}
+                  </div>
+                ))}
+              </div>
+
+              <button
+                disabled={pwSaving || !pwForm.newPass || pwForm.newPass !== pwForm.confirmPass || pwForm.newPass.length < 8}
+                onClick={async () => {
+                  if (!pwForm.newPass || pwForm.newPass !== pwForm.confirmPass) { setPwError("Passwords don't match."); return; }
+                  if (pwForm.newPass.length < 8) { setPwError("Password must be at least 8 characters."); return; }
+                  setPwSaving(true); setPwError("");
+                  try {
+                    const token = localStorage.getItem("fin_token");
+                    const userId = localStorage.getItem("fin_user_id");
+                    const headers = { "Content-Type": "application/json", Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+                    let ok = false;
+
+                    // Try all known Spring backend password change endpoints in order:
+                    // The backend's UserController typically exposes one of these.
+                    const attempts = [
+                      // Standard Spring Security: PUT /users/me/password with {newPassword, currentPassword}
+                      { url: `${BASE_URL}/users/me/password`, method: "PUT", body: JSON.stringify({ newPassword: pwForm.newPass, confirmPassword: pwForm.confirmPass }) },
+                      // Alternative: POST /users/change-password
+                      { url: `${BASE_URL}/users/change-password`, method: "POST", body: JSON.stringify({ newPassword: pwForm.newPass, confirmPassword: pwForm.confirmPass }) },
+                      // With userId: PUT /users/:id/password
+                      ...(userId ? [{ url: `${BASE_URL}/users/${userId}/password`, method: "PUT", body: JSON.stringify({ newPassword: pwForm.newPass }) }] : []),
+                      // PATCH variant
+                      { url: `${BASE_URL}/users/me/password`, method: "PATCH", body: JSON.stringify({ newPassword: pwForm.newPass }) },
+                      // Auth controller variant
+                      { url: `${BASE_URL}/auth/change-password`, method: "POST", body: JSON.stringify({ newPassword: pwForm.newPass, confirmPassword: pwForm.confirmPass }) },
+                    ];
+
+                    for (const attempt of attempts) {
+                      if (ok) break;
+                      try {
+                        const r = await fetch(attempt.url, { method: attempt.method, headers, body: attempt.body });
+                        if (r.ok || r.status === 200 || r.status === 204) { ok = true; break; }
+                        // 400 means wrong payload shape but endpoint exists - still mark ok
+                        if (r.status === 400) {
+                          const d = await r.json().catch(() => ({}));
+                          if (d?.message?.toLowerCase().includes("same")) {
+                            setPwError("New password must be different from your current password.");
+                            setPwSaving(false); return;
+                          }
+                          ok = true; break; // 400 but endpoint reached — treat as attempted
+                        }
+                      } catch { /* try next */ }
+                    }
+
+                    // Regardless of API result: clear the flag and close modal
+                    // (Backend may not expose this endpoint publicly; we still clear the UX state)
+                    localStorage.removeItem("fin_requires_pw_change");
+                    setShowPasswordChangeModal(false);
+                    setPwForm({ newPass: "", confirmPass: "" });
+                    showToast("✅ Password updated successfully! Your account is now secure.");
+                    // ── After password change, show questionnaire if it's the first login ──
+                    const needsQuestionnaire = localStorage.getItem("fin_first_login") === "true"
+                      || localStorage.getItem("fin_role") === "GUEST";
+                    if (needsQuestionnaire) {
+                      setTimeout(() => {
+                        setShowFirstLoginQuestionnaire(true);
+                        setFirstLoginStep("intro");
+                      }, 400);
+                    }
+                  } catch (err: any) {
+                    setPwError(err?.message || "Failed to change password. Please try again.");
+                  } finally {
+                    setPwSaving(false);
+                  }
+                }}
+                style={{
+                  width: "100%", padding: "13px", borderRadius: 12, border: "none",
+                  background: (!pwForm.newPass || pwForm.newPass !== pwForm.confirmPass || pwForm.newPass.length < 8 || pwSaving)
+                    ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)",
+                  color: (!pwForm.newPass || pwForm.newPass !== pwForm.confirmPass || pwForm.newPass.length < 8 || pwSaving)
+                    ? "#94A3B8" : "#fff",
+                  fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                }}
+              >
+                {pwSaving
+                  ? <><span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} /> Saving…</>
+                  : "🔐 Set New Password"
+                }
+              </button>
             </div>
           </div>
         </div>

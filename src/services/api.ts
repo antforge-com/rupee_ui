@@ -350,17 +350,19 @@ export const createBooking = async (payload: {
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
 export const getAllBookings = async (): Promise<any[]> => {
-  const directEndpoints = ["/bookings", "/bookings/all", "/bookings/admin", "/bookings/list"];
-  for (const endpoint of directEndpoints) {
-    try {
-      const response = await api.get(endpoint);
-      const extracted = extractArray(response.data);
-      if (extracted.length > 0) return extracted;
-      if (endpoint === "/bookings") return [];
-    } catch {
-      console.warn(`⚠️ ${endpoint} failed, trying next…`);
-    }
+  // Only try /bookings (the base endpoint).
+  // /bookings/all → 500 "Unknown column 'b1_0.amount'"
+  // /bookings/admin → 500 "Method parameter 'id': Failed to convert"
+  // Both fail on this backend — skip them entirely.
+  try {
+    const response = await api.get("/bookings");
+    const extracted = extractArray(response.data);
+    if (extracted.length >= 0) return extracted; // even empty array is valid
+  } catch (err: any) {
+    console.warn("⚠️ /bookings failed:", err?.message);
   }
+
+  // Fallback: aggregate per-consultant bookings
   try {
     const consultantsData = await apiFetch("/consultants");
     const consultants: any[] = extractArray(consultantsData);
@@ -376,7 +378,7 @@ export const getAllBookings = async (): Promise<any[]> => {
     const all: any[] = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
     const seen = new Set<number>();
     const deduped = all.filter(b => { if (seen.has(b.id)) return false; seen.add(b.id); return true; });
-    console.log(`✅ getAllBookings: ${deduped.length} bookings across ${consultants.length} consultants`);
+    console.log(`✅ getAllBookings fallback: ${deduped.length} bookings across ${consultants.length} consultants`);
     return deduped;
   } catch (err: any) {
     console.error("❌ getAllBookings fallback failed:", err?.message);
@@ -1160,3 +1162,228 @@ tr:nth-child(even){background:#f8fafc}</style></head><body>
 };
 
 export default api;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFERS — public & authenticated
+// These endpoints may return 403 if called without a valid token on some
+// server configurations. We always catch and return [] to prevent home page
+// errors.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/offers/active  — active offers for home page & booking page
+ * Safe: returns [] on any error (including 403 for unauthenticated visitors)
+ */
+export const getActiveOffers = async (): Promise<any[]> => {
+  try {
+    const token = getToken();
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    // Try authenticated endpoint first, then public fallback
+    const endpoints = ["/offers/active", "/offers?active=true", "/offers"];
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(`${BASE_URL}${ep}`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          const arr = Array.isArray(data) ? data : extractArray(data);
+          const active = arr.filter((o: any) =>
+            o.isActive === true || o.active === true || o.status === "ACTIVE" ||
+            // If no explicit active flag, include if within date range
+            (o.validFrom && o.validTo &&
+              new Date(o.validFrom) <= new Date() && new Date(o.validTo) >= new Date())
+          );
+          return active;
+        }
+        if (res.status === 403 || res.status === 401) {
+          console.warn(`⚠️ getActiveOffers: ${res.status} on ${ep} — returning []`);
+          return [];
+        }
+      } catch { continue; }
+    }
+    return [];
+  } catch (err: any) {
+    console.warn("⚠️ getActiveOffers failed (non-fatal):", err?.message);
+    return [];
+  }
+};
+
+/**
+ * GET /api/offers?consultantId=:id  — offers for a specific consultant
+ */
+export const getOffersByConsultant = async (consultantId: number): Promise<any[]> => {
+  try {
+    const data = await apiFetch(`/offers/consultant/${consultantId}`);
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch {
+    try {
+      const data = await apiFetch(`/offers?consultantId=${consultantId}`);
+      return Array.isArray(data) ? data : extractArray(data);
+    } catch { return []; }
+  }
+};
+
+/**
+ * POST /api/offers — create offer (admin or consultant)
+ */
+export const createOffer = async (payload: {
+  title: string; description: string; discount: string;
+  validFrom: string; validTo: string; isActive: boolean;
+  consultantId?: number | null;
+}): Promise<any> => apiFetch("/offers", { method: "POST", body: JSON.stringify(payload) });
+
+/**
+ * PUT /api/offers/:id — update offer
+ */
+export const updateOffer = async (id: number, payload: any): Promise<any> =>
+  apiFetch(`/offers/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+
+/**
+ * DELETE /api/offers/:id — delete offer
+ */
+export const deleteOffer = async (id: number): Promise<void> =>
+  apiFetch(`/offers/${id}`, { method: "DELETE" });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEWS — public & authenticated
+// Safe: returns [] on any error (including 403 for public visitors)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/reviews — approved reviews for home page testimonials
+ * Safe: returns [] on 403/401 (public visitors)
+ */
+export const getPublicReviews = async (): Promise<any[]> => {
+  try {
+    const token = getToken();
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const endpoints = ["/reviews?approved=true", "/reviews/approved", "/reviews"];
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(`${BASE_URL}${ep}`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          return Array.isArray(data) ? data : extractArray(data);
+        }
+        if (res.status === 403 || res.status === 401) {
+          console.warn(`⚠️ getPublicReviews: ${res.status} on ${ep} — returning []`);
+          return [];
+        }
+      } catch { continue; }
+    }
+    return [];
+  } catch (err: any) {
+    console.warn("⚠️ getPublicReviews failed (non-fatal):", err?.message);
+    return [];
+  }
+};
+
+/**
+ * GET /api/reviews/consultant/:id — reviews for a specific consultant
+ */
+export const getReviewsByConsultant = async (consultantId: number): Promise<any[]> => {
+  try {
+    const data = await apiFetch(`/reviews/consultant/${consultantId}`);
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch { return []; }
+};
+
+/**
+ * POST /api/reviews — submit a review after a completed session
+ */
+export const submitReview = async (payload: {
+  consultantId: number; bookingId: number; rating: number; reviewText: string;
+}): Promise<any> => apiFetch("/reviews", { method: "POST", body: JSON.stringify(payload) });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USER CATEGORIES — save questionnaire answers to backend
+// Endpoint: POST /api/users/:id/categories
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const saveUserCategories = async (
+  userId: number,
+  categories: Array<{ category: string; subOption: string; answers: Record<string, string> }>
+): Promise<any> => {
+  try {
+    return await apiFetch(`/users/${userId}/categories`, {
+      method: "POST",
+      body: JSON.stringify(categories),
+    });
+  } catch (err: any) {
+    console.warn("⚠️ saveUserCategories failed (non-fatal):", err?.message);
+    return null;
+  }
+};
+
+export const getUserCategories = async (userId: number): Promise<any[]> => {
+  try {
+    const data = await apiFetch(`/users/${userId}/categories`);
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch { return []; }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TERMS & CONDITIONS — versioned storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getTermsAndConditions = async (): Promise<any[]> => {
+  try {
+    const data = await apiFetch("/admin/terms-and-conditions");
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch { return []; }
+};
+
+export const saveTermsAndConditions = async (payload: {
+  version: string; content: string; isActive: boolean;
+}): Promise<any> => {
+  try {
+    return await apiFetch("/admin/terms-and-conditions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
+    return null;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN — Add Member (POST /api/admin/users)
+// Handles bcrypt encryption on backend, sets isFirstLogin=true
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const adminCreateUser = async (payload: {
+  name: string; email: string; phoneNumber: string;
+  location?: string; role: string; password: string;
+  subscriptionPlanId?: number | null; isFirstLogin?: boolean; adminAdded?: boolean;
+}): Promise<any> => {
+  // Try dedicated admin endpoint first, fallback to onboarding
+  try {
+    return await apiFetch("/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, isFirstLogin: true, requiresPasswordChange: true }),
+    });
+  } catch {
+    return apiFetch("/onboarding", {
+      method: "POST",
+      body: JSON.stringify({
+        name: payload.name,
+        email: payload.email,
+        phoneNumber: payload.phoneNumber,
+        mobileNumber: payload.phoneNumber,
+        location: payload.location || "",
+        subscriptionPlanId: payload.subscriptionPlanId || null,
+        subscribed: payload.role === "SUBSCRIBER",
+        isGuest: payload.role === "GUEST",
+        adminAdded: true,
+        isFirstLogin: true,
+      }),
+    });
+  }
+};
