@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend, CartesianGrid } from "recharts";
 import AddAdvisor from "../components/AddAdvisor";
 import StatusBadge from "../components/StatusBadge";
 
@@ -55,7 +55,7 @@ import {
   updateFeeConfig,
   updateTicketStatus
 } from "../services/api";
-import AnalyticsDashboard from "./AnalyticsDashboard";
+// AnalyticsDashboard is defined inline below
 import BookingsPage from "./BookingsPage";
 import {
   EscalationMonitor,
@@ -175,6 +175,7 @@ type AdminSectionType =
   | "offer-approval"
   | "questions"
   | "commission"
+  | "terms-conditions"
   | "settings";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ const SlaStrip: React.FC<{ ticket: Ticket; compact?: boolean }> = ({ ticket, com
       borderTop: `1px solid ${sla.breached ? "#FECACA" : sla.warning ? "#FDE68A" : "#BBF7D0"}`,
       display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
     }}>
-      <span>{sla.breached ? "🔴" : sla.warning ? "🟡" : "🟢"}</span>
+      <span style={{ width: 10, height: 10, borderRadius: "50%", background: sla.breached ? "#DC2626" : sla.warning ? "#F59E0B" : "#16A34A", display: "inline-block", flexShrink: 0 }} />
       <div>
         <div style={{ fontSize: 11, fontWeight: 700, color: sla.breached ? "#B91C1C" : sla.warning ? "#92400E" : "#15803D" }}>
           SLA {sla.breached ? "BREACHED" : sla.warning ? "WARNING" : "ON TRACK"}
@@ -1059,7 +1060,10 @@ export const CreateTicketModal: React.FC<{
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }} onClick={onClose}>
       <div style={{ background: "#fff", borderRadius: 16, width: 480, maxWidth: "95vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
         <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "20px 24px" }}>
-          <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 700 }}>🎫 Create New Ticket</h3>
+          <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>
+            Create New Ticket
+          </h3>
         </div>
         <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
           {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#B91C1C", fontSize: 13 }}>{error}</div>}
@@ -1533,7 +1537,9 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         </div>
       ) : visible.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 16, color: "#94A3B8" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🎫</div>
+          <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}>
+            <svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" strokeLinecap="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>
+          </div>
           <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>
             {tickets.length === 0 ? "No tickets found." : "No tickets match your filters."}
           </p>
@@ -2636,12 +2642,12 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
     }
   });
   const kpis = [
-    { label: "Total Tickets", value: total, color: "#2563EB", icon: "🎫" },
+    { label: "Total Tickets", value: total, color: "#2563EB", icon: "ticket" },
     { label: "Resolved", value: resolved, color: "#16A34A", icon: "✅", sub: `${total ? Math.round(resolved / total * 100) : 0}% rate` },
-    { label: "SLA Breaches", value: breached, color: "#DC2626", icon: "🚨" },
-    { label: "Escalated", value: escalated, color: "#D97706", icon: "⬆️" },
-    { label: "Avg First Response", value: avgResp === "—" ? "—" : `${avgResp}m`, color: "#7C3AED", icon: "⚡" },
-    { label: "Avg Resolution", value: avgRes === "—" ? "—" : `${avgRes}h`, color: "#059669", icon: "⏱️" },
+    { label: "SLA Breaches", value: breached, color: "#DC2626", icon: "breach" },
+    { label: "Escalated", value: escalated, color: "#D97706", icon: "escalate" },
+    { label: "Avg First Response", value: avgResp === "—" ? "—" : `${avgResp}m`, color: "#7C3AED", icon: "response" },
+    { label: "Avg Resolution", value: avgRes === "—" ? "—" : `${avgRes}h`, color: "#059669", icon: "clock" },
   ];
   return (
     <div style={sc_styles.panelWrap}>
@@ -2654,7 +2660,14 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 12, marginBottom: 24 }}>
         {kpis.map(k => (
           <div key={k.label} style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-            <div style={{ fontSize: 20, marginBottom: 6 }}>{k.icon}</div>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: `${k.color}18`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
+              {k.icon === "ticket" && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>}
+              {k.icon === "breach" && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>}
+              {k.icon === "escalate" && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>}
+              {k.icon === "response" && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><polyline points="13 2 13 9 20 9"/><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/></svg>}
+              {k.icon === "clock" && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+              {!["ticket","breach","escalate","response","clock"].includes(k.icon as string) && <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke={k.color} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+            </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: k.color, fontFamily: "monospace" }}>{k.value}</div>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 2 }}>{k.label}</div>
             {(k as any).sub && <div style={{ fontSize: 10, color: k.color, marginTop: 2 }}>{(k as any).sub}</div>}
@@ -2685,8 +2698,17 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
           {Object.entries(agentStats).map(([agent, s]) => (
             <div key={agent} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #F1F5F9" }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{agent}</div>
-              <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#64748B" }}><span>📥 {s.assigned}</span><span>✅ {s.resolved}</span></div>
-              {s.resCount > 0 && <div style={{ fontSize: 11, color: "#059669", marginTop: 2 }}>⏱ Avg {(s.totalRes / s.resCount).toFixed(1)}h</div>}
+              <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#64748B" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                  {s.assigned} assigned
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#16A34A" }}>
+                  <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  {s.resolved} resolved
+                </span>
+              </div>
+              {s.resCount > 0 && <div style={{ fontSize: 11, color: "#059669", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}><svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Avg {(s.totalRes / s.resCount).toFixed(1)}h resolution</div>}
             </div>
           ))}
         </div>
@@ -2868,47 +2890,58 @@ const TermsConditionsEditor: React.FC = () => {
 
   useEffect(() => {
     setLoading(true);
-    apiFetch("/admin/terms-and-conditions")
+    // Primary: GET /api/static-content/TERMS_AND_CONDITIONS (StaticContentController)
+    // 404 means no T&C saved yet — fall through to localStorage/default (not an error)
+    apiFetch("/static-content/TERMS_AND_CONDITIONS")
       .then((data: any) => {
-        const list = Array.isArray(data) ? data : (Array.isArray(data?.content) ? data.content : []);
-        if (list.length > 0) {
-          setVersions(list.map((v: any) => ({
-            id: v.id,
-            version: v.version || v.versionNumber || "1.0",
-            content: v.content || v.termsText || v.text || "",
-            updatedAt: v.updatedAt || v.createdAt || new Date().toISOString(),
-            updatedBy: v.updatedBy || v.adminName || "Admin",
-            isActive: v.isActive ?? v.active ?? false,
-          })));
-        } else {
-          // Seed with a default version
-          const defaultVer: TermsVersion = {
-            id: 1,
-            version: "1.0",
-            content: DEFAULT_TERMS,
-            updatedAt: new Date().toISOString(),
-            updatedBy: "Admin",
+        if (data && (data.content || data.text)) {
+          // Backend has saved T&C — build a version entry from it
+          const ver: TermsVersion = {
+            id: data.contentId || 1,
+            version: data.version || "1.0",
+            content: data.content || data.text || "",
+            updatedAt: data.lastUpdatedDate || data.updatedAt || new Date().toISOString(),
+            updatedBy: data.lastUpdatedBy || "Admin",
             isActive: true,
           };
-          setVersions([defaultVer]);
+          // Merge with any existing localStorage history
+          const localData = localStorage.getItem("fin_terms_versions");
+          if (localData) {
+            try {
+              const localVers: TermsVersion[] = JSON.parse(localData);
+              // Keep local history but mark only the backend version as active
+              const merged = localVers.map(v => ({ ...v, isActive: false }));
+              const alreadyExists = merged.some(v => v.id === ver.id);
+              if (!alreadyExists) merged.push(ver);
+              else merged[merged.findIndex(v => v.id === ver.id)] = ver;
+              setVersions(merged.sort((a, b) => a.id - b.id));
+              return;
+            } catch { /* fall through */ }
+          }
+          setVersions([ver]);
+        } else {
+          throw new Error("empty");
         }
       })
       .catch(() => {
-        // Fallback to stored local or default
+        // 404 or empty — load from localStorage history first, then hardcoded default
         const localData = localStorage.getItem("fin_terms_versions");
         if (localData) {
-          try { setVersions(JSON.parse(localData)); } catch { setVersions([]); }
-        } else {
-          const defaultVer: TermsVersion = {
-            id: Date.now(),
-            version: "1.0",
-            content: DEFAULT_TERMS,
-            updatedAt: new Date().toISOString(),
-            updatedBy: "Admin",
-            isActive: true,
-          };
-          setVersions([defaultVer]);
+          try {
+            const parsed: TermsVersion[] = JSON.parse(localData);
+            if (parsed.length > 0) { setVersions(parsed); return; }
+          } catch { /* fall through */ }
         }
+        // Nothing anywhere — seed with hardcoded default (not yet saved to backend)
+        const defaultVer: TermsVersion = {
+          id: 1,
+          version: "1.0",
+          content: DEFAULT_TERMS,
+          updatedAt: new Date().toISOString(),
+          updatedBy: "Admin",
+          isActive: true,
+        };
+        setVersions([defaultVer]);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -2937,9 +2970,14 @@ const TermsConditionsEditor: React.FC = () => {
       isActive: true,
     };
     try {
-      await apiFetch("/admin/terms-and-conditions", {
+      // POST /api/static-content — StaticContentController upsert
+      await apiFetch("/static-content", {
         method: "POST",
-        body: JSON.stringify({ version: editVersion, content: editContent, isActive: true }),
+        body: JSON.stringify({
+          contentType: "TERMS_AND_CONDITIONS",
+          content: editContent,
+          lastUpdatedBy: "Admin",
+        }),
       });
     } catch {
       // Silently ignore if endpoint doesn't exist; store locally
@@ -3688,7 +3726,7 @@ const CommissionConfigPanel: React.FC = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 const QuestionsManagementPanel: React.FC = () => {
   interface QItem { id?: number; skillId: number; text: string; skillName?: string; updatedAt?: string; }
-  interface SkillItem { id: number; name: string; description?: string; title?: string; }
+  interface SkillItem { id: number; name: string; skillName?: string; description?: string; title?: string; isActive?: boolean; }
 
   const [questions, setQuestions] = React.useState<QItem[]>([]);
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
@@ -3716,18 +3754,23 @@ const QuestionsManagementPanel: React.FC = () => {
   const load = async () => {
     setLoading(true);
     try {
-      // Use getAllSkills() which tries /skills, /skill-master, etc. as fallback
+      // GET /api/skills — returns SkillResponse { id, skillName, isActive }
+      // getAllSkills() normalizes skillName → name for consistent access
       const skillArr: SkillItem[] = await getAllSkills();
       setSkills(skillArr);
       if (skillArr.length > 0) {
-        const ids = skillArr.map(s => s.id).filter(Boolean).join(",");
-        if (!ids) { setQuestions([]); return; }
+        const ids = skillArr.map(s => Number(s.id)).filter(Boolean);
+        if (ids.length === 0) { setQuestions([]); return; }
         try {
-          const data = await apiFetch(`/questions?skillIds=${ids}`);
+          const data = await apiFetch(`/questions?skillIds=${ids.join(",")}`);
           const qArr: any[] = Array.isArray(data) ? data : extractArray(data);
           const skillMap: Record<number, string> = {};
-          skillArr.forEach(s => { skillMap[s.id] = s.name || s.title || `Skill ${s.id}`; });
-          setQuestions(qArr.map(q => ({ ...q, skillName: skillMap[q.skillId] || `Skill ${q.skillId}` })));
+          skillArr.forEach(s => { skillMap[Number(s.id)] = s.skillName || s.name || `Skill ${s.id}`; });
+          setQuestions(qArr.map(q => ({
+            ...q,
+            skillId: Number(q.skillId),
+            skillName: skillMap[Number(q.skillId)] || `Skill ${q.skillId}`,
+          })));
         } catch { setQuestions([]); }
       } else {
         setQuestions([]);
@@ -3790,10 +3833,15 @@ const QuestionsManagementPanel: React.FC = () => {
   };
 
   const handleDeleteQ = async (id: number) => {
-    if (!window.confirm("Delete this question? User answers will also be removed.")) return;
+    if (!window.confirm("Delete this question? User answers linked to it will also be removed.")) return;
     setDeletingQ(id);
-    try { await apiFetch(`/questions/${id}`, { method: "DELETE" }); setQuestions(prev => prev.filter(q => q.id !== id)); showToast("Deleted."); }
-    catch (e: any) { showToast(e?.message || "Failed."); } finally { setDeletingQ(null); }
+    try {
+      await apiFetch(`/questions/${id}`, { method: "DELETE" });
+      showToast("✅ Question deleted.");
+      await load();
+    }
+    catch (e: any) { showToast(e?.message || "Failed to delete question."); }
+    finally { setDeletingQ(null); }
   };
 
   const filtered = filterSkill === "All" ? questions : questions.filter(q => q.skillId === filterSkill);
@@ -3972,7 +4020,11 @@ const OfferApprovalPanel: React.FC = () => {
 
   const load = async () => {
     setLoading(true);
-    try { const data = await getConsultantSubmittedOffers(); setOffers(data); }
+    try {
+      // GET /api/offers/admin — all offers; filter by consultantId for consultant-submitted ones
+      const data = await getConsultantSubmittedOffers();
+      setOffers(data);
+    }
     catch { setOffers([]); }
     finally { setLoading(false); }
   };
@@ -3982,15 +4034,23 @@ const OfferApprovalPanel: React.FC = () => {
   const handleAction = async (id: number, action: "approve" | "reject") => {
     setProcessing(id);
     try {
-      if (action === "approve") { await approveOffer(id); showToast("Offer approved and is now live."); }
-      else { await rejectOffer(id); showToast("Offer rejected."); }
-      setOffers(prev => prev.map(o => o.id === id ? { ...o, approvalStatus: action === "approve" ? "APPROVED" : "REJECTED", isActive: action === "approve" } : o));
+      if (action === "approve") {
+        await approveOffer(id);
+        showToast("✅ Offer approved and is now live.");
+        setOffers(prev => prev.map(o => o.id === id ? { ...o, status: "APPROVED", approvalStatus: "APPROVED", isActive: true } : o));
+      } else {
+        await rejectOffer(id);
+        showToast("Offer rejected.");
+        setOffers(prev => prev.map(o => o.id === id ? { ...o, status: "REJECTED", approvalStatus: "REJECTED", isActive: false } : o));
+      }
     } catch (e: any) { showToast(e?.message || "Action failed."); }
     finally { setProcessing(null); }
   };
 
-  const filtered = filter === "ALL" ? offers : offers.filter(o => (o.approvalStatus || "PENDING").toUpperCase() === filter);
-  const pendingCount = offers.filter(o => (o.approvalStatus || "PENDING").toUpperCase() === "PENDING").length;
+  // Backend OfferResponse.status field: PENDING | APPROVED | REJECTED
+  const getOfferStatus = (o: any) => (o.status || o.approvalStatus || "PENDING").toUpperCase();
+  const filtered = filter === "ALL" ? offers : offers.filter(o => getOfferStatus(o) === filter);
+  const pendingCount = offers.filter(o => getOfferStatus(o) === "PENDING").length;
   const statusCfg: Record<string, { color: string; bg: string; border: string; label: string }> = {
     PENDING: { color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", label: "Pending" },
     APPROVED: { color: "#16A34A", bg: "#DCFCE7", border: "#86EFAC", label: "Approved" },
@@ -4019,7 +4079,7 @@ const OfferApprovalPanel: React.FC = () => {
         {(["ALL", "PENDING", "APPROVED", "REJECTED"] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)}
             style={{ padding: "7px 16px", borderRadius: 20, border: `1.5px solid ${filter === f ? "#2563EB" : "#E2E8F0"}`, background: filter === f ? "#EFF6FF" : "#fff", color: filter === f ? "#2563EB" : "#64748B", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            {f} ({f === "ALL" ? offers.length : offers.filter(o => (o.approvalStatus || "PENDING").toUpperCase() === f).length})
+            {f} ({f === "ALL" ? offers.length : offers.filter(o => getOfferStatus(o) === f).length})
           </button>
         ))}
       </div>
@@ -4036,7 +4096,7 @@ const OfferApprovalPanel: React.FC = () => {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {filtered.map(offer => {
-            const status = (offer.approvalStatus || "PENDING").toUpperCase();
+            const status = (offer.status || offer.approvalStatus || "PENDING").toUpperCase();
             const cfg = statusCfg[status] || statusCfg.PENDING;
             return (
               <div key={offer.id} style={{ background: "#fff", border: `1px solid ${status === "PENDING" ? "#FCD34D" : "#F1F5F9"}`, borderLeft: `4px solid ${cfg.color}`, borderRadius: 14, padding: "18px 20px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
@@ -4080,7 +4140,9 @@ const OfferApprovalPanel: React.FC = () => {
 
 // ADMIN OFFERS PANEL — Full CRUD for offers management
 // ─────────────────────────────────────────────────────────────────────────────
-interface AdminOffer { id?: number; title: string; description: string; discount: string; validFrom: string; validTo: string; isActive: boolean; consultantId?: number | null; }
+// AdminOffer matches backend OfferResponse DTO exactly:
+// id, title, description, discount, validFrom, validTo, isActive, consultantId, status
+interface AdminOffer { id?: number; title: string; description: string; discount: string; validFrom: string; validTo: string; isActive: boolean; consultantId?: number | null; status?: string; }
 
 const AdminOffersPanel: React.FC = () => {
   const [offers, setOffers] = React.useState<AdminOffer[]>([]);
@@ -4094,10 +4156,16 @@ const AdminOffersPanel: React.FC = () => {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2800); };
 
+  // Helper: convert LocalDateTime string (2025-06-01T00:00:00) to datetime-local input value
+  const toDatetimeLocal = (dt: string) => dt ? dt.substring(0, 16) : '';
+  // Helper: ensure datetime string ends with :00 for backend LocalDateTime
+  const toLocalDateTime = (dt: string) => dt ? (dt.length === 16 ? dt + ':00' : dt) : '';
+
   const load = async () => {
     setLoading(true);
     try {
-      const data = await apiFetch('/offers');
+      // GET /api/offers/admin — all offers (admin view)
+      const data = await apiFetch('/offers/admin');
       const arr = Array.isArray(data) ? data : data?.content || data?.offers || [];
       setOffers(arr);
     } catch { setOffers([]); }
@@ -4110,22 +4178,46 @@ const AdminOffersPanel: React.FC = () => {
     setForm({ title: '', description: '', discount: '', validFrom: '', validTo: '', isActive: true, consultantId: null });
     setEditing(null); setShowForm(true);
   };
-  const openEdit = (o: AdminOffer) => { setForm({ ...o }); setEditing(o); setShowForm(true); };
+  const openEdit = (o: AdminOffer) => {
+    setForm({
+      ...o,
+      // Convert backend LocalDateTime (2025-06-01T10:00:00) to datetime-local value (2025-06-01T10:00)
+      validFrom: toDatetimeLocal(o.validFrom || ''),
+      validTo: toDatetimeLocal(o.validTo || ''),
+    });
+    setEditing(o);
+    setShowForm(true);
+  };
 
   const handleSave = async () => {
     if (!form.title.trim()) { showToast('Title is required.'); return; }
+    if (!form.discount.trim()) { showToast('Discount is required (e.g. 20% or ₹500).'); return; }
+    if (!form.validFrom || !form.validTo) { showToast('Valid From and Valid To dates are required.'); return; }
     setSaving(true);
     try {
+      // Build payload matching OfferRequest DTO exactly
+      const payload = {
+        title: form.title.trim(),
+        description: form.description || "",
+        discount: form.discount.trim(),
+        validFrom: toLocalDateTime(form.validFrom),
+        validTo: toLocalDateTime(form.validTo),
+        isActive: form.isActive,
+        ...(form.consultantId != null ? { consultantId: form.consultantId } : {}),
+      };
       if (editing?.id) {
-        await apiFetch(`/offers/${editing.id}`, { method: 'PUT', body: JSON.stringify(form) });
-        setOffers(prev => prev.map(o => o.id === editing.id ? { ...o, ...form } : o));
+        // PUT /api/offers/{id}
+        const updated = await apiFetch(`/offers/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        setOffers(prev => prev.map(o => o.id === editing.id ? { ...o, ...payload, id: editing.id, status: updated?.status || o.status } : o));
         showToast('✓ Offer updated!');
       } else {
-        const created = await apiFetch('/offers', { method: 'POST', body: JSON.stringify(form) });
-        setOffers(prev => [...prev, { ...form, id: created?.id ?? Date.now() }]);
-        showToast('✓ Offer created!');
+        // POST /api/offers — admin offers auto-APPROVED by backend
+        const created = await apiFetch('/offers', { method: 'POST', body: JSON.stringify(payload) });
+        setOffers(prev => [...prev, { ...payload, id: created?.id ?? Date.now(), status: created?.status || "APPROVED" }]);
+        showToast('✓ Offer created and approved!');
       }
       setShowForm(false);
+      await load(); // refresh list from backend
     } catch (e: any) { showToast(e?.message || 'Failed to save.'); }
     finally { setSaving(false); }
   };
@@ -4170,8 +4262,8 @@ const AdminOffersPanel: React.FC = () => {
               <input type="checkbox" id="admin-offer-active" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563EB' }} />
               <label htmlFor="admin-offer-active" style={{ fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>Active (show to customers)</label>
             </div>
-            <div><label style={lbl}>Valid From</label><input type="date" value={form.validFrom} onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))} style={inp} /></div>
-            <div><label style={lbl}>Valid Until</label><input type="date" value={form.validTo} onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))} style={inp} /></div>
+            <div><label style={lbl}>Valid From *</label><input type="datetime-local" value={toDatetimeLocal(form.validFrom)} onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))} style={inp} /></div>
+            <div><label style={lbl}>Valid Until *</label><input type="datetime-local" value={toDatetimeLocal(form.validTo)} onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))} style={inp} /></div>
             <div><label style={lbl}>Consultant ID <span style={{ fontWeight: 400 }}>(optional — leave blank for all)</span></label><input type="number" value={form.consultantId ?? ''} onChange={e => setForm(f => ({ ...f, consultantId: e.target.value ? Number(e.target.value) : null }))} placeholder="Link to specific consultant" style={inp} /></div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
@@ -4209,10 +4301,22 @@ const AdminOffersPanel: React.FC = () => {
               <div>{offer.discount ? <span style={{ fontSize: 11, fontWeight: 800, background: '#DC2626', color: '#fff', padding: '2px 8px', borderRadius: 20 }}>{offer.discount}</span> : <span style={{ color: '#CBD5E1' }}>—</span>}</div>
               <div style={{ fontSize: 12, color: '#64748B' }}>{offer.validFrom || '—'}</div>
               <div style={{ fontSize: 12, color: '#64748B' }}>{offer.validTo || '—'}</div>
-              <div>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: offer.isActive ? '#DCFCE7' : '#F1F5F9', color: offer.isActive ? '#16A34A' : '#94A3B8', border: `1px solid ${offer.isActive ? '#86EFAC' : '#E2E8F0'}` }}>
-                  {offer.isActive ? 'Active' : 'Inactive'}
-                </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {(() => {
+                  const st = (offer.status || 'PENDING').toUpperCase();
+                  const stCfg: Record<string, {bg:string;color:string;border:string}> = {
+                    APPROVED: {bg:'#DCFCE7',color:'#16A34A',border:'#86EFAC'},
+                    PENDING:  {bg:'#FFFBEB',color:'#D97706',border:'#FCD34D'},
+                    REJECTED: {bg:'#FEF2F2',color:'#DC2626',border:'#FECACA'},
+                  };
+                  const cfg = stCfg[st] || stCfg.PENDING;
+                  return (
+                    <>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>{st}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: offer.isActive ? '#16A34A' : '#94A3B8' }}>{offer.isActive ? '● Active' : '○ Inactive'}</span>
+                    </>
+                  );
+                })()}
               </div>
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                 <button onClick={() => openEdit(offer)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 7, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
@@ -4226,6 +4330,344 @@ const AdminOffersPanel: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYTICS DASHBOARD — inline, professional SVG tab icons, consultant performance
+// Replaces external AnalyticsDashboard import
+// ─────────────────────────────────────────────────────────────────────────────
+type AnalyticsTabId = "volume" | "agents" | "satisfaction" | "response" | "sla" | "revenue";
+const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; bookings: any[]; mode?: string }> = ({ tickets, consultants, bookings }) => {
+  const [activeTab, setActiveTab] = React.useState<AnalyticsTabId>("volume");
+  const [rangeFilter, setRangeFilter] = React.useState<"daily" | "weekly" | "monthly">("daily");
+
+  // ── Utility helpers ──
+  const now = new Date();
+  const daysAgo = (n: number) => { const d = new Date(now); d.setDate(d.getDate() - n); d.setHours(0,0,0,0); return d; };
+  const rangeDays = rangeFilter === "daily" ? 14 : rangeFilter === "weekly" ? 60 : 180;
+  const rangeStart = daysAgo(rangeDays);
+  const inRange = (t: any) => { try { return new Date(t.createdAt) >= rangeStart; } catch { return true; } };
+  const filteredTickets = tickets.filter(inRange);
+
+  // ── Ticket Volume stats ──
+  const total = filteredTickets.length;
+  const resolved = filteredTickets.filter(t => t.status === "RESOLVED" || t.status === "CLOSED").length;
+  const open = filteredTickets.filter(t => ["NEW","OPEN","IN_PROGRESS","PENDING"].includes(t.status)).length;
+  const resRate = total > 0 ? Math.round(resolved / total * 100) : 0;
+
+  // Group tickets by date for chart
+  const dayMap: Record<string, { created: number; resolved: number }> = {};
+  const last14 = Array.from({ length: 14 }, (_, i) => {
+    const d = daysAgo(13 - i);
+    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  });
+  last14.forEach(d => { dayMap[d] = { created: 0, resolved: 0 }; });
+  filteredTickets.forEach(t => {
+    try {
+      const d = new Date(t.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+      if (dayMap[d]) { dayMap[d].created++; if (t.status === "RESOLVED" || t.status === "CLOSED") dayMap[d].resolved++; }
+    } catch {}
+  });
+  const chartMax = Math.max(...Object.values(dayMap).map(v => v.created), 1);
+
+  // ── Agent performance ──
+  const agentMap: Record<string, { name: string; assigned: number; resolved: number; totalResMs: number; resCount: number }> = {};
+  filteredTickets.forEach(t => {
+    const name = t.agentName || t.consultantName || "";
+    if (!name) return;
+    if (!agentMap[name]) agentMap[name] = { name, assigned: 0, resolved: 0, totalResMs: 0, resCount: 0 };
+    agentMap[name].assigned++;
+    if (t.status === "RESOLVED" && t.createdAt && t.resolvedAt) {
+      agentMap[name].resolved++;
+      const ms = new Date(t.resolvedAt).getTime() - new Date(t.createdAt).getTime();
+      if (ms > 0) { agentMap[name].totalResMs += ms; agentMap[name].resCount++; }
+    }
+  });
+  const agents = Object.values(agentMap).sort((a, b) => b.resolved - a.resolved);
+
+  // ── Customer satisfaction (from feedback) ──
+  const rated = filteredTickets.filter(t => t.feedbackRating && t.feedbackRating > 0);
+  const avgRating = rated.length > 0 ? (rated.reduce((s, t) => s + t.feedbackRating, 0) / rated.length).toFixed(1) : "—";
+  const ratingDist: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  rated.forEach(t => { const r = Math.round(t.feedbackRating); if (r >= 1 && r <= 5) ratingDist[r]++; });
+  const ratingMax = Math.max(...Object.values(ratingDist), 1);
+
+  // ── SLA breach stats ──
+  const slaBreached = filteredTickets.filter(t => t.isSlaBreached).length;
+  const slaRate = total > 0 ? Math.round(slaBreached / total * 100) : 0;
+  const slaByCategory: Record<string, { total: number; breached: number }> = {};
+  filteredTickets.forEach(t => {
+    if (!slaByCategory[t.category]) slaByCategory[t.category] = { total: 0, breached: 0 };
+    slaByCategory[t.category].total++;
+    if (t.isSlaBreached) slaByCategory[t.category].breached++;
+  });
+
+  // ── Bookings & Revenue ──
+  const totalBookings = bookings.length;
+  const completedBookings = bookings.filter((b: any) => b.status === "COMPLETED").length;
+  const totalRevenue = bookings.filter((b: any) => b.status === "COMPLETED").reduce((s: number, b: any) => s + (b.amount || 0), 0);
+  const bookingsByConsultant: Record<string, { name: string; count: number; revenue: number }> = {};
+  bookings.forEach((b: any) => {
+    const name = b.advisor || b.consultantName || `Consultant #${b.consultantId || "?"}`;
+    if (!bookingsByConsultant[name]) bookingsByConsultant[name] = { name, count: 0, revenue: 0 };
+    bookingsByConsultant[name].count++;
+    if (b.status === "COMPLETED") bookingsByConsultant[name].revenue += (b.amount || 0);
+  });
+  const topConsultants = Object.values(bookingsByConsultant).sort((a, b) => b.count - a.count).slice(0, 5);
+
+  const TABS: { id: AnalyticsTabId; label: string; icon: React.ReactNode }[] = [
+    { id: "volume", label: "Ticket Volume", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> },
+    { id: "agents", label: "Agent Performance", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="9" cy="7" r="4"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><path d="M16 11l2 2 4-4" strokeLinejoin="round"/></svg> },
+    { id: "satisfaction", label: "Customer Satisfaction", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg> },
+    { id: "response", label: "Response Times", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> },
+    { id: "sla", label: "SLA Breach", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> },
+    { id: "revenue", label: "Bookings & Revenue", icon: <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> },
+  ];
+
+  const statCard = (label: string, value: string | number, sub?: string, color = "#2563EB") => (
+    <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 14, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "monospace" }}>{value}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 4 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+
+  const miniBar = (val: number, max: number, color: string) => (
+    <div style={{ height: 6, background: "#F1F5F9", borderRadius: 3, overflow: "hidden", marginTop: 4 }}>
+      <div style={{ height: "100%", width: `${Math.round((val / Math.max(max, 1)) * 100)}%`, background: color, borderRadius: 3, transition: "width 0.4s" }} />
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Analytics & Reports</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#64748B" }}>Comprehensive analytics across all tickets, agents, and customer satisfaction</p>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 0, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 12, padding: 4, marginBottom: 24, overflowX: "auto" }}>
+        {TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 16px", borderRadius: 9, border: "none", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s",
+              background: activeTab === tab.id ? "#fff" : "transparent",
+              color: activeTab === tab.id ? "#2563EB" : "#64748B",
+              fontWeight: activeTab === tab.id ? 700 : 500,
+              fontSize: 12,
+              boxShadow: activeTab === tab.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
+            }}>
+            {tab.icon}
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Range filter */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+        {(["daily","weekly","monthly"] as const).map(r => (
+          <button key={r} onClick={() => setRangeFilter(r)}
+            style={{ padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${rangeFilter === r ? "#2563EB" : "#E2E8F0"}`, background: rangeFilter === r ? "#EFF6FF" : "#fff", color: rangeFilter === r ? "#2563EB" : "#64748B", fontSize: 12, fontWeight: rangeFilter === r ? 700 : 500, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>
+            {r === "daily" ? "Daily" : r === "weekly" ? "Weekly" : "Monthly"}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TICKET VOLUME ── */}
+      {activeTab === "volume" && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
+            {statCard("Total Created", total, undefined, "#2563EB")}
+            {statCard("Total Resolved", resolved, `${resRate}% rate`, "#16A34A")}
+            {statCard("Open / Active", open, undefined, "#D97706")}
+            {statCard("Resolution Rate", `${resRate}%`, undefined, "#7C3AED")}
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, padding: "20px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>Ticket Volume — Last 14 Days</div>
+            <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 16 }}>Track created vs resolved tickets over time</div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 140 }}>
+              {last14.map(d => {
+                const v = dayMap[d] || { created: 0, resolved: 0 };
+                const h = Math.round((v.created / chartMax) * 120);
+                const rh = Math.round((v.resolved / chartMax) * 120);
+                return (
+                  <div key={d} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                    <div style={{ width: "100%", display: "flex", gap: 1, alignItems: "flex-end", height: 120 }}>
+                      <div style={{ flex: 1, background: "#BFDBFE", borderRadius: "3px 3px 0 0", height: h || 2 }} title={`${v.created} created`} />
+                      <div style={{ flex: 1, background: "#16A34A", borderRadius: "3px 3px 0 0", height: rh || 0, opacity: 0.7 }} title={`${v.resolved} resolved`} />
+                    </div>
+                    <div style={{ fontSize: 8, color: "#94A3B8", textAlign: "center", transform: "rotate(-35deg)", transformOrigin: "center", marginTop: 4 }}>{d}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 11, color: "#64748B" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#BFDBFE", display: "inline-block" }}/> Created</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#16A34A", opacity: 0.7, display: "inline-block" }}/> Resolved</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── AGENT PERFORMANCE ── */}
+      {activeTab === "agents" && (
+        <div>
+          <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, overflow: "hidden" }}>
+            <div style={{ padding: "16px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9", display: "grid", gridTemplateColumns: "1fr 80px 90px 110px 100px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <div>Consultant / Agent</div><div style={{ textAlign: "center" }}>Assigned</div><div style={{ textAlign: "center" }}>Resolved</div><div style={{ textAlign: "center" }}>Avg Resolution</div><div style={{ textAlign: "center" }}>Rate</div>
+            </div>
+            {agents.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center", color: "#94A3B8", fontSize: 13 }}>No assigned tickets yet — assign tickets to consultants to see performance data</div>
+            ) : agents.map((a, i) => {
+              const rate = a.assigned > 0 ? Math.round(a.resolved / a.assigned * 100) : 0;
+              const avgRes = a.resCount > 0 ? (a.totalResMs / a.resCount / 3600000).toFixed(1) : "—";
+              return (
+                <div key={a.name} style={{ display: "grid", gridTemplateColumns: "1fr 80px 90px 110px 100px", padding: "14px 20px", borderBottom: i < agents.length - 1 ? "1px solid #F8FAFC" : "none", alignItems: "center" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#FAFBFF")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>{a.name}</div>
+                    <div style={{ marginTop: 4, height: 5, background: "#F1F5F9", borderRadius: 3, width: 120, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${rate}%`, background: rate >= 70 ? "#16A34A" : rate >= 40 ? "#D97706" : "#DC2626", borderRadius: 3 }} />
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: "#2563EB" }}>{a.assigned}</div>
+                  <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: "#16A34A" }}>{a.resolved}</div>
+                  <div style={{ textAlign: "center", fontSize: 13, color: "#64748B" }}>{avgRes === "—" ? "—" : `${avgRes}h`}</div>
+                  <div style={{ textAlign: "center" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: rate >= 70 ? "#DCFCE7" : rate >= 40 ? "#FFFBEB" : "#FEF2F2", color: rate >= 70 ? "#16A34A" : rate >= 40 ? "#D97706" : "#DC2626" }}>{rate}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── CUSTOMER SATISFACTION ── */}
+      {activeTab === "satisfaction" && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
+            {statCard("Avg Rating", avgRating === "—" ? "—" : `${avgRating} / 5`, `from ${rated.length} reviews`, "#F59E0B")}
+            {statCard("Reviews Collected", rated.length, undefined, "#7C3AED")}
+            {statCard("5-Star Reviews", ratingDist[5], `${rated.length > 0 ? Math.round(ratingDist[5]/rated.length*100) : 0}% of total`, "#16A34A")}
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, padding: "20px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 16 }}>Rating Distribution</div>
+            {[5,4,3,2,1].map(star => (
+              <div key={star} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 40, fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4 }}>
+                  {star}<svg width="11" height="11" fill="#F59E0B" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                </div>
+                <div style={{ flex: 1, height: 8, background: "#F1F5F9", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.round((ratingDist[star] / ratingMax) * 100)}%`, background: star >= 4 ? "#16A34A" : star === 3 ? "#F59E0B" : "#DC2626", borderRadius: 4, transition: "width 0.4s" }} />
+                </div>
+                <div style={{ width: 30, fontSize: 12, color: "#64748B", textAlign: "right" }}>{ratingDist[star]}</div>
+              </div>
+            ))}
+            {rated.length === 0 && <div style={{ color: "#94A3B8", fontSize: 12, textAlign: "center", padding: "20px 0" }}>No feedback collected yet</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── RESPONSE TIMES ── */}
+      {activeTab === "response" && (() => {
+        const resTimes = filteredTickets.map(t => { try { if (t.resolvedAt && t.createdAt) return (new Date(t.resolvedAt).getTime() - new Date(t.createdAt).getTime()) / 3600000; } catch {} return null; }).filter((x): x is number => x !== null);
+        const respTimes = filteredTickets.map(t => { try { if (t.firstResponseAt && t.createdAt) return (new Date(t.firstResponseAt).getTime() - new Date(t.createdAt).getTime()) / 3600000; } catch {} return null; }).filter((x): x is number => x !== null);
+        const avgRes = resTimes.length ? (resTimes.reduce((a,b)=>a+b,0)/resTimes.length).toFixed(1) : "—";
+        const avgResp = respTimes.length ? (respTimes.reduce((a,b)=>a+b,0)/respTimes.length).toFixed(1) : "—";
+        const medRes = resTimes.length ? [...resTimes].sort((a,b)=>a-b)[Math.floor(resTimes.length/2)].toFixed(1) : "—";
+        const byPriority: Record<string, number[]> = {};
+        filteredTickets.forEach(t => { if (t.resolvedAt && t.createdAt) { const h = (new Date(t.resolvedAt).getTime() - new Date(t.createdAt).getTime())/3600000; if (!byPriority[t.priority]) byPriority[t.priority] = []; byPriority[t.priority].push(h); } });
+        const PRIORITY_COLORS: Record<string, string> = { CRITICAL: "#7C3AED", URGENT: "#DC2626", HIGH: "#EA580C", MEDIUM: "#D97706", LOW: "#16A34A" };
+        return (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
+              {statCard("Avg Resolution", avgRes === "—" ? "—" : `${avgRes}h`, undefined, "#059669")}
+              {statCard("Median Resolution", medRes === "—" ? "—" : `${medRes}h`, undefined, "#2563EB")}
+              {statCard("Avg First Response", avgResp === "—" ? "—" : `${avgResp}h`, undefined, "#7C3AED")}
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, padding: "20px 24px" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 16 }}>Resolution Time by Priority</div>
+              {Object.entries(byPriority).length === 0 ? (
+                <div style={{ color: "#94A3B8", fontSize: 12, textAlign: "center", padding: "20px 0" }}>No resolved tickets yet</div>
+              ) : Object.entries(byPriority).map(([p, times]) => {
+                const avg = (times.reduce((a,b)=>a+b,0)/times.length).toFixed(1);
+                const max = Math.max(...times);
+                return (
+                  <div key={p} style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                      <span style={{ fontWeight: 700, color: PRIORITY_COLORS[p] || "#374151" }}>{p}</span>
+                      <span style={{ color: "#64748B" }}>Avg {avg}h · {times.length} tickets</span>
+                    </div>
+                    {miniBar(parseFloat(avg), max, PRIORITY_COLORS[p] || "#2563EB")}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── SLA BREACH ── */}
+      {activeTab === "sla" && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
+            {statCard("SLA Breaches", slaBreached, undefined, "#DC2626")}
+            {statCard("Breach Rate", `${slaRate}%`, `of ${total} tickets`, "#D97706")}
+            {statCard("Compliant Tickets", total - slaBreached, `${100 - slaRate}% on track`, "#16A34A")}
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, padding: "20px 24px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 16 }}>SLA Breach by Category</div>
+            {Object.entries(slaByCategory).length === 0 ? (
+              <div style={{ color: "#94A3B8", fontSize: 12, textAlign: "center", padding: "20px 0" }}>No tickets to analyse</div>
+            ) : Object.entries(slaByCategory).sort((a,b) => b[1].breached - a[1].breached).map(([cat, data]) => {
+              const rate = data.total > 0 ? Math.round(data.breached / data.total * 100) : 0;
+              return (
+                <div key={cat} style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                    <span style={{ fontWeight: 700, color: "#374151" }}>{cat}</span>
+                    <span style={{ color: rate > 50 ? "#DC2626" : "#64748B" }}>{data.breached}/{data.total} breached ({rate}%)</span>
+                  </div>
+                  {miniBar(data.breached, data.total, rate > 50 ? "#DC2626" : rate > 25 ? "#D97706" : "#16A34A")}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── BOOKINGS & REVENUE ── */}
+      {activeTab === "revenue" && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
+            {statCard("Total Bookings", totalBookings, undefined, "#2563EB")}
+            {statCard("Completed", completedBookings, `${totalBookings > 0 ? Math.round(completedBookings/totalBookings*100) : 0}% rate`, "#16A34A")}
+            {statCard("Total Revenue", totalRevenue > 0 ? `₹${totalRevenue.toLocaleString()}` : "₹0", "from completed", "#059669")}
+            {statCard("Active Consultants", consultants.length, undefined, "#7C3AED")}
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, overflow: "hidden" }}>
+            <div style={{ padding: "16px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9", display: "grid", gridTemplateColumns: "1fr 80px 100px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              <div>Consultant</div><div style={{ textAlign: "center" }}>Bookings</div><div style={{ textAlign: "right" }}>Revenue (₹)</div>
+            </div>
+            {topConsultants.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center", color: "#94A3B8", fontSize: 13 }}>No booking data available yet</div>
+            ) : topConsultants.map((c, i) => (
+              <div key={c.name} style={{ display: "grid", gridTemplateColumns: "1fr 80px 100px", padding: "13px 20px", borderBottom: i < topConsultants.length - 1 ? "1px solid #F8FAFC" : "none", alignItems: "center" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "#FAFBFF")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{c.name}</div>
+                <div style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: "#2563EB" }}>{c.count}</div>
+                <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: c.revenue > 0 ? "#059669" : "#94A3B8" }}>
+                  {c.revenue > 0 ? `₹${c.revenue.toLocaleString()}` : "—"}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -4249,10 +4691,12 @@ function AdminPageInner() {
   const [backendStatus, setBackendStatus] = useState<"online" | "offline" | "error" | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [bookingChartData, setBookingChartData] = useState<{ day: string; bookings: number }[]>([
-    { day: "Mon", bookings: 0 }, { day: "Tue", bookings: 0 }, { day: "Wed", bookings: 0 },
-    { day: "Thu", bookings: 0 }, { day: "Fri", bookings: 0 }, { day: "Sat", bookings: 0 }, { day: "Sun", bookings: 0 },
+  const [bookingChartData, setBookingChartData] = useState<{ day: string; bookings: number; revenue: number }[]>([
+    { day: "Mon", bookings: 0, revenue: 0 }, { day: "Tue", bookings: 0, revenue: 0 }, { day: "Wed", bookings: 0, revenue: 0 },
+    { day: "Thu", bookings: 0, revenue: 0 }, { day: "Fri", bookings: 0, revenue: 0 }, { day: "Sat", bookings: 0, revenue: 0 }, { day: "Sun", bookings: 0, revenue: 0 },
   ]);
+  // Consultant performance: bookings per consultant for the bar chart
+  const [consultantChartData, setConsultantChartData] = useState<{ name: string; bookings: number; revenue: number }[]>([]);
 
   const currentAdminId = Number(localStorage.getItem("fin_user_id") ?? 0);
 
@@ -4357,12 +4801,42 @@ function AdminPageInner() {
           if (d >= monday && d <= sunday) { const k = dayNames[d.getDay()]; dayCounts[k] = (dayCounts[k] || 0) + 1; }
         });
 
+        // Revenue counts per day
+        const dayRevenue: Record<string, number> = { Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0, Sun: 0 };
+        mapped.forEach((b: any) => {
+          const datePart = b.time?.split(" • ")[0]?.trim();
+          if (!datePart || datePart === "N/A") return;
+          const d = new Date(datePart);
+          if (isNaN(d.getTime())) return;
+          if (d >= monday && d <= sunday) {
+            const k = dayNames[d.getDay()];
+            dayRevenue[k] = (dayRevenue[k] || 0) + (b.amount || 0);
+          }
+        });
+
         setBookingChartData([
-          { day: "Mon", bookings: dayCounts.Mon }, { day: "Tue", bookings: dayCounts.Tue },
-          { day: "Wed", bookings: dayCounts.Wed }, { day: "Thu", bookings: dayCounts.Thu },
-          { day: "Fri", bookings: dayCounts.Fri }, { day: "Sat", bookings: dayCounts.Sat },
-          { day: "Sun", bookings: dayCounts.Sun },
+          { day: "Mon", bookings: dayCounts.Mon, revenue: Math.round(dayRevenue.Mon / 1000) },
+          { day: "Tue", bookings: dayCounts.Tue, revenue: Math.round(dayRevenue.Tue / 1000) },
+          { day: "Wed", bookings: dayCounts.Wed, revenue: Math.round(dayRevenue.Wed / 1000) },
+          { day: "Thu", bookings: dayCounts.Thu, revenue: Math.round(dayRevenue.Thu / 1000) },
+          { day: "Fri", bookings: dayCounts.Fri, revenue: Math.round(dayRevenue.Fri / 1000) },
+          { day: "Sat", bookings: dayCounts.Sat, revenue: Math.round(dayRevenue.Sat / 1000) },
+          { day: "Sun", bookings: dayCounts.Sun, revenue: Math.round(dayRevenue.Sun / 1000) },
         ]);
+
+        // Consultant performance chart: bookings and revenue per consultant
+        const consultantMap: Record<string, { name: string; bookings: number; revenue: number }> = {};
+        mapped.forEach((b: any) => {
+          const name = b.advisor || "Unknown";
+          if (!consultantMap[name]) consultantMap[name] = { name, bookings: 0, revenue: 0 };
+          consultantMap[name].bookings++;
+          consultantMap[name].revenue += (b.amount || 0);
+        });
+        const consultantArr = Object.values(consultantMap)
+          .sort((a, b) => b.bookings - a.bookings)
+          .slice(0, 6) // top 6 consultants
+          .map(c => ({ ...c, name: c.name.split(" ")[0], revenue: Math.round(c.revenue / 1000) })); // first name only, revenue in K
+        setConsultantChartData(consultantArr);
       }
     } catch (err: any) { console.warn("[Admin] Bookings failed (non-fatal):", err?.message); }
 
@@ -4408,6 +4882,7 @@ function AdminPageInner() {
     { id: "offers", label: "Offers", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><polyline points="20 12 20 22 4 22 4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><rect x="2" y="7" width="20" height="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="12" y1="22" x2="12" y2="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "offer-approval", label: "Offer Approvals", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> },
     { id: "questions", label: "Questions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
+    { id: "terms-conditions", label: "Terms & Conditions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><polyline points="10 9 9 9 8 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg> },
     { id: "commission", label: "Commission", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg> },
     { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
   ];
@@ -4504,33 +4979,165 @@ function AdminPageInner() {
               ))}
             </div>
 
-            <div className="adm-chart-grid">
+            {/* ════ CHARTS ROW ════ */}
+<div style={{ display: "flex", flexDirection: "column", gap: 20, marginBottom: 0 }}>
+
+  {/* Chart 1: Weekly Bookings + Revenue — full width */}
+  <div className="adm-card" style={{ padding: "18px 20px 14px" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div>
+        <h3 className="adm-card-title" style={{ margin: 0, fontSize: 14 }}>Bookings This Week</h3>
+        <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Sessions · Revenue (₹K)</div>
+      </div>
+      <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748B" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: "#2563EB", display: "inline-block" }}/>
+          Sessions
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: "#10B981", display: "inline-block" }}/>
+          Revenue (₹K)
+        </span>
+      </div>
+    </div>
+    <div style={{ width: "100%", height: 240 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={bookingChartData} margin={{ top: 4, right: 16, left: -20, bottom: 0 }} barCategoryGap="35%">
+          <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+          <XAxis dataKey="day" stroke="#94A3B8" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+          <YAxis stroke="#94A3B8" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+          <Tooltip
+            contentStyle={{ borderRadius: 10, border: "1px solid #E2E8F0", boxShadow: "0 4px 12px rgba(0,0,0,0.08)", fontSize: 12 }}
+            cursor={{ fill: "rgba(37,99,235,0.04)" }}
+            formatter={(value: any, name: string) => [
+              name === "revenue" ? `₹${(value * 1000).toLocaleString()}` : value,
+              name === "revenue" ? "Revenue" : "Sessions"
+            ]}
+          />
+          <Legend
+            verticalAlign="bottom"
+            height={28}
+            formatter={(value) => value === "revenue" ? "Revenue (₹K)" : "Sessions"}
+            wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+          />
+          <Bar dataKey="bookings" fill="#2563EB" radius={[5, 5, 0, 0]} maxBarSize={32} name="bookings" />
+          <Bar dataKey="revenue" fill="#10B981" radius={[5, 5, 0, 0]} maxBarSize={32} name="revenue" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  </div>
+
+  {/* Chart 2: Consultant Performance — full width, vertical bars */}
+  <div className="adm-card" style={{ padding: "18px 20px 14px" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div>
+        <h3 className="adm-card-title" style={{ margin: 0, fontSize: 14 }}>Consultant Performance</h3>
+        <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Bookings · Revenue (₹K) per consultant</div>
+      </div>
+      <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748B" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: "#7C3AED", display: "inline-block" }}/>
+          Bookings
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: "#F59E0B", display: "inline-block" }}/>
+          Revenue (₹K)
+        </span>
+      </div>
+    </div>
+    <div style={{ width: "100%", height: 260 }}>
+      {consultantChartData.length === 0 ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94A3B8", fontSize: 12, flexDirection: "column", gap: 8 }}>
+          <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.5" strokeLinecap="round">
+            <circle cx="9" cy="7" r="4"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/>
+            <path d="M16 11l2 2 4-4"/>
+          </svg>
+          <span>No booking data yet</span>
+        </div>
+      ) : (
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={consultantChartData}
+            margin={{ top: 4, right: 16, left: -20, bottom: 0 }}
+            barCategoryGap="35%"
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+            <XAxis
+              dataKey="name"
+              stroke="#94A3B8"
+              tick={{ fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              stroke="#94A3B8"
+              tick={{ fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              contentStyle={{ borderRadius: 10, border: "1px solid #E2E8F0", boxShadow: "0 4px 12px rgba(0,0,0,0.08)", fontSize: 12 }}
+              cursor={{ fill: "rgba(124,58,237,0.04)" }}
+              formatter={(value: any, name: string) => [
+                name === "revenue" ? `₹${(value * 1000).toLocaleString()}` : value,
+                name === "revenue" ? "Revenue" : "Bookings"
+              ]}
+            />
+            <Legend
+              verticalAlign="bottom"
+              height={28}
+              formatter={(value) => value === "revenue" ? "Revenue (₹K)" : "Bookings"}
+              wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+            />
+            <Bar dataKey="bookings" fill="#7C3AED" radius={[5, 5, 0, 0]} maxBarSize={40} name="bookings" />
+            <Bar dataKey="revenue" fill="#F59E0B" radius={[5, 5, 0, 0]} maxBarSize={40} name="revenue" />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  </div>
+
+</div>
+
+            {/* Top Consultants standalone card */}
+            <div style={{ marginTop: 20 }}>
               <div className="adm-card">
-                <h3 className="adm-card-title">Bookings This Week</h3>
-                <div style={{ width: "100%", height: 200 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={bookingChartData}>
-                      <XAxis dataKey="day" stroke="#94A3B8" style={{ fontSize: 12 }} />
-                      <YAxis stroke="#94A3B8" style={{ fontSize: 12 }} />
-                      <Tooltip cursor={{ fill: "rgba(37,99,235,0.05)" }} />
-                      <Bar dataKey="bookings" fill="#2563EB" radius={[8, 8, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <h3 className="adm-card-title" style={{ margin: 0 }}>Top Consultants</h3>
+                  <button onClick={() => setActiveSection("advisors")} style={{ background: "none", border: "none", color: "#2563EB", fontWeight: 600, fontSize: 12, cursor: "pointer" }}>View all →</button>
                 </div>
-              </div>
-              <div className="adm-card">
-                <h3 className="adm-card-title">Top Consultants</h3>
-                {advisors.slice(0, 3).map(a => (
-                  <div key={a.id} className="adm-advisor-row">
-                    <img src={a.avatar} alt={a.name} className="adm-advisor-avatar" />
-                    <div>
-                      <div className="adm-advisor-name">{a.name}</div>
-                      <div className="adm-advisor-rating">★ {a.rating}
-                        {(a.shiftStartTime || a.shiftEndTime) && (<span style={{ marginLeft: 8, color: "#94A3B8", fontWeight: 400 }}>Avail: {a.shiftStartTime} – {a.shiftEndTime}</span>)}
+                {advisors.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "20px 0", color: "#94A3B8", fontSize: 13 }}>No consultants yet</div>
+                ) : advisors.slice(0, 4).map((a, idx) => {
+                  // Compute bookings count per consultant
+                  const consultantBookings = allBookings.filter((b: any) => b.advisor === a.name || b.advisorName === a.name).length;
+                  const completedBookings = allBookings.filter((b: any) => (b.advisor === a.name || b.advisorName === a.name) && b.status === "COMPLETED").length;
+                  return (
+                    <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < Math.min(advisors.length, 4) - 1 ? "1px solid #F1F5F9" : "none" }}>
+                      <div style={{ width: 38, height: 38, borderRadius: "50%", overflow: "hidden", flexShrink: 0, background: "linear-gradient(135deg,#1E3A5F,#2563EB)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <img src={a.avatar} alt={a.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                        <div style={{ fontSize: 11, color: "#64748B" }}>{a.role}</div>
+                        <div style={{ display: "flex", gap: 10, marginTop: 3, fontSize: 10, color: "#94A3B8" }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                            <svg width="9" height="9" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                            {consultantBookings} bookings
+                          </span>
+                          {completedBookings > 0 && <span style={{ color: "#16A34A", display: "flex", alignItems: "center", gap: 3 }}>
+                            <svg width="9" height="9" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            {completedBookings} completed
+                          </span>}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: "#F59E0B" }}>★ {a.rating.toFixed(1)}</div>
+                        <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 1 }}>₹{a.fee.toLocaleString()}/session</div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -4539,7 +5146,9 @@ function AdminPageInner() {
                 style={{ background: "linear-gradient(135deg,#FEF2F2,#FFF7F7)", border: "1px solid #FECACA", cursor: "pointer" }}
                 onClick={() => setActiveSection("tickets")}>
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🎫</div>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="#DC2626" strokeWidth="1.8" strokeLinecap="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="9" y1="12" x2="15" y2="12"/></svg>
+                  </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, color: "#B91C1C" }}>{ticketCount} open ticket{ticketCount !== 1 ? "s" : ""} need attention</div>
                     <div style={{ fontSize: 12, color: "#EF4444", marginTop: 2 }}>Click to view and manage all support tickets →</div>
@@ -4618,7 +5227,12 @@ function AdminPageInner() {
                     <div style={{ flex: 1 }}>
                       <div className="adm-advisor-name-lg">{a.name}</div>
                       <div className="adm-advisor-role">{a.role}</div>
-                      {(a.shiftStartTime || a.shiftEndTime) && (<div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>🕐 Availability: {a.shiftStartTime} – {a.shiftEndTime}</div>)}
+                      {(a.shiftStartTime || a.shiftEndTime) && (
+                <div style={{ fontSize: 12, color: "#64748B", marginTop: 4, display: "flex", alignItems: "center", gap: 5 }}>
+                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  Availability: {a.shiftStartTime} – {a.shiftEndTime}
+                </div>
+              )}
                       <div className="adm-tag-row">{a.tags.map(t => <span key={t} className="adm-tag">{t}</span>)}</div>
                     </div>
                   </div>
@@ -4663,12 +5277,19 @@ function AdminPageInner() {
         {activeSection === "summary" && (
           <div>
             <div style={{ marginBottom: 24 }}>
-              <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>📊 Ticket Reports & Analytics</h2>
+              <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 32, height: 32, borderRadius: 8, background: "#EFF6FF", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#2563EB" strokeWidth="2" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 4-6" strokeLinejoin="round"/></svg>
+                </span>
+                Ticket Reports & Analytics
+              </h2>
               <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>Daily and weekly breakdowns of tickets by category, consultant, status, and priority.</p>
             </div>
             {allTickets.length === 0 ? (
               <div style={{ textAlign: "center", padding: "60px 20px", background: "#F8FAFC", borderRadius: 20, color: "#94A3B8" }}>
-                <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
+                <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}>
+                  <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 4-6" strokeLinejoin="round"/></svg>
+                </div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No ticket data available yet</div>
                 <p style={{ margin: 0, fontSize: 13 }}>Navigate to the Tickets tab to load data, then come back here.</p>
                 <button onClick={() => setActiveSection("tickets")} style={{ marginTop: 16, padding: "10px 24px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Go to Tickets →</button>
@@ -4697,6 +5318,7 @@ function AdminPageInner() {
         {activeSection === "offer-approval" && <OfferApprovalPanel />}
         {activeSection === "questions" && <QuestionsManagementPanel />}
         {activeSection === "commission" && <CommissionConfigPanel />}
+        {activeSection === "terms-conditions" && <TermsConditionsEditor />}
 
         {/* ════ SETTINGS — FULLY DYNAMIC ════ */}
         {activeSection === "settings" && (

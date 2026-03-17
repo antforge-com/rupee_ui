@@ -341,11 +341,54 @@ export const deleteTimeslot = async (id: number) =>
 export const getConsultantMasterSlots = async (consultantId: number) =>
   apiFetch(`/consultants/${consultantId}/master-timeslots`);
 
+// POST /api/bookings — BookingRequest DTO:
+// { consultantId, timeSlotId, baseAmount (required), offerId?, meetingMode, userNotes }
+// BookingService calculates: total = (baseAmount - discount) + platformFee automatically
 export const createBooking = async (payload: {
-  consultantId: number; timeSlotId: number; amount: number;
-  userNotes?: string; meetingMode?: string; bookingDate?: string;
-  slotDate?: string; masterTimeslotId?: number; slotTime?: string; timeRange?: string;
-}) => apiFetch("/bookings", { method: "POST", body: JSON.stringify(payload) });
+  consultantId: number;
+  timeSlotId: number;
+  baseAmount: number;       // required by BookingRequest — server calculates total
+  offerId?: number | null;  // optional: which offer to apply
+  meetingMode: string;
+  userNotes?: string;
+  // legacy fields (ignored by backend but kept for fallback compatibility)
+  amount?: number;
+  bookingDate?: string;
+  slotDate?: string;
+}) => {
+  // Build clean payload matching BookingRequest DTO exactly
+  const body: Record<string, any> = {
+    consultantId: payload.consultantId,
+    timeSlotId: payload.timeSlotId,
+    baseAmount: payload.baseAmount,
+    meetingMode: payload.meetingMode || "ONLINE",
+    userNotes: payload.userNotes || "Booked via app",
+  };
+  if (payload.offerId != null) body.offerId = payload.offerId;
+  return apiFetch("/bookings", { method: "POST", body: JSON.stringify(body) });
+};
+
+// POST /api/bookings/bulk — BulkBookingRequest DTO:
+// { consultantId, timeSlotIds: [id1, id2], baseAmountPerSlot, offerId?, meetingMode, userNotes }
+// Returns BulkBookingResponse { bookings: [], grandTotal }
+export const createBulkBooking = async (payload: {
+  consultantId: number;
+  timeSlotIds: number[];      // exactly 2 slots
+  baseAmountPerSlot: number;
+  offerId?: number | null;
+  meetingMode: string;
+  userNotes?: string;
+}) => {
+  const body: Record<string, any> = {
+    consultantId: payload.consultantId,
+    timeSlotIds: payload.timeSlotIds,
+    baseAmountPerSlot: payload.baseAmountPerSlot,
+    meetingMode: payload.meetingMode || "ONLINE",
+    userNotes: payload.userNotes || "Booked via app",
+  };
+  if (payload.offerId != null) body.offerId = payload.offerId;
+  return apiFetch("/bookings/bulk", { method: "POST", body: JSON.stringify(body) });
+};
 
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
@@ -455,22 +498,29 @@ export const deleteBooking = async (id: number) =>
 // Returns: [{ id, name, description?, title? }]
 // ─────────────────────────────────────────────────────────────────────────────
 export const getAllSkills = async (): Promise<any[]> => {
-  // Backend returns SkillResponse { id: Long, skillName: String }
-  // We normalize to { id, name, skillName } so both old and new code works
+  // Backend SkillMasterController returns SkillResponse { id: Long, skillName: String, isActive: boolean }
+  // We normalize to { id, name, skillName, isActive } so all consumers work uniformly
   const normalizeSkill = (s: any) => ({
     ...s,
-    // Backend sends skillName; ensure .name is always set
-    name: s.name || s.skillName || s.title || `Skill ${s.id}`,
+    id: Number(s.id),
+    // skillName is the authoritative field from SkillResponse; name is the UI-friendly alias
+    name: s.skillName || s.name || s.title || `Skill ${s.id}`,
     skillName: s.skillName || s.name || s.title || `Skill ${s.id}`,
+    isActive: s.isActive !== false, // default true
   });
 
+  // Primary: GET /api/skills (SkillMasterController — returns only active skills)
   const endpoints = ["/skills", "/skill-master", "/skillmaster", "/skill_master"];
   for (const ep of endpoints) {
     try {
       const data = await apiFetch(ep);
       const arr = extractArray(data);
-      if (arr.length >= 0) return arr.map(normalizeSkill);
+      // arr.length > 0: continue to next endpoint if this one returns empty
+      // so we find the endpoint that actually has skills configured
+      if (arr.length > 0) return arr.map(normalizeSkill);
+      // Empty list — try next endpoint in case this one isn't the right one
     } catch (err: any) {
+      // 500 = endpoint misconfigured, try next; other errors stop trying
       if (!String(err?.message || "").includes("500")) continue;
       continue;
     }
@@ -504,9 +554,16 @@ export const updateSkill = async (id: number, payload: { name: string; descripti
 };
 
 export const deleteSkill = async (id: number): Promise<void> => {
+  // Primary: DELETE /api/skills/{id} — SkillMasterController soft-deletes skill + cascades to questions + answers
+  // Fallback to /skill-master/{id} for older backends
   for (const ep of [`/skills/${id}`, `/skill-master/${id}`, `/skillmaster/${id}`]) {
     try { return await apiFetch(ep, { method: "DELETE" }); }
-    catch (err: any) { if (!String(err?.message || "").includes("500")) throw err; }
+    catch (err: any) {
+      const msg = String(err?.message || "");
+      // Only continue to next endpoint on 404/500 (wrong endpoint), re-throw on 403/400
+      if (msg.includes("404") || msg.includes("500")) continue;
+      throw err;
+    }
   }
   throw new Error("Could not delete skill.");
 };
@@ -1228,10 +1285,11 @@ export default api;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /api/offers/active  — active offers for home page & booking page
- * Safe: returns [] on any error (including 403 for unauthenticated visitors)
+ * GET /api/offers/checkout?consultantId=  — active APPROVED offers for booking/home page
+ * Backend: OfferController.getActiveOffersForCheckout — returns only APPROVED + isActive + in date range
+ * Safe: returns [] on any error
  */
-export const getActiveOffers = async (): Promise<any[]> => {
+export const getActiveOffers = async (consultantId?: number): Promise<any[]> => {
   try {
     const token = getToken();
     const headers: Record<string, string> = {
@@ -1239,28 +1297,14 @@ export const getActiveOffers = async (): Promise<any[]> => {
       "Content-Type": "application/json",
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
-
-    // Try authenticated endpoint first, then public fallback
-    const endpoints = ["/offers/active", "/offers?active=true", "/offers"];
-    for (const ep of endpoints) {
-      try {
-        const res = await fetch(`${BASE_URL}${ep}`, { headers });
-        if (res.ok) {
-          const data = await res.json();
-          const arr = Array.isArray(data) ? data : extractArray(data);
-          const active = arr.filter((o: any) =>
-            o.isActive === true || o.active === true || o.status === "ACTIVE" ||
-            // If no explicit active flag, include if within date range
-            (o.validFrom && o.validTo &&
-              new Date(o.validFrom) <= new Date() && new Date(o.validTo) >= new Date())
-          );
-          return active;
-        }
-        if (res.status === 403 || res.status === 401) {
-          console.warn(`⚠️ getActiveOffers: ${res.status} on ${ep} — returning []`);
-          return [];
-        }
-      } catch { continue; }
+    // Use the correct public checkout endpoint
+    const url = consultantId
+      ? `${BASE_URL}/offers/checkout?consultantId=${consultantId}`
+      : `${BASE_URL}/offers/checkout`;
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      return Array.isArray(data) ? data : extractArray(data);
     }
     return [];
   } catch (err: any) {
@@ -1270,59 +1314,59 @@ export const getActiveOffers = async (): Promise<any[]> => {
 };
 
 /**
- * GET /api/offers?consultantId=:id  — offers for a specific consultant
+ * GET /api/offers/checkout?consultantId=:id — active approved offers for a consultant's booking page
  */
 export const getOffersByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
-    const data = await apiFetch(`/offers/consultant/${consultantId}`);
+    const data = await apiFetch(`/offers/checkout?consultantId=${consultantId}`);
     return Array.isArray(data) ? data : extractArray(data);
-  } catch {
-    try {
-      const data = await apiFetch(`/offers?consultantId=${consultantId}`);
-      return Array.isArray(data) ? data : extractArray(data);
-    } catch { return []; }
-  }
+  } catch { return []; }
 };
 
 /**
  * POST /api/offers — create offer (admin or consultant)
- * NOTE: Only send fields the backend Offer entity supports.
- * Extra fields like approvalStatus/consultantName may cause 500 if not in entity.
+ * Backend OfferRequest: title*, description, discount*, validFrom*, validTo*, isActive, consultantId
+ * Backend auto-sets status: ADMIN → APPROVED, CONSULTANT → PENDING
  */
 export const createOffer = async (payload: {
   title: string;
   description: string;
-  discount?: string;
-  validFrom?: string;
-  validTo?: string;
+  discount: string;
+  validFrom: string;
+  validTo: string;
   isActive?: boolean;
   consultantId?: number | null;
-  consultantName?: string;
-  approvalStatus?: string;
   [key: string]: any;
 }): Promise<any> => {
-  // Build a clean payload — only include fields with actual values
+  // Send only fields defined in OfferRequest DTO — extra fields cause 500
   const body: Record<string, any> = {
     title: payload.title,
-    description: payload.description,
+    description: payload.description || "",
+    discount: payload.discount || "0%",
+    validFrom: payload.validFrom,
+    validTo: payload.validTo,
     isActive: payload.isActive ?? true,
   };
-  if (payload.discount) body.discount = payload.discount;
-  if (payload.validFrom) body.validFrom = payload.validFrom;
-  if (payload.validTo) body.validTo = payload.validTo;
   if (payload.consultantId != null) body.consultantId = payload.consultantId;
-  // Only add these if backend supports them (will be silently ignored if not in entity)
-  if (payload.consultantName) body.consultantName = payload.consultantName;
-  if (payload.approvalStatus) body.approvalStatus = payload.approvalStatus;
-
   return apiFetch("/offers", { method: "POST", body: JSON.stringify(body) });
 };
 
 /**
  * PUT /api/offers/:id — update offer
+ * Backend OfferRequest same fields as createOffer
  */
-export const updateOffer = async (id: number, payload: any): Promise<any> =>
-  apiFetch(`/offers/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+export const updateOffer = async (id: number, payload: any): Promise<any> => {
+  const body: Record<string, any> = {
+    title: payload.title,
+    description: payload.description || "",
+    discount: payload.discount || "0%",
+    validFrom: payload.validFrom,
+    validTo: payload.validTo,
+    isActive: payload.isActive ?? true,
+  };
+  if (payload.consultantId != null) body.consultantId = payload.consultantId;
+  return apiFetch(`/offers/${id}`, { method: "PUT", body: JSON.stringify(body) });
+};
 
 /**
  * DELETE /api/offers/:id — delete offer
@@ -1429,10 +1473,56 @@ export const getUserCategories = async (userId: number): Promise<any[]> => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TERMS & CONDITIONS — versioned storage
+// STATIC CONTENT — Backend: StaticContentController @ /api/static-content
+// GET  /api/static-content/{contentType}  → StaticContentResponse
+// GET  /api/static-content               → List<StaticContentResponse>
+// POST /api/static-content               → upsert (admin only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getStaticContent = async (contentType: string): Promise<any | null> => {
+  try {
+    return await apiFetch(`/static-content/${contentType}`);
+  } catch { return null; }
+};
+
+export const getAllStaticContent = async (): Promise<any[]> => {
+  try {
+    const data = await apiFetch("/static-content");
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch { return []; }
+};
+
+export const saveStaticContent = async (payload: {
+  contentType: string; content: string; lastUpdatedBy?: string;
+}): Promise<any> => {
+  try {
+    return await apiFetch("/static-content", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    console.warn("⚠️ saveStaticContent failed:", err?.message);
+    return null;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TERMS & CONDITIONS — delegates to StaticContentController (backward compat)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const getTermsAndConditions = async (): Promise<any[]> => {
+  // Try new StaticContentController endpoint first
+  // 404 = nothing saved yet, that is normal — not an error
+  try {
+    const data = await apiFetch("/static-content/TERMS_AND_CONDITIONS");
+    if (data && (data.content || data.text)) return [data];
+  } catch (e: any) {
+    // 404 is expected when no T&C saved yet — swallow silently
+    if (!String(e?.message || "").includes("404")) {
+      console.warn("⚠️ getTermsAndConditions /static-content failed:", e?.message);
+    }
+  }
+  // Legacy fallback
   try {
     const data = await apiFetch("/admin/terms-and-conditions");
     return Array.isArray(data) ? data : extractArray(data);
@@ -1443,13 +1533,24 @@ export const saveTermsAndConditions = async (payload: {
   version: string; content: string; isActive: boolean;
 }): Promise<any> => {
   try {
-    return await apiFetch("/admin/terms-and-conditions", {
+    return await apiFetch("/static-content", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        contentType: "TERMS_AND_CONDITIONS",
+        content: payload.content,
+        lastUpdatedBy: "Admin",
+      }),
     });
-  } catch (err: any) {
-    console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
-    return null;
+  } catch {
+    try {
+      return await apiFetch("/admin/terms-and-conditions", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    } catch (err: any) {
+      console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
+      return null;
+    }
   }
 };
 
@@ -1501,20 +1602,51 @@ export interface FeeConfig {
 
 /**
  * GET /api/admin/settings/additional-charges
- * Returns the current platform commission config set by admin.
- * Falls back to { feeType: "FLAT", feeValue: "0" } on any error (safe for unauthenticated pages).
+ * Admin-only endpoint — returns 403 for regular users.
+ * Strategy:
+ *   1. Try with auth token (works for admin)
+ *   2. On 403/401, serve from localStorage cache "fin_fee_config"
+ *      (admin saves config → we cache it → user sees correct commission)
+ *   3. Final fallback: { feeType: "FLAT", feeValue: "0" }
  */
 export const getFeeConfig = async (): Promise<FeeConfig> => {
+  const CACHE_KEY = "fin_fee_config";
+
+  // Helper to parse and validate a fee config object
+  const parseFeeConfig = (data: any): FeeConfig | null => {
+    if (!data) return null;
+    const type = ((data?.feeType || data?.fee_type || "") as string).toUpperCase();
+    const val = String(data?.feeValue ?? data?.fee_value ?? "");
+    if ((type === "FLAT" || type === "PERCENTAGE") && val !== "") {
+      return { feeType: type as "FLAT" | "PERCENTAGE", feeValue: val };
+    }
+    return null;
+  };
+
   try {
     const data = await apiFetch("/admin/settings/additional-charges");
-    return {
-      feeType: ((data?.feeType || data?.fee_type || "FLAT") as string).toUpperCase() as "FLAT" | "PERCENTAGE",
-      feeValue: String(data?.feeValue ?? data?.fee_value ?? "0"),
-    };
+    const config = parseFeeConfig(data);
+    if (config) {
+      // Cache for regular users who hit 403
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(config)); } catch { /* storage full */ }
+      return config;
+    }
   } catch (err: any) {
-    console.warn("⚠️ getFeeConfig failed (non-fatal):", err?.message);
-    return { feeType: "FLAT", feeValue: "0" };
+    const msg = String(err?.message || "");
+    // 403 = admin-only endpoint — serve from cache
+    if (msg.includes("403") || msg.includes("401") || msg.includes("Forbidden") || msg.includes("Access Denied")) {
+      try {
+        const cached = localStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const parsed = parseFeeConfig(JSON.parse(cached));
+          if (parsed) return parsed;
+        }
+      } catch { /* ignore parse errors */ }
+    } else {
+      console.warn("⚠️ getFeeConfig failed (non-fatal):", msg);
+    }
   }
+  return { feeType: "FLAT", feeValue: "0" };
 };
 
 /**
@@ -1529,10 +1661,13 @@ export const updateFeeConfig = async (payload: FeeConfig): Promise<FeeConfig> =>
       feeValue: String(payload.feeValue),
     }),
   });
-  return {
+  const result: FeeConfig = {
     feeType: ((data?.feeType || payload.feeType) as string).toUpperCase() as "FLAT" | "PERCENTAGE",
     feeValue: String(data?.feeValue ?? payload.feeValue),
   };
+  // ── Cache for regular users who hit 403 on GET ──
+  try { localStorage.setItem("fin_fee_config", JSON.stringify(result)); } catch { /* storage full */ }
+  return result;
 };
 
 /**
@@ -1695,43 +1830,44 @@ export const getUserAnswers = async (userId: number): Promise<BackendAnswer[]> =
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OFFER APPROVAL — Consultant-submitted offers pending admin review
-// Backend: PUT /api/offers/:id/approve | PUT /api/offers/:id/reject
+// OFFER APPROVAL — Admin fetches ALL offers; approves/rejects via status endpoint
+// Backend: GET /api/offers/admin  — all offers for admin view
+//          PUT /api/offers/{id}/status?status=APPROVED|REJECTED
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * GET /api/offers/admin — fetch all offers (admin view: PENDING, APPROVED, REJECTED)
+ * Returns consultant-submitted offers (consultantId != null) and global admin offers
+ */
 export const getConsultantSubmittedOffers = async (): Promise<any[]> => {
-  // /api/offers/consultant-offers may not exist on all backends — use /api/offers as primary
   try {
-    const data = await apiFetch("/offers");
+    const data = await apiFetch("/offers/admin");
     const all = Array.isArray(data) ? data : extractArray(data);
-    // Consultant-submitted offers have a consultantId
+    // Return only consultant-submitted offers (consultantId != null)
     return all.filter((o: any) => o.consultantId != null);
-  } catch {
-    try {
-      const data = await apiFetch("/offers/consultant-offers");
-      return Array.isArray(data) ? data : extractArray(data);
-    } catch { return []; }
-  }
+  } catch { return []; }
 };
 
-export const approveOffer = async (id: number): Promise<any> => {
+/**
+ * GET /api/offers/admin — all offers for admin management panel
+ */
+export const getAllOffersForAdmin = async (): Promise<any[]> => {
   try {
-    return await apiFetch(`/offers/${id}/approve`, { method: "PUT" });
-  } catch {
-    return apiFetch(`/offers/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({ approvalStatus: "APPROVED", isActive: true }),
-    });
-  }
+    const data = await apiFetch("/offers/admin");
+    return Array.isArray(data) ? data : extractArray(data);
+  } catch { return []; }
 };
 
-export const rejectOffer = async (id: number): Promise<any> => {
-  try {
-    return await apiFetch(`/offers/${id}/reject`, { method: "PUT" });
-  } catch {
-    return apiFetch(`/offers/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({ approvalStatus: "REJECTED", isActive: false }),
-    });
-  }
-};
+/**
+ * PUT /api/offers/{id}/status?status=APPROVED — approve a consultant offer
+ * Backend: OfferController.updateOfferStatus — admin only
+ */
+export const approveOffer = async (id: number): Promise<any> =>
+  apiFetch(`/offers/${id}/status?status=APPROVED`, { method: "PUT" });
+
+/**
+ * PUT /api/offers/{id}/status?status=REJECTED — reject a consultant offer
+ * Backend: OfferController.updateOfferStatus — admin only
+ */
+export const rejectOffer = async (id: number): Promise<any> =>
+  apiFetch(`/offers/${id}/status?status=REJECTED`, { method: "PUT" });

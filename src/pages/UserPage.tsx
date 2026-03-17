@@ -905,7 +905,25 @@ export default function UserPage() {
   const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "notifications" | "settings">("consultants");
 
   // ── Live fee/commission config from backend admin settings ─────────────────
-  const [feeConfig, setFeeConfig] = useState<{ feeType: string; feeValue: string }>({ feeType: "FLAT", feeValue: "0" });
+  // Pre-load from localStorage cache so commission shows immediately on render
+  // (getFeeConfig hits admin-only endpoint and returns 403 for regular users,
+  //  but caches the value when admin saves it via updateFeeConfig)
+  const [feeConfig, setFeeConfig] = useState<{ feeType: string; feeValue: string }>(() => {
+    try {
+      const cached = localStorage.getItem("fin_fee_config");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.feeType && parsed?.feeValue !== undefined) return parsed;
+      }
+    } catch { /* ignore */ }
+    return { feeType: "FLAT", feeValue: "0" };
+  });
+
+  // ── Offers state for booking modal ──────────────────────────────────────────
+  // Fetched from GET /api/offers/checkout?consultantId=X when booking modal opens
+  const [consultantOffers, setConsultantOffers] = useState<any[]>([]);
+  const [selectedOfferId, setSelectedOfferId] = useState<number | null>(null);
+  const [loadingOffers, setLoadingOffers] = useState(false);
 
   // Helper: compute total price shown to user (base + admin commission)
   // Matches BookingService.java formula exactly:
@@ -978,6 +996,14 @@ export default function UserPage() {
   const [firstLoginCategories, setFirstLoginCategories] = useState<string[]>([]);
   // Dynamic categories fetched from consultant skills (PRD §3.2 — categories from consultant skill sets)
   const [dynamicSkillCategories, setDynamicSkillCategories] = useState<string[]>([]);
+  // Map of skillName (lowercase) → skillId — populated from /api/skills in fetchConsultants
+  // Used by fetchSkillQuestions to resolve category names → IDs for GET /api/questions?skillIds=
+  const [backendSkillMap, setBackendSkillMap] = useState<Record<string, number>>({});
+
+  // ── Terms & Conditions step state — MUST be top-level hooks (Rules of Hooks) ──
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsContent, setTermsContent] = useState<string | null>(null);
+  const [termsLoading, setTermsLoading] = useState(false);
 
   const [userCategories, setUserCategories] = useState<{ category: string; subOption: string; answers: Record<string, string> }[]>([]);
   const [categoryStep, setCategoryStep] = useState<"select" | "questionnaire" | "done">("select");
@@ -1200,46 +1226,114 @@ export default function UserPage() {
     setCategoryStep("done");
   };
 
-  // Fetch skill questions from backend for the selected categories
+  // Fetch questions from backend for ONLY the user-selected categories.
+  // Backend endpoint: GET /api/questions?skillIds=10,12
+  // skillIds are resolved from backendSkillMap (populated during fetchConsultants from /api/skills)
+  // so no extra API call is needed here.
   const fetchSkillQuestions = async (selectedCategories: string[]) => {
-    if (selectedCategories.length === 0) return;
+    if (selectedCategories.length === 0) { setSkillQuestions([]); return; }
     try {
-      // Match selected category names to skill IDs from loaded skills/consultants
-      const allSkillsRaw = await (async () => {
-        try { const d = await fetch(`${BASE_URL}/skills`, { headers: { Authorization: `Bearer ${getToken() || ""}`, Accept: "application/json" } }); if (d.ok) return d.json(); } catch {}
-        // Fallback: build from consultants
-        const cd = await fetch(`${BASE_URL}/consultants`, { headers: { Authorization: `Bearer ${getToken() || ""}`, Accept: "application/json" } });
-        if (!cd.ok) return [];
-        const consultants = await cd.json();
-        const arr = Array.isArray(consultants) ? consultants : consultants?.content || [];
-        const map = new Map<string, number>();
-        let id = 1;
-        arr.forEach((c: any) => {
-          (Array.isArray(c.skills) ? c.skills : []).forEach((t: string) => { if (t && !map.has(t)) map.set(t, id++); });
-          if (c.designation && !map.has(c.designation)) map.set(c.designation, id++);
-        });
-        return Array.from(map.entries()).map(([name, i]) => ({ id: i, name }));
-      })();
-      const skills = Array.isArray(allSkillsRaw) ? allSkillsRaw : allSkillsRaw?.content || [];
-      // Find skill IDs matching selected categories
-      const matchingIds = skills
-        .filter((s: any) => selectedCategories.some(cat =>
-          (s.name || s.title || "").toLowerCase().includes(cat.toLowerCase()) ||
-          cat.toLowerCase().includes((s.name || s.title || "").toLowerCase())
-        ))
-        .map((s: any) => s.id);
-      if (matchingIds.length === 0) return;
-      const qs = await fetch(`${BASE_URL}/questions?skillIds=${matchingIds.join(",")}`, {
-        headers: { Authorization: `Bearer ${getToken() || ""}`, Accept: "application/json" }
+      // Step 1: Resolve selected category names → skill IDs using the already-loaded backendSkillMap
+      // backendSkillMap keys are lowercase skill names from /api/skills
+      let resolvedSkillMap = backendSkillMap;
+
+      // If backendSkillMap is empty (e.g. fetchConsultants hasn't completed), re-fetch /api/skills once
+      if (Object.keys(resolvedSkillMap).length === 0) {
+        try {
+          const token = getToken();
+          const res = await fetch(`${BASE_URL}/skills`, {
+            headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          });
+          if (res.ok) {
+            const raw = await res.json();
+            const arr: any[] = Array.isArray(raw) ? raw : raw?.content || [];
+            const built: Record<string, number> = {};
+            arr.forEach((s: any) => {
+              const name = (s.name || s.title || "").trim();
+              if (name && s.id) built[name.toLowerCase()] = Number(s.id);
+            });
+            resolvedSkillMap = built;
+            setBackendSkillMap(built); // cache for future calls
+          }
+        } catch { /* fall through — will produce empty questions */ }
+      }
+
+      // Step 2: Map each selected category name to its skill ID (exact case-insensitive match)
+      const matchingIds: number[] = [];
+      const skillIdToName: Record<number, string> = {};
+      selectedCategories.forEach(cat => {
+        const id = resolvedSkillMap[cat.toLowerCase().trim()];
+        if (id != null) {
+          matchingIds.push(id);
+          skillIdToName[id] = cat; // use original casing for display
+        }
       });
-      if (!qs.ok) return;
-      const qData = await qs.json();
-      const qArr = Array.isArray(qData) ? qData : qData?.content || [];
-      const skillMap: Record<number, string> = {};
-      skills.forEach((s: any) => { skillMap[s.id] = s.name || s.title || `Skill ${s.id}`; });
-      setSkillQuestions(qArr.map((q: any) => ({ ...q, skillName: skillMap[q.skillId] || "" })));
-    } catch { /* non-fatal */ }
+
+      if (matchingIds.length === 0) {
+        // No skills matched — show no questions and move on
+        setSkillQuestions([]);
+        return;
+      }
+
+      // Step 3: Call GET /api/questions?skillIds=10,12 (backend endpoint as specified)
+      // skillIds param is a comma-separated list of Long IDs
+      const token = getToken();
+      const qRes = await fetch(
+        `${BASE_URL}/questions?skillIds=${matchingIds.join(",")}`,
+        {
+          headers: {
+            Accept: "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }
+      );
+
+      if (!qRes.ok) { setSkillQuestions([]); return; }
+      const qData = await qRes.json();
+      const qArr: any[] = Array.isArray(qData) ? qData : qData?.content || [];
+
+      // Step 4: Client-side safety filter — only keep questions whose skillId is
+      // in our matched set. Guards against backend returning extra questions.
+      const matchingIdSet = new Set(matchingIds);
+      const filtered = qArr.filter((q: any) => matchingIdSet.has(Number(q.skillId)));
+
+      setSkillQuestions(
+        filtered.map((q: any) => ({
+          id: q.id,
+          skillId: Number(q.skillId),
+          text: q.text || q.questionText || q.question || "",
+          skillName: skillIdToName[Number(q.skillId)] || `Skill ${q.skillId}`,
+          updatedAt: q.updatedAt,
+        }))
+      );
+    } catch { setSkillQuestions([]); /* non-fatal — user can skip */ }
   };
+
+  // Load T&C content from backend — called when user reaches terms step
+  const loadTermsContent = () => {
+    if (termsContent !== null) return; // already loaded
+    setTermsLoading(true);
+    const token = getToken();
+    fetch(`${BASE_URL}/static-content/TERMS_AND_CONDITIONS`, {
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((d: any) => { if (d?.content) setTermsContent(d.content); })
+      .catch(() => { setTermsContent(null); })
+      .finally(() => setTermsLoading(false));
+  };
+
+  // Trigger terms load whenever user reaches the terms step
+  useEffect(() => {
+    if (firstLoginStep === "terms") {
+      loadTermsContent();
+      setTermsAccepted(false); // reset checkbox each time step is entered
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstLoginStep]);
 
   // Handle first-login questionnaire completion
   const handleFirstLoginComplete = () => {
@@ -1415,6 +1509,15 @@ export default function UserPage() {
         "Tax Planning", "Finance", "Investment", "Insurance", "Wealth Management", "Retirement Planning",
         "International Tax", "Tax Filing", "Portfolio Management", "Business Finance"
       ]);
+
+      // Build skillName(lowercase) → skillId map from the authoritative backend /api/skills list
+      // This is what fetchSkillQuestions uses to resolve category names → IDs without re-fetching
+      const skillIdMap: Record<string, number> = {};
+      backendSkillArr.forEach((s: any) => {
+        const name = (s.name || s.title || "").trim();
+        if (name && s.id) skillIdMap[name.toLowerCase()] = Number(s.id);
+      });
+      setBackendSkillMap(skillIdMap);
     }
     catch { showToast("Could not load consultants."); }
     finally { setLoading(p => ({ ...p, consultants: false })); }
@@ -1666,8 +1769,19 @@ export default function UserPage() {
   const handleOpenModal = async (c: Consultant) => {
     setSelectedConsultant(c); setMasterSlots([]); setDbTimeslots([]);
     setBookedSlotSet(new Set()); setDayOffset(0); setSelectedDay(DEFAULT_DAY);
-    setSelectedSlot(null); setMeetingMode("ONLINE"); setUserNotes(""); setShowModal(true);
+    setSelectedSlot(null); setMeetingMode("ONLINE"); setUserNotes("");
+    // Reset offer selection each time modal opens
+    setSelectedOfferId(null); setConsultantOffers([]); setShowModal(true);
     setLoading(p => ({ ...p, slots: true }));
+    // Fetch available offers for this consultant in parallel
+    setLoadingOffers(true);
+    fetch(`${BASE_URL}/offers/checkout?consultantId=${c.id}`, {
+      headers: { Accept: "application/json", ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) }
+    })
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any) => { setConsultantOffers(Array.isArray(data) ? data : []); })
+      .catch(() => { setConsultantOffers([]); })
+      .finally(() => setLoadingOffers(false));
     try {
       const [masters, bookingsRaw] = await Promise.all([fetchMasterTimeslots(), apiFetch(`${BASE_URL}/bookings/consultant/${c.id}`).catch(() => [])]);
       setMasterSlots(Array.isArray(masters) ? masters : []);
@@ -1816,18 +1930,20 @@ export default function UserPage() {
       }
 
       // 4. Proceed with booking using the valid realTimeslotId
-      // Backend BookingRequest.java requires baseAmount (not amount).
-      // BookingService.java then calculates: total = baseAmount + commission automatically.
-      const { total: totalAmount } = calcTotal(selectedConsultant.fee);
+      // Backend BookingRequest: { consultantId, timeSlotId, baseAmount, offerId?, meetingMode, userNotes }
+      // BookingService calculates: total = (baseAmount - discount) + platformFee automatically
+      const selectedOffer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
       const payload: any = {
         consultantId: selectedConsultant.id,
         timeSlotId: realTimeslotId,
-        baseAmount: selectedConsultant.fee,   // ← required by BookingRequest.java
-        amount: totalAmount,                   // ← legacy/fallback field
-        userNotes: userNotes || "Booked via app",
+        baseAmount: selectedConsultant.fee,   // ← required: BookingService calculates total from this
         meetingMode,
+        userNotes: userNotes || "Booked via app",
       };
+      if (selectedOfferId != null) payload.offerId = selectedOfferId;
       const bookingResult = await createBooking(payload);
+      // Show applied offer in toast if used
+      const offerNote = selectedOffer ? ` · Offer "${selectedOffer.title}" applied` : "";
       const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
 
       // Update UI state
@@ -1839,7 +1955,7 @@ export default function UserPage() {
       });
 
       setShowModal(false);
-      showToast(`✅ Booked for ${selectedDay.date} ${selectedDay.month} · ${selectedSlot.label}`);
+      showToast(`✅ Booked for ${selectedDay.date} ${selectedDay.month} · ${selectedSlot.label}${offerNote}`);
       setTab("bookings");
       fetchBookings();
 
@@ -1862,10 +1978,23 @@ export default function UserPage() {
   const handleLogout = () => { logoutUser(); navigate("/login", { replace: true }); };
   const handleGoToProfile = () => { setTab("settings"); setSettingsView("profile"); };
 
+  // After onboarding completes, only show consultants matching selected categories.
+  // If no categories were selected (skip or no match), show all consultants.
+  const hasOnboardingCategories = firstLoginCategories.length > 0;
   const filteredList = consultants
     .filter(c => {
       const q = search.toLowerCase();
-      return (c.name.toLowerCase().includes(q) || c.role.toLowerCase().includes(q)) && (category === "All Consultants" || c.role.includes(category.replace(" Experts", "")));
+      const matchesSearch = (c.name.toLowerCase().includes(q) || c.role.toLowerCase().includes(q) ||
+        (c.tags || []).join(" ").toLowerCase().includes(q));
+      const matchesTabCategory = category === "All Consultants" ||
+        c.role.toLowerCase().includes(category.replace(" Experts", "").toLowerCase()) ||
+        (c.tags || []).some(t => t.toLowerCase().includes(category.replace(" Experts", "").toLowerCase()));
+      // After onboarding: only show consultants that have at least one matching skill
+      if (hasOnboardingCategories && category === "All Consultants" && !search) {
+        const score = getConsultantScore(c);
+        return score > 0;
+      }
+      return matchesSearch && matchesTabCategory;
     })
     .sort((a, b) => {
       // Sort by category-skill match score (higher score = shown first)
@@ -1875,6 +2004,11 @@ export default function UserPage() {
       // Secondary sort by rating
       return b.rating - a.rating;
     });
+
+  // If filter produces 0 results after onboarding, fall back to all consultants
+  const displayList = (hasOnboardingCategories && filteredList.length === 0 && category === "All Consultants" && !search)
+    ? consultants.sort((a, b) => b.rating - a.rating)
+    : filteredList;
 
   const hourlySlotTimes = generateHourlySlots(
     (selectedConsultant?.shiftStartTime || "").substring(0, 5),
@@ -2012,12 +2146,12 @@ export default function UserPage() {
             </div>
             {loading.consultants ? (
               <div className="up-empty-state"><div className="spinner" /><p style={{ color: "#94A3B8", marginTop: 12, fontSize: 14 }}>Loading consultants…</p></div>
-            ) : filteredList.length === 0 ? (
+            ) : displayList.length === 0 ? (
               <div className="up-empty-state"><div style={{ fontSize: 36, marginBottom: 12 }}>🔍</div><p style={{ margin: 0, fontWeight: 600 }}>No consultants found.</p></div>
             ) : (
               /* ── 2 cards per row grid, full width, no old CSS classes ── */
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20, width: "100%" }}>
-                {filteredList.map(c => {
+                {displayList.map(c => {
                   const userRole = String(localStorage.getItem("fin_role") || "").toUpperCase();
                   const isSubscriber = ["SUBSCRIBER", "SUBSCRIBED", "PREMIUM"].includes(userRole);
                   // Compute live total using backend commission config
@@ -2647,15 +2781,108 @@ export default function UserPage() {
                   <p className="up-step-label">Notes (optional)</p>
                   <textarea className="up-notes-textarea" value={userNotes} onChange={e => setUserNotes(e.target.value)} rows={2} placeholder="What would you like to discuss?" />
 
-                  {selectedSlot && (
-                    <div className="up-booking-summary">
-                      📅 {selectedDay.date} {selectedDay.month} · 🕐 {selectedSlot.label} ·{" "}
-                      {meetingMode === "ONLINE" ? "💻 Online" : meetingMode === "PHONE" ? "📞 Phone" : "🏢 In-Person"} · ₹{calcTotal(selectedConsultant.fee).total.toLocaleString()}
+                  {/* ── Available Offers ── */}
+                  {(loadingOffers || consultantOffers.length > 0) && (
+                    <div style={{ marginTop: 16 }}>
+                      <p className="up-step-label" style={{ marginBottom: 8 }}>Available Offers</p>
+                      {loadingOffers ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "#F8FAFC", borderRadius: 10, fontSize: 12, color: "#94A3B8" }}>
+                          <div style={{ width: 14, height: 14, border: "2px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                          Loading offers…
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {/* No offer option */}
+                          <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${selectedOfferId === null ? "#2563EB" : "#E2E8F0"}`, background: selectedOfferId === null ? "#EFF6FF" : "#fff", cursor: "pointer", transition: "all 0.15s" }}>
+                            <input type="radio" name="offer" checked={selectedOfferId === null} onChange={() => setSelectedOfferId(null)} style={{ accentColor: "#2563EB", width: 15, height: 15 }} />
+                            <span style={{ flex: 1, fontSize: 12, fontWeight: selectedOfferId === null ? 700 : 500, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>No offer — Pay full price</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>₹{calcTotal(selectedConsultant.fee).total.toLocaleString()}</span>
+                          </label>
+                          {consultantOffers.map(offer => {
+                            const isSelected = selectedOfferId === offer.id;
+                            // Calculate discounted price
+                            const base = selectedConsultant.fee;
+                            const discountStr = offer.discount || "0";
+                            const discountAmt = discountStr.includes("%")
+                              ? Math.round(base * parseFloat(discountStr) / 100)
+                              : parseFloat(discountStr) || 0;
+                            const discountedBase = Math.max(base - discountAmt, 0);
+                            const { total: discountedTotal } = calcTotal(discountedBase);
+                            const savings = calcTotal(base).total - discountedTotal;
+                            return (
+                              <label key={offer.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", borderRadius: 10, border: `1.5px solid ${isSelected ? "#16A34A" : "#E2E8F0"}`, background: isSelected ? "#F0FDF4" : "#fff", cursor: "pointer", transition: "all 0.15s" }}>
+                                <input type="radio" name="offer" checked={isSelected} onChange={() => setSelectedOfferId(offer.id)} style={{ accentColor: "#16A34A", width: 15, height: 15, marginTop: 2 }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: isSelected ? "#166534" : "#0F172A" }}>{offer.title}</span>
+                                    {offer.discount && <span style={{ fontSize: 10, fontWeight: 800, background: "#DC2626", color: "#fff", padding: "1px 6px", borderRadius: 20 }}>{offer.discount} OFF</span>}
+                                  </div>
+                                  {offer.description && <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{offer.description}</div>}
+                                  {savings > 0 && <div style={{ fontSize: 10, color: "#16A34A", fontWeight: 700, marginTop: 2 }}>You save ₹{savings.toLocaleString()}</div>}
+                                </div>
+                                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                                  {savings > 0 && <div style={{ fontSize: 10, color: "#94A3B8", textDecoration: "line-through" }}>₹{calcTotal(base).total.toLocaleString()}</div>}
+                                  <div style={{ fontSize: 13, fontWeight: 800, color: isSelected ? "#16A34A" : "#0F172A" }}>₹{discountedTotal.toLocaleString()}</div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
 
+                  {selectedSlot && (() => {
+                    // Compute final price with selected offer applied
+                    const base = selectedConsultant.fee;
+                    const offer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
+                    let discountedBase = base;
+                    if (offer?.discount) {
+                      const ds = offer.discount;
+                      const da = ds.includes("%") ? Math.round(base * parseFloat(ds) / 100) : (parseFloat(ds) || 0);
+                      discountedBase = Math.max(base - da, 0);
+                    }
+                    const { total: finalTotal, label: feeLabel } = calcTotal(discountedBase);
+                    return (
+                      <div className="up-booking-summary" style={{ marginTop: 14 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 12 }}>
+                          <span style={{ color: "#64748B" }}>
+                            {selectedDay.date} {selectedDay.month} · {selectedSlot.label} · {meetingMode === "ONLINE" ? "Online" : meetingMode === "PHONE" ? "Phone" : "In-Person"}
+                          </span>
+                        </div>
+                        {offer && (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#16A34A", fontWeight: 600, marginBottom: 3 }}>
+                            <span>Offer: {offer.title}</span>
+                            <span>-₹{(base - discountedBase).toLocaleString()}</span>
+                          </div>
+                        )}
+                        {feeLabel && (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748B", marginBottom: 3 }}>
+                            <span>{feeLabel}</span>
+                          </div>
+                        )}
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 800, color: "#0F172A", borderTop: "1px solid #E2E8F0", paddingTop: 6, marginTop: 3 }}>
+                          <span>Total</span>
+                          <span style={{ color: "#2563EB" }}>₹{finalTotal.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <button disabled={!selectedSlot || confirming} onClick={handleConfirm} className={`up-proceed-btn ${selectedSlot && !confirming ? "up-proceed-btn-active" : ""}`}>
-                    {confirming ? "Booking…" : selectedSlot ? `Confirm & Pay ₹${calcTotal(selectedConsultant.fee).total.toLocaleString()}` : "Select a Date and Time to Continue"}
+                    {confirming ? "Booking…" : (() => {
+                      if (!selectedSlot) return "Select a Date and Time to Continue";
+                      const base = selectedConsultant.fee;
+                      const offer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
+                      let discountedBase = base;
+                      if (offer?.discount) {
+                        const ds = offer.discount;
+                        const da = ds.includes("%") ? Math.round(base * parseFloat(ds) / 100) : (parseFloat(ds) || 0);
+                        discountedBase = Math.max(base - da, 0);
+                      }
+                      const { total: finalTotal } = calcTotal(discountedBase);
+                      return `Confirm & Pay ₹${finalTotal.toLocaleString()}`;
+                    })()}
                   </button>
                 </>
               )}
@@ -3146,11 +3373,10 @@ export default function UserPage() {
                   </div>
                   {skillQuestions.length === 0 ? (
                     <div style={{ textAlign: "center", padding: "30px 0", color: "#94A3B8" }}>
-                      <div style={{ width: 24, height: 24, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite", margin: "0 auto 12px" }} />
-                      Loading questions…
-                      <div style={{ marginTop: 20 }}>
-                        <button onClick={() => setFirstLoginStep("terms")} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Continue →</button>
-                      </div>
+                      <div style={{ fontSize: 36, marginBottom: 10 }}>📭</div>
+                      <div style={{ fontWeight: 600, color: "#64748B", marginBottom: 6, fontSize: 14 }}>No questions for your selected categories</div>
+                      <p style={{ fontSize: 12, color: "#94A3B8", margin: "0 0 18px" }}>You can still continue to the next step.</p>
+                      <button onClick={() => setFirstLoginStep("terms")} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Continue →</button>
                     </div>
                   ) : (
                     <>
@@ -3194,9 +3420,17 @@ export default function UserPage() {
               )}
 
               {/* ── STEP 4: Terms & Conditions ── */}
-              {firstLoginStep === "terms" && (() => {
-                const [termsAccepted, setTermsAccepted] = React.useState(false);
-                const termsText = `MEET THE MASTERS — TERMS & CONDITIONS
+              {firstLoginStep === "terms" && (
+                <div>
+                  {termsLoading ? (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 280, flexDirection: "column", gap: 12 }}>
+                      <div style={{ width: 24, height: 24, border: "3px solid #E2E8F0", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                      <span style={{ fontSize: 12, color: "#94A3B8" }}>Loading Terms & Conditions…</span>
+                    </div>
+                  ) : (
+                    <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 12, padding: "16px", marginBottom: 18, height: 280, overflowY: "auto", fontSize: 12, color: "#374151", lineHeight: 1.7 }}>
+                      {/* Parse ### heading format from admin editor into styled sections */}
+                      {(termsContent || `MEET THE MASTERS — TERMS & CONDITIONS
 
 Last updated: March 2026
 
@@ -3204,7 +3438,7 @@ Last updated: March 2026
 By accessing and using Meet The Masters platform, you agree to be bound by these Terms and Conditions.
 
 2. PLATFORM SERVICES
-Meet The Masters provides a platform connecting users with independent financial consultants. We do not provide financial advice directly. All advice is given by registered consultants.
+Meet The Masters provides a platform connecting users with independent financial consultants. We do not provide financial advice directly.
 
 3. USER RESPONSIBILITIES
 • You must be at least 18 years of age to use this platform.
@@ -3214,12 +3448,10 @@ Meet The Masters provides a platform connecting users with independent financial
 4. CONSULTANT SERVICES
 • Consultants are independent professionals. Their advice does not constitute financial advice from Meet The Masters.
 • Bookings and consultations are subject to the consultant's availability and terms.
-• Fees are clearly displayed before booking. Refund policies are defined per booking.
 
 5. PRIVACY & DATA
 • Your personal and financial information is used solely for matching you with relevant consultants.
 • We do not sell your data to third parties.
-• Your answers to onboarding questions are stored securely and used only for personalisation.
 
 6. PAYMENT & REFUNDS
 • Payments are processed securely. Platform fees are added transparently.
@@ -3231,33 +3463,53 @@ Meet The Masters is not liable for the accuracy of financial advice provided by 
 8. CHANGES TO TERMS
 We reserve the right to update these terms. Users will be notified of significant changes.
 
-By clicking "Accept & Continue", you confirm that you have read, understood, and agree to these Terms & Conditions.`;
-
-                return (
-                  <div>
-                    <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 12, padding: "16px", marginBottom: 18, height: 280, overflowY: "auto", fontSize: 12, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-line" }}>
-                      {termsText}
+By clicking "Accept & Continue", you confirm that you have read, understood, and agree to these Terms & Conditions.`)
+                        .split("\n\n")
+                        .map((block, i) => {
+                          const lines = block.split("\n");
+                          const firstLine = lines[0] || "";
+                          const isHeading = firstLine.startsWith("### ");
+                          const heading = isHeading ? firstLine.replace(/^###\s*/, "") : null;
+                          const body = isHeading ? lines.slice(1).join("\n") : block;
+                          return (
+                            <div key={i} style={{ marginBottom: 12 }}>
+                              {heading && (
+                                <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{heading}</div>
+                              )}
+                              {!heading && firstLine && !isHeading && (
+                                <div style={{ fontWeight: 700, fontSize: 12, color: "#0F172A", marginBottom: 2 }}>{firstLine}</div>
+                              )}
+                              {(heading ? body : lines.slice(1).join("\n") || "").split("\n").map((line, j) => (
+                                line.trim() ? <div key={j} style={{ color: "#374151", marginBottom: 2 }}>{line}</div> : null
+                              ))}
+                              {!heading && lines.length === 1 && (
+                                <div style={{ color: "#374151" }}>{block}</div>
+                              )}
+                            </div>
+                          );
+                        })
+                      }
                     </div>
-                    <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginBottom: 20 }}>
-                      <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)}
-                        style={{ width: 18, height: 18, accentColor: "#2563EB", marginTop: 2, flexShrink: 0 }} />
-                      <span style={{ fontSize: 13, color: "#374151", lineHeight: 1.5 }}>
-                        I have read and agree to the <strong>Terms & Conditions</strong> and <strong>Privacy Policy</strong> of Meet The Masters.
-                      </span>
-                    </label>
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <button onClick={() => setFirstLoginStep(skillQuestions.length > 0 ? "skill-questions" : "categories")}
-                        style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>← Back</button>
-                      <button
-                        disabled={!termsAccepted}
-                        onClick={() => { handleFirstLoginComplete(); }}
-                        style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", background: termsAccepted ? "linear-gradient(135deg,#2563EB,#1D4ED8)" : "#E2E8F0", color: termsAccepted ? "#fff" : "#94A3B8", fontSize: 14, fontWeight: 700, cursor: termsAccepted ? "pointer" : "default" }}>
-                        Accept & Find My Consultants →
-                      </button>
-                    </div>
+                  )}
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginBottom: 20 }}>
+                    <input type="checkbox" checked={termsAccepted} onChange={e => setTermsAccepted(e.target.checked)}
+                      style={{ width: 18, height: 18, accentColor: "#2563EB", marginTop: 2, flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "#374151", lineHeight: 1.5 }}>
+                      I have read and agree to the <strong>Terms & Conditions</strong> and <strong>Privacy Policy</strong> of Meet The Masters.
+                    </span>
+                  </label>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => setFirstLoginStep(skillQuestions.length > 0 ? "skill-questions" : "categories")}
+                      style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>← Back</button>
+                    <button
+                      disabled={!termsAccepted || termsLoading}
+                      onClick={() => { handleFirstLoginComplete(); }}
+                      style={{ flex: 2, padding: "12px", borderRadius: 12, border: "none", background: (termsAccepted && !termsLoading) ? "linear-gradient(135deg,#2563EB,#1D4ED8)" : "#E2E8F0", color: (termsAccepted && !termsLoading) ? "#fff" : "#94A3B8", fontSize: 14, fontWeight: 700, cursor: (termsAccepted && !termsLoading) ? "pointer" : "default" }}>
+                      Accept & Find My Consultants →
+                    </button>
                   </div>
-                );
-              })()}
+                </div>
+              )}
 
             </div>
           </div>

@@ -564,7 +564,6 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
       <div style={{ width: selected ? 340 : '100%', flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid #E2E8F0', transition: 'width 0.2s', overflow: 'hidden' }}>
         <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #F1F5F9' }}>
           <h2 style={{ margin: '0 0 10px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
-          {/* Email-to-ticket info for consultants */}
           <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: '#1E40AF' }}>
             📧 <strong>Email-to-Ticket:</strong> Users can email <strong>support@meetthemasters.in</strong> — emails auto-convert to tickets assigned to you.
           </div>
@@ -707,7 +706,6 @@ const AdvisorTicketDetail: React.FC<{
       setReply('');
       if (localStatus === 'NEW') { setLocalStatus('OPEN'); onStatusChange(ticket.id, 'OPEN'); }
 
-      // Email: notify user that consultant replied
       const userEmail = ticket.user?.email || ticket.userEmail || ticket.email || '';
       if (userEmail) {
         sendTicketCommentEmail({
@@ -720,7 +718,6 @@ const AdvisorTicketDetail: React.FC<{
         }).catch(() => { });
       }
 
-      // In-app: write to user notification bucket so UserPage picks it up
       const userId = ticket.userId || ticket.user?.id;
       if (userId) {
         const key = `fin_notifs_USER_${userId}`;
@@ -750,7 +747,6 @@ const AdvisorTicketDetail: React.FC<{
       onStatusChange(ticket.id, s);
       showToast(`Status → ${s.replace('_', ' ')}`);
 
-      // Email: notify user of status change
       const userEmail = ticket.user?.email || ticket.userEmail || ticket.email || '';
       if (userEmail) {
         sendTicketStatusEmail({
@@ -763,7 +759,6 @@ const AdvisorTicketDetail: React.FC<{
         }).catch(() => { });
       }
 
-      // In-app: write to user notification bucket so UserPage picks it up
       const userId = ticket.userId || ticket.user?.id;
       if (userId) {
         const key = `fin_notifs_USER_${userId}`;
@@ -982,7 +977,6 @@ const ConsultantNotificationsView: React.FC<{ consultantId: number }> = ({ consu
     catch { return []; }
   });
 
-  // Live-poll localStorage every 10s and on window focus to catch new notifications
   useEffect(() => {
     const poll = () => {
       try {
@@ -1084,7 +1078,9 @@ const ConsultantNotificationsView: React.FC<{ consultantId: number }> = ({ consu
       )}
     </div>
   );
-};// ─────────────────────────────────────────────────────────────────────────────
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BOOKINGS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const BookingsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
@@ -1347,14 +1343,13 @@ const SCHEDULE_VISIBLE = 7;
 const DEFAULT_SCHEDULE_DAY = ALL_SCHEDULE_DAYS.find(d => d.wd !== 'SUN')?.iso ?? ALL_SCHEDULE_DAYS[0].iso;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MY SCHEDULE — WITH PATCH A FULLY INTEGRATED
+// MY SCHEDULE
 // ─────────────────────────────────────────────────────────────────────────────
 const MySlotsView: React.FC<{
   consultantId: number;
   shiftStartTime: string;
   shiftEndTime: string;
 }> = ({ consultantId, shiftStartTime, shiftEndTime }) => {
-  // ── existing state ──────────────────────────────────────────────────────────
   const [dbSlots, setDbSlots] = useState<TimeSlotRecord[]>([]);
   const [masterSlots, setMasterSlots] = useState<MasterSlot[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
@@ -1367,76 +1362,48 @@ const MySlotsView: React.FC<{
   const [showAddSlot, setShowAddSlot] = useState(false);
   const [newSlotTime, setNewSlotTime] = useState('');
   const [addingSlot, setAddingSlot] = useState(false);
-
-  // ── PATCH A – new state ─────────────────────────────────────────────────────
   const [bookedSlots, setBookedSlots] = useState<{ slotDate: string; slotTime: string }[]>([]);
   const [unavailableSlots, setUnavailableSlots] = useState<{ slotDate: string; slotTime: string }[]>([]);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // "date|time"
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const showSlotToast = (msg: string, ok = true) => {
     setSlotToast({ msg, ok });
     setTimeout(() => setSlotToast(null), 3000);
   };
 
-  // ── PATCH A – mark unavailable / restore ───────────────────────────────────
-  // ── PATCH A – mark unavailable using existing /timeslots endpoint ───────────
   const handleMarkUnavailable = async (slotDate: string, slotStart: string) => {
     const key = `${slotDate}|${slotStart}`;
     setActionLoading(key);
     try {
       const slotTimeFull = slotStart.length === 5 ? `${slotStart}:00` : slotStart;
-
-      // Find matching master slot
       const matchedMaster = masterSlots.find(ms => {
         const startPart = ms.timeRange.split(/[-–]/)[0].trim();
         return normaliseTimeKey(startPart) === slotStart;
       });
-
-      // Check if a timeslot record already exists for this date+time
       const existing = dbSlots.find(s => {
         if (s.slotDate !== slotDate) return false;
-        const dbSlotTime = (s as any).slotTime
-          ? String((s as any).slotTime).substring(0, 5)
-          : '';
+        const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
         if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
         const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
         return normTR === slotStart;
       });
-
       if (existing) {
-        await apiFetch(`/timeslots/${existing.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ ...existing, status: 'UNAVAILABLE' }),
-        });
+        await apiFetch(`/timeslots/${existing.id}`, { method: 'PUT', body: JSON.stringify({ ...existing, status: 'UNAVAILABLE' }) });
       } else {
         if (!matchedMaster) {
           showSlotToast('⚠️ No matching master time range found. Add it in "Master Time Ranges" tab first.', false);
           setActionLoading(null);
           return;
         }
-        await apiFetch('/timeslots', {
-          method: 'POST',
-          body: JSON.stringify({
-            consultantId,
-            slotDate,
-            slotTime: slotTimeFull,
-            durationMinutes: 60,
-            status: 'UNAVAILABLE',
-            masterTimeSlotId: matchedMaster.id,
-          }),
-        });
+        await apiFetch('/timeslots', { method: 'POST', body: JSON.stringify({ consultantId, slotDate, slotTime: slotTimeFull, durationMinutes: 60, status: 'UNAVAILABLE', masterTimeSlotId: matchedMaster.id }) });
       }
-
-      // Optimistic update
       setUnavailableSlots(prev => [...prev, { slotDate, slotTime: slotStart }]);
       showSlotToast('✓ Slot blocked');
-      await loadData(); // Refresh to sync with backend
+      await loadData();
     } catch (err: any) {
       showSlotToast(`Failed to block slot: ${err.message}`, false);
-    } finally {
-      setActionLoading(null);
-    }
+    } finally { setActionLoading(null); }
   };
 
   const handleMarkAvailable = async (slotDate: string, slotStart: string) => {
@@ -1447,26 +1414,17 @@ const MySlotsView: React.FC<{
         const startPart = ms.timeRange.split(/[-–]/)[0].trim();
         return normaliseTimeKey(startPart) === slotStart;
       });
-
       const existing = dbSlots.find(s => {
         if (s.slotDate !== slotDate) return false;
-        const dbSlotTime = (s as any).slotTime
-          ? String((s as any).slotTime).substring(0, 5)
-          : '';
+        const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
         if (matchedMaster && s.masterTimeSlotId === matchedMaster.id) return true;
         const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
         return normTR === slotStart;
       });
-
       if (existing) {
-        await apiFetch(`/timeslots/${existing.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ ...existing, status: 'AVAILABLE' }),
-        });
-        setUnavailableSlots(prev =>
-          prev.filter(u => !(u.slotDate === slotDate && u.slotTime === slotStart))
-        );
+        await apiFetch(`/timeslots/${existing.id}`, { method: 'PUT', body: JSON.stringify({ ...existing, status: 'AVAILABLE' }) });
+        setUnavailableSlots(prev => prev.filter(u => !(u.slotDate === slotDate && u.slotTime === slotStart)));
         showSlotToast('✓ Slot restored');
         await loadData();
       } else {
@@ -1474,22 +1432,12 @@ const MySlotsView: React.FC<{
       }
     } catch (err: any) {
       showSlotToast(`Failed to restore slot: ${err.message}`, false);
-    } finally {
-      setActionLoading(null);
-    }
+    } finally { setActionLoading(null); }
   };
 
-  // ── PATCH A – fast O(1) lookup sets ────────────────────────────────────────
-  const bookedSlotSet = useMemo(
-    () => new Set(bookedSlots.map(b => `${b.slotDate}|${b.slotTime}`)),
-    [bookedSlots]
-  );
-  const unavailSlotSet = useMemo(
-    () => new Set(unavailableSlots.map(u => `${u.slotDate}|${u.slotTime}`)),
-    [unavailableSlots]
-  );
+  const bookedSlotSet = useMemo(() => new Set(bookedSlots.map(b => `${b.slotDate}|${b.slotTime}`)), [bookedSlots]);
+  const unavailSlotSet = useMemo(() => new Set(unavailableSlots.map(u => `${u.slotDate}|${u.slotTime}`)), [unavailableSlots]);
 
-  // ── data loader ─────────────────────────────────────────────────────────────
   const loadData = async () => {
     setLoading(true); setError(null);
     let slotArr: any[] = [];
@@ -1500,19 +1448,12 @@ const MySlotsView: React.FC<{
         const mArr = extractArray(mData);
         mArr.forEach((m: any) => { if (m.id && m.timeRange) masterLookup[m.id] = m.timeRange; });
         setMasterSlots(mArr);
-      } catch { /* non-fatal */ }
-
+      } catch { }
       try {
         const slotData = await apiFetch(`/timeslots/consultant/${consultantId}`);
         slotArr = extractArray(slotData);
-        setDbSlots(slotArr.map((s: any) => ({
-          ...s,
-          timeRange: (s.timeRange && s.timeRange !== 'Unknown Time')
-            ? s.timeRange
-            : (masterLookup[s.masterTimeSlotId] || ''),
-        })));
+        setDbSlots(slotArr.map((s: any) => ({ ...s, timeRange: (s.timeRange && s.timeRange !== 'Unknown Time') ? s.timeRange : (masterLookup[s.masterTimeSlotId] || '') })));
       } catch { setDbSlots([]); }
-
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
         const bArr = extractArray(bData);
@@ -1530,27 +1471,10 @@ const MySlotsView: React.FC<{
           } catch { return b; }
         }));
         setBookings(enrichedB);
-
-        // ── PATCH A – populate bookedSlots state from API bookings ────────────
-        const mapped = enrichedB.map((b: any) => ({
-          slotDate: deepFindDate(b),
-          slotTime: parseSlotTimeKey(b.slotTime, deepFindTime(b)),
-        })).filter(b => b.slotDate && b.slotTime);
+        const mapped = enrichedB.map((b: any) => ({ slotDate: deepFindDate(b), slotTime: parseSlotTimeKey(b.slotTime, deepFindTime(b)) })).filter(b => b.slotDate && b.slotTime);
         setBookedSlots(mapped);
       } catch { setBookings([]); }
-
-      // Derive unavailable slots from consultant timeslots status.
-      setUnavailableSlots(
-        slotArr
-          .map((s: any) => ({
-            slotDate: s.slotDate || '',
-            slotTime: parseSlotTimeKey(s.slotTime, s.timeRange),
-            status: (s.status || '').toUpperCase(),
-          }))
-          .filter((s: any) => s.slotDate && s.slotTime && !['AVAILABLE', 'BOOKED'].includes(s.status))
-          .map((s: any) => ({ slotDate: s.slotDate, slotTime: s.slotTime }))
-      );
-
+      setUnavailableSlots(slotArr.map((s: any) => ({ slotDate: s.slotDate || '', slotTime: parseSlotTimeKey(s.slotTime, s.timeRange), status: (s.status || '').toUpperCase() })).filter((s: any) => s.slotDate && s.slotTime && !['AVAILABLE', 'BOOKED'].includes(s.status)).map((s: any) => ({ slotDate: s.slotDate, slotTime: s.slotTime })));
     } catch (e: any) {
       setError(e?.message || 'Failed to load slots.');
     } finally { setLoading(false); }
@@ -1558,7 +1482,6 @@ const MySlotsView: React.FC<{
 
   useEffect(() => { if (consultantId) loadData(); }, [consultantId]);
 
-  // ── derived sets from dbSlots (keep for backward-compat toggle handler) ─────
   const fmtTime = (t: string) => {
     if (!t) return '—';
     const parts = t.split(':').map(Number);
@@ -1622,7 +1545,6 @@ const MySlotsView: React.FC<{
     });
   }
 
-  // ── existing timeslot toggle handler (unchanged) ────────────────────────────
   const handleToggleSlot = async (slotStart: string) => {
     const key = `${activeDateKey}|${slotStart}`;
     if (bookedByClientSet.has(key)) {
@@ -1633,12 +1555,10 @@ const MySlotsView: React.FC<{
     const slotTimeFull = slotStart.length === 5 ? `${slotStart}:00` : slotStart;
     const isCurrentlyUnavailable = manuallyDisabledSet.has(key);
     const newStatus = isCurrentlyUnavailable ? 'AVAILABLE' : 'UNAVAILABLE';
-
     const matchedMaster = masterSlots.find(ms => {
       const startPart = ms.timeRange.split(/[-–]/)[0].trim();
       return normaliseTimeKey(startPart) === slotStart;
     });
-
     try {
       const existing = dbSlots.find(s => {
         if (s.slotDate !== activeDateKey) return false;
@@ -1649,30 +1569,21 @@ const MySlotsView: React.FC<{
         if (normTR && normTR === slotStart) return true;
         return false;
       });
-
       if (existing) {
-        await apiFetch(`/timeslots/${existing.id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ ...existing, status: newStatus }),
-        });
+        await apiFetch(`/timeslots/${existing.id}`, { method: 'PUT', body: JSON.stringify({ ...existing, status: newStatus }) });
       } else {
         if (!matchedMaster) {
           showSlotToast('⚠️ No matching master time range. Add this time in "Master Time Ranges" tab first.', false);
           setTogglingSlot(null);
           return;
         }
-        await apiFetch('/timeslots', {
-          method: 'POST',
-          body: JSON.stringify({ consultantId, slotDate: activeDateKey, slotTime: slotTimeFull, durationMinutes: 60, status: newStatus, masterTimeSlotId: matchedMaster.id }),
-        });
+        await apiFetch('/timeslots', { method: 'POST', body: JSON.stringify({ consultantId, slotDate: activeDateKey, slotTime: slotTimeFull, durationMinutes: 60, status: newStatus, masterTimeSlotId: matchedMaster.id }) });
       }
       showSlotToast(newStatus === 'AVAILABLE' ? '✓ Slot marked as available' : '✓ Slot marked as unavailable');
       await loadData();
     } catch (e: any) {
       showSlotToast(e?.message || 'Failed to update slot.', false);
-    } finally {
-      setTogglingSlot(null);
-    }
+    } finally { setTogglingSlot(null); }
   };
 
   const handleAddCustomSlot = async () => {
@@ -1690,118 +1601,58 @@ const MySlotsView: React.FC<{
       await loadData();
     } catch (e: any) {
       showSlotToast(e?.message || 'Failed to add slot.', false);
-    } finally {
-      setAddingSlot(false);
-    }
+    } finally { setAddingSlot(false); }
   };
 
   const customSlots = getCustomSlotsForDate(activeDateKey);
   const allSlotTimes = [...new Set([...hourlySlotTimes, ...customSlots])].sort();
 
-  // ── PATCH A – slot button renderer ─────────────────────────────────────────
   const renderSlotButton = (slotDate: string, slotStart: string) => {
     const key = `${slotDate}|${slotStart}`;
     const isBooked = bookedSlotSet.has(key) || bookedByClientSet.has(key);
     const isUnavail = !isBooked && (unavailSlotSet.has(key) || manuallyDisabledSet.has(key));
     const isLoading = actionLoading === key || togglingSlot === key;
     const isCustom = !hourlySlotTimes.includes(slotStart);
-
     const endH = parseInt(slotStart.split(':')[0]) + 1;
     const endStr = `${String(endH).padStart(2, '0')}:${slotStart.split(':')[1]}`;
     const label = `${fmt24to12(slotStart)} – ${fmt24to12(endStr)}`;
 
-    // ── Booked: solid blue pill, no block button ──────────────────────────────
     if (isBooked) {
       return (
         <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{
-            padding: '10px 6px', borderRadius: 100,
-            background: '#2563EB', border: '1.5px solid #1D4ED8',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-          }}>
+          <div style={{ padding: '10px 6px', borderRadius: 100, background: '#2563EB', border: '1.5px solid #1D4ED8', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>{label}</span>
-            <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.08em' }}>
-              BOOKED
-            </span>
+            <span style={{ fontSize: 8, fontWeight: 800, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.08em' }}>BOOKED</span>
           </div>
-          {/* No block button for booked slots */}
         </div>
       );
     }
-
-    // ── Unavailable: red-tinted pill + Restore button ─────────────────────────
     if (isUnavail) {
       return (
         <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{
-            padding: '10px 6px', borderRadius: 100,
-            background: '#FEE2E2', border: '1.5px solid #FCA5A5',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-          }}>
+          <div style={{ padding: '10px 6px', borderRadius: 100, background: '#FEE2E2', border: '1.5px solid #FCA5A5', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: '#DC2626' }}>{label}</span>
-            <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>
-              UNAVAILABLE
-            </span>
+            <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>UNAVAILABLE</span>
           </div>
-          <button
-            onClick={() => handleMarkAvailable(slotDate, slotStart)}
-            disabled={isLoading}
-            style={{
-              padding: '3px 8px', borderRadius: 6,
-              border: '1px solid #86EFAC',
-              background: '#F0FDF4',
-              color: '#15803D',
-              fontSize: 9, fontWeight: 700,
-              cursor: isLoading ? 'default' : 'pointer',
-              fontFamily: 'inherit', width: '100%',
-              opacity: isLoading ? 0.6 : 1,
-            }}
-          >
+          <button onClick={() => handleMarkAvailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #86EFAC', background: '#F0FDF4', color: '#15803D', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
             {isLoading ? '…' : '✓ Restore'}
           </button>
         </div>
       );
     }
-
-    // ── Available: white pill + Block button ──────────────────────────────────
     return (
       <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{
-          padding: '10px 6px', borderRadius: 100,
-          background: '#fff', border: '1.5px solid #BFDBFE',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-        }}>
+        <div style={{ padding: '10px 6px', borderRadius: 100, background: '#fff', border: '1.5px solid #BFDBFE', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>{label}</span>
-          {isCustom && (
-            <span style={{
-              fontSize: 8, fontWeight: 800, color: '#10B981',
-              background: '#D1FAE5', borderRadius: 4, padding: '1px 5px',
-            }}>
-              CUSTOM
-            </span>
-          )}
+          {isCustom && <span style={{ fontSize: 8, fontWeight: 800, color: '#10B981', background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>CUSTOM</span>}
         </div>
-        <button
-          onClick={() => handleMarkUnavailable(slotDate, slotStart)}
-          disabled={isLoading}
-          style={{
-            padding: '3px 8px', borderRadius: 6,
-            border: '1px solid #FBBF24',
-            background: '#FFFBEB',
-            color: '#92400E',
-            fontSize: 9, fontWeight: 700,
-            cursor: isLoading ? 'default' : 'pointer',
-            fontFamily: 'inherit', width: '100%',
-            opacity: isLoading ? 0.6 : 1,
-          }}
-        >
+        <button onClick={() => handleMarkUnavailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #FBBF24', background: '#FFFBEB', color: '#92400E', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
           {isLoading ? '…' : 'Block'}
         </button>
       </div>
     );
   };
 
-  // ── render ──────────────────────────────────────────────────────────────────
   return (
     <div className="advisor-content-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 20 }}>
@@ -1812,30 +1663,23 @@ const MySlotsView: React.FC<{
           🔄 Refresh
         </button>
       </div>
-
       {showAddSlot && (
         <div style={{ background: '#F8FAFC', border: '1.5px dashed #BFDBFE', borderRadius: 14, padding: '18px 20px', marginBottom: 20 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-            Add Custom Slot for {activeDateKey}
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Add Custom Slot for {activeDateKey}</div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="time" value={newSlotTime} onChange={e => setNewSlotTime(e.target.value)}
-              style={{ padding: '9px 14px', border: '1.5px solid #BFDBFE', borderRadius: 10, fontSize: 14, outline: 'none', background: '#fff' }} />
-            <button onClick={handleAddCustomSlot} disabled={!newSlotTime || addingSlot}
-              style={{ padding: '9px 20px', background: !newSlotTime || addingSlot ? '#E2E8F0' : '#2563EB', color: !newSlotTime || addingSlot ? '#94A3B8' : '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: !newSlotTime || addingSlot ? 'default' : 'pointer' }}>
+            <input type="time" value={newSlotTime} onChange={e => setNewSlotTime(e.target.value)} style={{ padding: '9px 14px', border: '1.5px solid #BFDBFE', borderRadius: 10, fontSize: 14, outline: 'none', background: '#fff' }} />
+            <button onClick={handleAddCustomSlot} disabled={!newSlotTime || addingSlot} style={{ padding: '9px 20px', background: !newSlotTime || addingSlot ? '#E2E8F0' : '#2563EB', color: !newSlotTime || addingSlot ? '#94A3B8' : '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: !newSlotTime || addingSlot ? 'default' : 'pointer' }}>
               {addingSlot ? 'Adding…' : '+ Add Slot'}
             </button>
           </div>
         </div>
       )}
-
       {error && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>
           ⚠️ {error}
           <button onClick={loadData} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#B91C1C', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', float: 'right' }}>Retry</button>
         </div>
       )}
-
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: '#94A3B8' }}>
           <div style={{ width: 28, height: 28, border: '3px solid #DBEAFE', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
@@ -1849,7 +1693,6 @@ const MySlotsView: React.FC<{
         </div>
       ) : (
         <>
-          {/* Stats row */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
             {[
               { label: 'Total (7 days)', value: totalCount, color: '#2563EB', bg: '#EFF6FF' },
@@ -1862,9 +1705,7 @@ const MySlotsView: React.FC<{
               </div>
             ))}
           </div>
-
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 16px rgba(37,99,235,0.12)' }}>
-            {/* Header */}
             <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', padding: '20px 24px 18px' }}>
               <p style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#93C5FD', margin: '0 0 4px', fontWeight: 700 }}>My Schedule</p>
               <h3 style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: '0 0 4px' }}>My Schedule Slots</h3>
@@ -1873,41 +1714,27 @@ const MySlotsView: React.FC<{
                 {hasShift && <span style={{ marginLeft: 10, fontSize: 12, color: '#60A5FA' }}>· {hourlySlotTimes.length} slots/day</span>}
               </p>
             </div>
-
-            {/* Date picker */}
             <div style={{ padding: '20px 24px', borderBottom: '1px solid #F1F5F9' }}>
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 — Select Date</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))}
-                  style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
+                <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
                 <div style={{ display: 'flex', gap: 6, flex: 1 }}>
                   {visibleDays.map(d => {
                     const isActive = d.iso === activeDateKey;
                     const isToday = d.iso === ALL_SCHEDULE_DAYS[0].iso;
                     const isSunday = d.wd === 'SUN';
                     return (
-                      <button key={d.iso} disabled={isSunday} onClick={() => !isSunday && setSelectedDate(d.iso)}
-                        title={isSunday ? 'No slots on Sundays' : undefined}
-                        style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '8px 4px', borderRadius: 10, gap: 2, border: `1.5px solid ${isActive && !isSunday ? '#2563EB' : '#E2E8F0'}`, background: isSunday ? '#F8FAFC' : isActive ? '#2563EB' : '#F8FAFC', cursor: isSunday ? 'not-allowed' : 'pointer', fontFamily: 'inherit', outline: 'none', transition: 'all 0.2s', minHeight: 72, opacity: isSunday ? 0.38 : 1 }}>
+                      <button key={d.iso} disabled={isSunday} onClick={() => !isSunday && setSelectedDate(d.iso)} title={isSunday ? 'No slots on Sundays' : undefined} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '8px 4px', borderRadius: 10, gap: 2, border: `1.5px solid ${isActive && !isSunday ? '#2563EB' : '#E2E8F0'}`, background: isSunday ? '#F8FAFC' : isActive ? '#2563EB' : '#F8FAFC', cursor: isSunday ? 'not-allowed' : 'pointer', fontFamily: 'inherit', outline: 'none', transition: 'all 0.2s', minHeight: 72, opacity: isSunday ? 0.38 : 1 }}>
                         <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: isSunday ? '#CBD5E1' : isActive ? '#BFDBFE' : '#94A3B8' }}>{d.wd}</span>
                         <span style={{ fontSize: 17, fontWeight: 700, lineHeight: 1, color: isSunday ? '#CBD5E1' : isActive ? '#fff' : '#0F172A' }}>{d.day}</span>
-                        {isSunday ? (
-                          <span style={{ fontSize: 8, fontWeight: 800, color: '#CBD5E1' }}>OFF</span>
-                        ) : isToday && !isActive ? (
-                          <span style={{ fontSize: 8, fontWeight: 800, color: '#2563EB', background: '#EFF6FF', padding: '1px 4px', borderRadius: 4 }}>TODAY</span>
-                        ) : (
-                          <span style={{ fontSize: 9, color: isActive ? '#BFDBFE' : '#94A3B8' }}>{d.mon}</span>
-                        )}
+                        {isSunday ? <span style={{ fontSize: 8, fontWeight: 800, color: '#CBD5E1' }}>OFF</span> : isToday && !isActive ? <span style={{ fontSize: 8, fontWeight: 800, color: '#2563EB', background: '#EFF6FF', padding: '1px 4px', borderRadius: 4 }}>TODAY</span> : <span style={{ fontSize: 9, color: isActive ? '#BFDBFE' : '#94A3B8' }}>{d.mon}</span>}
                       </button>
                     );
                   })}
                 </div>
-                <button disabled={dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE} onClick={() => setDayOffset(o => Math.min(ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE, o + 1))}
-                  style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? 'default' : 'pointer', color: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>›</button>
+                <button disabled={dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE} onClick={() => setDayOffset(o => Math.min(ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE, o + 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#F1F5F9' : '#BFDBFE'}`, background: '#fff', cursor: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? 'default' : 'pointer', color: dayOffset >= ALL_SCHEDULE_DAYS.length - SCHEDULE_VISIBLE ? '#CBD5E1' : '#2563EB', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>›</button>
               </div>
             </div>
-
-            {/* Slot grid */}
             <div style={{ padding: '20px 24px' }}>
               <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 — Select Time</p>
               {isActiveSunday ? (
@@ -1920,20 +1747,14 @@ const MySlotsView: React.FC<{
                 <div style={{ textAlign: 'center', padding: '30px 20px', color: '#94A3B8', fontSize: 13 }}>No slots for this date.</div>
               ) : (
                 <>
-                  {/* Legend */}
                   <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                    {[
-                      { label: 'Available', bg: '#fff', border: '#BFDBFE' },
-                      { label: 'Booked', bg: '#2563EB', border: '#1D4ED8' },
-                      { label: 'Unavailable', bg: '#FEE2E2', border: '#FCA5A5' },
-                    ].map(l => (
+                    {[{ label: 'Available', bg: '#fff', border: '#BFDBFE' }, { label: 'Booked', bg: '#2563EB', border: '#1D4ED8' }, { label: 'Unavailable', bg: '#FEE2E2', border: '#FCA5A5' }].map(l => (
                       <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
                         <span style={{ fontSize: 11, color: '#64748B' }}>{l.label}</span>
                       </div>
                     ))}
                   </div>
-                  {/* Grid — uses PATCH A renderSlotButton */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                     {allSlotTimes.map(slotStart => renderSlotButton(activeDateKey, slotStart))}
                   </div>
@@ -1943,7 +1764,6 @@ const MySlotsView: React.FC<{
           </div>
         </>
       )}
-
       {slotToast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: slotToast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', zIndex: 9999 }}>
           {slotToast.msg}
@@ -2004,9 +1824,7 @@ const MasterSlotsView: React.FC = () => {
               <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#EFF6FF', color: '#2563EB', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{idx + 1}</div>
               {editingId === ms.id ? (
                 <>
-                  <input autoFocus value={editValue} onChange={e => setEditValue(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleUpdate(ms.id); if (e.key === 'Escape') setEditingId(null); }}
-                    style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #2563EB', borderRadius: 8, fontSize: 13, outline: 'none' }} />
+                  <input autoFocus value={editValue} onChange={e => setEditValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleUpdate(ms.id); if (e.key === 'Escape') setEditingId(null); }} style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #2563EB', borderRadius: 8, fontSize: 13, outline: 'none' }} />
                   <button onClick={() => handleUpdate(ms.id)} style={{ padding: '7px 16px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Save</button>
                   <button onClick={() => setEditingId(null)} style={{ padding: '7px 14px', background: '#F1F5F9', color: '#64748B', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
                 </>
@@ -2024,28 +1842,22 @@ const MasterSlotsView: React.FC = () => {
       <div style={{ background: '#F8FAFC', border: '1.5px dashed #BFDBFE', borderRadius: 14, padding: '20px 22px' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', marginBottom: 12, textTransform: 'uppercase' }}>+ Add New Time Range</div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <input value={newRange} onChange={e => setNewRange(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()}
-            placeholder='e.g. 9 AM – 10 AM'
-            style={{ flex: 1, padding: '10px 14px', border: '1.5px solid #BFDBFE', borderRadius: 10, fontSize: 14, outline: 'none', background: '#fff' }} />
-          <button onClick={handleAdd} disabled={!newRange.trim()}
-            style={{ padding: '10px 22px', background: !newRange.trim() ? '#E2E8F0' : '#2563EB', color: !newRange.trim() ? '#94A3B8' : '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: !newRange.trim() ? 'default' : 'pointer' }}>
-            Add Range
-          </button>
+          <input value={newRange} onChange={e => setNewRange(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAdd()} placeholder='e.g. 9 AM – 10 AM' style={{ flex: 1, padding: '10px 14px', border: '1.5px solid #BFDBFE', borderRadius: 10, fontSize: 14, outline: 'none', background: '#fff' }} />
+          <button onClick={handleAdd} disabled={!newRange.trim()} style={{ padding: '10px 22px', background: !newRange.trim() ? '#E2E8F0' : '#2563EB', color: !newRange.trim() ? '#94A3B8' : '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: !newRange.trim() ? 'default' : 'pointer' }}>Add Range</button>
         </div>
       </div>
       {toast && <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: toast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', zIndex: 9999 }}>{toast.ok ? '✓' : '✕'} {toast.msg}</div>}
     </div>
   );
-};// ─────────────────────────────────────────────────────────────────────────────
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FEEDBACKS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const StarDisplay: React.FC<{ rating: number; size?: number }> = ({ rating, size = 16 }) => (
   <div style={{ display: 'flex', gap: 2 }}>
     {[1, 2, 3, 4, 5].map(s => (
-      <svg key={s} width={size} height={size} viewBox="0 0 24 24"
-        fill={s <= rating ? '#F59E0B' : '#E2E8F0'}
-        stroke={s <= rating ? '#D97706' : '#CBD5E1'}
-        strokeWidth="1.5">
+      <svg key={s} width={size} height={size} viewBox="0 0 24 24" fill={s <= rating ? '#F59E0B' : '#E2E8F0'} stroke={s <= rating ? '#D97706' : '#CBD5E1'} strokeWidth="1.5">
         <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
       </svg>
     ))}
@@ -2066,16 +1878,12 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
       const data = await apiFetch(`/feedbacks/consultant/${consultantId}`);
       const arr = extractArray(data);
       if (arr.length === 0) { setFeedbacks([]); return; }
-
       let bookingMap: Record<number, { clientName: string; slotDate: string; timeRange: string }> = {};
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
         const bArr = extractArray(bData);
-        bArr.forEach((b: any) => {
-          bookingMap[b.id] = { clientName: deepFindClientName(b), slotDate: deepFindDate(b), timeRange: deepFindTime(b) };
-        });
-      } catch { /* non-fatal */ }
-
+        bArr.forEach((b: any) => { bookingMap[b.id] = { clientName: deepFindClientName(b), slotDate: deepFindDate(b), timeRange: deepFindTime(b) }; });
+      } catch { }
       const enriched: FeedbackItem[] = await Promise.all(arr.map(async (f: any) => {
         const ctx = f.bookingId ? bookingMap[f.bookingId] : undefined;
         let clientName = ctx?.clientName || '';
@@ -2088,12 +1896,11 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
               const raw = u.name || u.fullName || u.username || u.email || '';
               clientName = raw.includes('@') ? raw.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : raw;
             }
-          } catch { /* skip */ }
+          } catch { }
         }
         if (!clientName && f.userId) clientName = `User #${f.userId}`;
         return { ...f, rating: Number(f.rating || 0), clientName: clientName || 'Anonymous', slotDate: ctx?.slotDate || f.createdAt?.split('T')[0] || '', timeRange: ctx?.timeRange || '' };
       }));
-
       enriched.sort((a, b) => b.id - a.id);
       setFeedbacks(enriched);
     } catch (e: any) {
@@ -2177,10 +1984,8 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
                       {fb.timeRange && <span style={{ fontSize: 12, fontWeight: 700, color: '#2563EB', background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '2px 10px', borderRadius: 20 }}>🕐 {fb.timeRange}</span>}
                     </div>
                   )}
-                  {fb.comments
-                    ? <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.65, background: '#F8FAFC', borderRadius: 10, padding: '10px 14px', borderLeft: '3px solid #DBEAFE' }}>"{fb.comments}"</p>
-                    : <p style={{ margin: 0, fontSize: 12, color: '#94A3B8', fontStyle: 'italic' }}>No written comment.</p>
-                  }
+                  {fb.comments ? <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.65, background: '#F8FAFC', borderRadius: 10, padding: '10px 14px', borderLeft: '3px solid #DBEAFE' }}>"{fb.comments}"</p>
+                    : <p style={{ margin: 0, fontSize: 12, color: '#94A3B8', fontStyle: 'italic' }}>No written comment.</p>}
                 </div>
               </div>
             </div>
@@ -2202,31 +2007,22 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [saveToast, setSaveToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [formError, setFormError] = useState<string>('');
-  const [timePickerConfig, setTimePickerConfig] = useState<{
-    isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string;
-  }>({ isOpen: false, field: null, value: '' });
-
+  const [timePickerConfig, setTimePickerConfig] = useState<{ isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string }>({ isOpen: false, field: null, value: '' });
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const showSaveToast = (msg: string, ok = true) => {
-    setSaveToast({ msg, ok });
-    setTimeout(() => setSaveToast(null), 3500);
-  };
+  const showSaveToast = (msg: string, ok = true) => { setSaveToast({ msg, ok }); setTimeout(() => setSaveToast(null), 3500); };
 
   const initForm = (p: any) => {
     const trimTime = (t: string | null | undefined) => t ? String(t).substring(0, 5) : '';
     const base = parseFloat(p.charges || '0');
     setFormData({
-      name: p.name || '',
-      designation: p.designation || '',
-      charges: p.charges || '',
+      name: p.name || '', designation: p.designation || '', charges: p.charges || '',
       displayPrice: p.displayPrice ? String(p.displayPrice) : String(base + 200),
       shiftStart: trimTime(p.shiftStartTime || p.shift_start_time),
       shiftEnd: trimTime(p.shiftEndTime || p.shift_end_time),
       skills: Array.isArray(p.skills) ? p.skills.join(', ') : (p.skills || ''),
       description: p.description || p.about || p.bio || '',
-      rating: p.rating || '',
-      email: p.email || '',
+      rating: p.rating || '', email: p.email || '',
     });
     setPhotoPreview(resolvePhotoUrl(p.profilePhoto || p.photo || ''));
     setPhotoFile(null);
@@ -2255,32 +2051,23 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     if (!formData.charges) { setFormError('Fee required.'); return; }
     if (!formData.shiftStart) { setFormError('Shift start required.'); return; }
     if (!formData.shiftEnd) { setFormError('Shift end required.'); return; }
-
     setSaving(true); setFormError('');
     try {
-      const skillsList: string[] = typeof formData.skills === 'string'
-        ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean)
-        : (formData.skills || []);
+      const skillsList: string[] = typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : (formData.skills || []);
       const toLocalTime = (t: string) => t.length === 5 ? `${t}:00` : t;
       await updateAdvisor(profile.id, {
-        name: formData.name.trim(),
-        designation: formData.designation.trim(),
+        name: formData.name.trim(), designation: formData.designation.trim(),
         charges: parseFloat(formData.charges) || 0,
         displayPrice: formData.displayPrice ? parseFloat(formData.displayPrice) : (parseFloat(formData.charges) || 0) + 200,
-        email: profile.email,
-        skills: skillsList,
-        description: formData.description?.trim() || '',
+        email: profile.email, skills: skillsList, description: formData.description?.trim() || '',
         rating: formData.rating ? parseFloat(formData.rating) : null,
-        shiftStartTime: toLocalTime(formData.shiftStart),
-        shiftEndTime: toLocalTime(formData.shiftEnd),
+        shiftStartTime: toLocalTime(formData.shiftStart), shiftEndTime: toLocalTime(formData.shiftEnd),
       }, photoFile ?? undefined);
       await onUpdate();
-      setIsEditing(false);
-      setPhotoFile(null);
+      setIsEditing(false); setPhotoFile(null);
       showSaveToast('✓ Profile saved!');
-    } catch (e: any) {
-      setFormError(e?.message || 'Failed to save.');
-    } finally { setSaving(false); }
+    } catch (e: any) { setFormError(e?.message || 'Failed to save.'); }
+    finally { setSaving(false); }
   };
 
   if (!profile) return <div>Loading…</div>;
@@ -2307,27 +2094,20 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
       </div>
       {formError && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16 }}>⚠️ {formError}</div>}
       {saveToast && <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: saveToast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '12px 24px', borderRadius: 12, fontSize: 13, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.3)', zIndex: 9999 }}>{saveToast.msg}</div>}
-
       {!isEditing ? (
         <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
           <div style={{ background: 'linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%)', padding: '28px 28px 24px' }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#93C5FD', marginBottom: 16 }}>Consultant Profile</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
               <div style={{ width: 104, height: 104, borderRadius: '50%', flexShrink: 0, background: (profile as any).profilePhoto ? 'transparent' : 'rgba(255,255,255,0.15)', border: '3px solid rgba(255,255,255,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                {(profile as any).profilePhoto
-                  ? <img src={resolvePhotoUrl((profile as any).profilePhoto)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                  : <span style={{ fontSize: 34, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>
-                }
+                {(profile as any).profilePhoto ? <img src={resolvePhotoUrl((profile as any).profilePhoto)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <span style={{ fontSize: 34, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>}
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 4 }}>{profile.name}</div>
                 <div style={{ fontSize: 14, color: '#BFDBFE', marginBottom: 6 }}>{profile.designation}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profile.rating || 0) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>)}
-                  {profile.rating
-                    ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{Number(profile.rating).toFixed(1)}</span>
-                    : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>
-                  }
+                  {profile.rating ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{Number(profile.rating).toFixed(1)}</span> : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>}
                 </div>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)', borderRadius: 14, padding: '12px 20px', textAlign: 'center' }}>
@@ -2337,25 +2117,18 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             </div>
           </div>
           <div style={{ padding: '20px 28px 28px' }}>
-            {(profile as any).description && (
-              <><div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 10px' }}>About</div><p style={{ margin: '0 0 20px', fontSize: 14, color: '#374151', lineHeight: 1.7 }}>{(profile as any).description}</p></>
-            )}
-            {profile.skills?.length > 0 && (
-              <><div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 10px' }}>Skills</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-                  {profile.skills.map((s, i) => <span key={i} style={{ fontSize: 12, padding: '5px 14px', borderRadius: 20, background: '#EFF6FF', color: '#2563EB', fontWeight: 600, border: '1px solid #BFDBFE' }}>{s}</span>)}
-                </div></>
-            )}
+            {(profile as any).description && (<><div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 10px' }}>About</div><p style={{ margin: '0 0 20px', fontSize: 14, color: '#374151', lineHeight: 1.7 }}>{(profile as any).description}</p></>)}
+            {profile.skills?.length > 0 && (<><div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 10px' }}>Skills</div><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>{profile.skills.map((s, i) => <span key={i} style={{ fontSize: 12, padding: '5px 14px', borderRadius: 20, background: '#EFF6FF', color: '#2563EB', fontWeight: 600, border: '1px solid #BFDBFE' }}>{s}</span>)}</div></>)}
             <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', margin: '0 0 12px' }}>Details</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 14 }}>
               {[
-                { label: 'Email', value: profile.email, icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg> },
-                { label: 'Fee', value: profile.charges ? `₹${Number(profile.charges).toLocaleString()}` : null, icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg> },
-                { label: 'Availability Start', value: (profile as any).shiftStartTime ? String((profile as any).shiftStartTime).substring(0, 5) : null, icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg> },
-                { label: 'Availability End', value: (profile as any).shiftEndTime ? String((profile as any).shiftEndTime).substring(0, 5) : null, icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 8 14" /></svg> },
+                { label: 'Email', value: profile.email },
+                { label: 'Fee', value: profile.charges ? `₹${Number(profile.charges).toLocaleString()}` : null },
+                { label: 'Availability Start', value: (profile as any).shiftStartTime ? String((profile as any).shiftStartTime).substring(0, 5) : null },
+                { label: 'Availability End', value: (profile as any).shiftEndTime ? String((profile as any).shiftEndTime).substring(0, 5) : null },
               ].filter(i => i.value).map(i => (
                 <div key={i.label} style={{ background: '#F8FAFC', borderRadius: 10, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}>{i.icon} {i.label}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 4 }}>{i.label}</div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{i.value}</div>
                 </div>
               ))}
@@ -2366,10 +2139,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #E2E8F0', padding: 28 }}>
           <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 20 }}>
             <div onClick={() => fileInputRef.current?.click()} style={{ width: 104, height: 104, borderRadius: '50%', flexShrink: 0, cursor: 'pointer', background: photoPreview ? 'transparent' : 'linear-gradient(135deg,#1E3A5F,#2563EB)', border: '3px solid #DBEAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              {photoPreview
-                ? <img src={photoPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={() => setPhotoPreview('')} />
-                : <span style={{ fontSize: 32, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>
-              }
+              {photoPreview ? <img src={photoPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={() => setPhotoPreview('')} /> : <span style={{ fontSize: 32, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>}
             </div>
             <div>
               <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileChange} />
@@ -2382,69 +2152,37 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 16, marginBottom: 24 }}>
             <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Name *</label><input name="name" value={formData.name || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
             <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Designation *</label><input name="designation" value={formData.designation || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
-            <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Fee (₹) * <span style={{ fontWeight: 400, color: '#94A3B8' }}>(base price)</span></label>
-              <input name="charges" type="number" value={formData.charges || ''} onChange={e => {
-                handleChange(e);
-                // Auto-calculate display price = base + 200
-                const base = parseFloat(e.target.value) || 0;
-                setFormData((prev: any) => ({ ...prev, charges: e.target.value, displayPrice: String(base + 200) }));
-              }} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
-              {formData.charges && (
-                <div style={{ marginTop: 4, fontSize: 11, color: '#16A34A', fontWeight: 600 }}>
-                  ✓ Customer sees: ₹{(parseFloat(formData.charges || '0') + 200).toLocaleString()}
-                </div>
-              )}
+            <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Fee (₹) *</label>
+              <input name="charges" type="number" value={formData.charges || ''} onChange={e => { handleChange(e); const base = parseFloat(e.target.value) || 0; setFormData((prev: any) => ({ ...prev, charges: e.target.value, displayPrice: String(base + 200) })); }} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
+              {formData.charges && <div style={{ marginTop: 4, fontSize: 11, color: '#16A34A', fontWeight: 600 }}>✓ Customer sees: ₹{(parseFloat(formData.charges || '0') + 200).toLocaleString()}</div>}
             </div>
             <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Rating (0-5)</label><input name="rating" type="number" step="0.1" min="0" max="5" value={formData.rating || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
             <div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                Availability Start *
-              </label>
-              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart })}
-                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability Start *</label>
+              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart })} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}>
                 <span>{displayTime(formData.shiftStart)}</span>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
               </div>
             </div>
             <div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 8 14" /></svg>
-                Availability End *
-              </label>
-              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftEnd', value: formData.shiftEnd })}
-                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftEnd ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftEnd ? '#0F172A' : '#94A3B8' }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability End *</label>
+              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftEnd', value: formData.shiftEnd })} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftEnd ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftEnd ? '#0F172A' : '#94A3B8' }}>
                 <span>{displayTime(formData.shiftEnd)}</span>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 8 14" /></svg>
               </div>
             </div>
             <div style={{ gridColumn: '1/-1' }}><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Skills (comma separated)</label><input name="skills" value={formData.skills || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
             <div style={{ gridColumn: '1/-1' }}><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Description</label><textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', outline: 'none' }} /></div>
           </div>
-          <MaterialTimePicker
-            isOpen={timePickerConfig.isOpen}
-            initialTime={timePickerConfig.value}
-            onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })}
-            onSave={t => {
-              if (timePickerConfig.field) {
-                setFormData({ ...formData, [timePickerConfig.field]: t });
-                setFormError('');
-              }
-              setTimePickerConfig({ ...timePickerConfig, isOpen: false });
-            }}
-          />
+          <MaterialTimePicker isOpen={timePickerConfig.isOpen} initialTime={timePickerConfig.value} onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })} onSave={t => { if (timePickerConfig.field) { setFormData({ ...formData, [timePickerConfig.field]: t }); setFormError(''); } setTimePickerConfig({ ...timePickerConfig, isOpen: false }); }} />
         </div>
       )}
     </div>
   );
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSULTANT SIDEBAR (inline)
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSULTANT OFFERS VIEW — Create/Edit/Delete own offers
+// CONSULTANT OFFERS VIEW — FIXED: Sends only fields the backend OfferRequest DTO accepts
+// Root cause of 500: backend OfferRequest doesn't have approvalStatus/consultantName fields
+// Fix: send only title, description, discount, validFrom, validTo, isActive, consultantId
 // ─────────────────────────────────────────────────────────────────────────────
 interface ConsultantOffer {
   id?: number;
@@ -2465,24 +2203,34 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   const [editing, setEditing] = React.useState<ConsultantOffer | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [deleting, setDeleting] = React.useState<number | null>(null);
-  const [toast, setToast] = React.useState<string | null>(null);
+  const [toast, setToast] = React.useState<{ msg: string; ok: boolean } | null>(null);
   const [form, setForm] = React.useState<ConsultantOffer>({ title: '', description: '', discount: '', validFrom: '', validTo: '', isActive: true });
   const [showForm, setShowForm] = React.useState(false);
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+  const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 2500); };
 
   const loadOffers = async () => {
     setLoading(true);
     try {
-      const data = await apiFetch(`/offers?consultantId=${consultantId}`);
-      const arr = Array.isArray(data) ? data : data?.content || data?.offers || [];
-      setOffers(arr.filter((o: any) => o.consultantId === consultantId || !o.consultantId));
-    } catch {
-      // Try alternate endpoint
+      // Try fetching offers for this consultant
+      let loaded: ConsultantOffer[] = [];
       try {
         const data = await apiFetch(`/offers/consultant/${consultantId}`);
-        setOffers(Array.isArray(data) ? data : data?.content || []);
-      } catch { setOffers([]); }
+        loaded = Array.isArray(data) ? data : extractArray(data);
+      } catch {
+        try {
+          const data = await apiFetch(`/offers?consultantId=${consultantId}`);
+          const arr = Array.isArray(data) ? data : extractArray(data);
+          loaded = arr.filter((o: any) => o.consultantId === consultantId || !o.consultantId);
+        } catch {
+          try {
+            const data = await apiFetch('/offers/admin');
+            const arr = Array.isArray(data) ? data : extractArray(data);
+            loaded = arr.filter((o: any) => o.consultantId === consultantId);
+          } catch { loaded = []; }
+        }
+      }
+      setOffers(loaded);
     } finally { setLoading(false); }
   };
 
@@ -2501,39 +2249,88 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   };
 
   const handleSave = async () => {
-    if (!form.title.trim()) { showToast('Title is required.'); return; }
+    if (!form.title.trim()) { showToast('Title is required.', false); return; }
     setSaving(true);
+
+    // Helper: convert "YYYY-MM-DD" → try multiple formats the backend might need
+    const fmtDate = (d: string) => d ? d : undefined; // ISO "2026-03-18" — primary
+    const fmtDatetime = (d: string) => d ? `${d}T00:00:00` : undefined; // "2026-03-18T00:00:00"
+
+    // Build minimal base payload — NEVER include approvalStatus / consultantName / status / active
+    const buildPayload = (useDatetime: boolean, includeConsultantId: boolean) => {
+      const p: Record<string, any> = {
+        title: form.title.trim(),
+        description: form.description?.trim() || '',
+        discount: form.discount?.trim() || '',
+        isActive: Boolean(form.isActive),
+      };
+      if (includeConsultantId) p.consultantId = consultantId;
+      const fmt = useDatetime ? fmtDatetime : fmtDate;
+      const vf = fmt(form.validFrom);
+      const vt = fmt(form.validTo);
+      if (vf) p.validFrom = vf;
+      if (vt) p.validTo = vt;
+      return p;
+    };
+
+    // Try strategies in order until one succeeds:
+    // 1. ISO date + consultantId in body
+    // 2. ISO datetime + consultantId in body
+    // 3. ISO date, consultantId as query param
+    // 4. ISO datetime, consultantId as query param
+    // 5. No dates at all + consultantId in body
+    const isEdit = Boolean(editing?.id);
+    const url = (withId: boolean) => isEdit
+      ? `/offers/${editing!.id}${withId ? '' : `?consultantId=${consultantId}`}`
+      : `/offers${withId ? '' : `?consultantId=${consultantId}`}`;
+    const method = isEdit ? 'PUT' : 'POST';
+
+    const strategies = [
+      buildPayload(false, true),    // ISO date + id in body
+      buildPayload(true, true),     // datetime + id in body
+      buildPayload(false, false),   // ISO date + id as query param (tried separately)
+      buildPayload(true, false),    // datetime + id as query param
+      { title: form.title.trim(), description: form.description?.trim() || '', discount: form.discount?.trim() || '', isActive: Boolean(form.isActive), consultantId }, // no dates
+    ];
+
+    let savedOffer: any = null;
+    let lastError = '';
+    for (let i = 0; i < strategies.length; i++) {
+      const noIdInBody = i === 2 || i === 3;
+      const endpoint = isEdit
+        ? `/offers/${editing!.id}${noIdInBody ? `?consultantId=${consultantId}` : ''}`
+        : `/offers${noIdInBody ? `?consultantId=${consultantId}` : ''}`;
+      try {
+        savedOffer = await apiFetch(endpoint, { method, body: JSON.stringify(strategies[i]) });
+        break; // success
+      } catch (e: any) {
+        lastError = e?.message || 'Failed';
+        if (!lastError.includes('500') && !lastError.includes('deserializ') && !lastError.includes('parse')) {
+          break; // non-serialization error, don't retry
+        }
+      }
+    }
+
     try {
-      // Build minimal base payload — only fields guaranteed to exist in the Offer entity
-      const basePayload: Record<string, any> = {
-        title: form.title,
-        description: form.description || '',
-        discount: form.discount || '',
-        isActive: form.isActive,
-        consultantId,
-      };
-      if (form.validFrom) basePayload.validFrom = form.validFrom;
-      if (form.validTo) basePayload.validTo = form.validTo;
-
-      // Send ONLY the fields the standard Offer entity supports
-      // Do NOT send approvalStatus or consultantName — they cause 500 if not in entity
-      // These are tracked in local state only
-      const tryRequest = async (method: string, url: string): Promise<any> => {
-        return apiFetch(url, { method, body: JSON.stringify(basePayload) });
-      };
-
-      if (editing?.id) {
-        await tryRequest('PUT', `/offers/${editing.id}`);
-        setOffers(prev => prev.map(o => o.id === editing.id ? { ...o, ...form, approvalStatus: 'PENDING' } : o));
+      if (savedOffer == null) throw new Error(lastError || 'Failed to save offer');
+      if (isEdit) {
+        setOffers(prev => prev.map(o => o.id === editing!.id ? { ...o, ...form, ...savedOffer, approvalStatus: 'PENDING' as const } : o));
         showToast('Offer updated. Pending admin approval.');
       } else {
-        const created = await tryRequest('POST', '/offers');
-        setOffers(prev => [...prev, { ...form, id: created?.id ?? Date.now(), approvalStatus: 'PENDING' }]);
+        const newOffer: ConsultantOffer = {
+          ...form,
+          id: savedOffer?.id ?? Date.now(),
+          consultantId,
+          approvalStatus: (savedOffer?.approvalStatus || 'PENDING') as 'PENDING' | 'APPROVED' | 'REJECTED',
+        };
+        setOffers(prev => [...prev, newOffer]);
         showToast('Offer submitted for admin approval.');
       }
       setShowForm(false);
-    } catch (e: any) { showToast(e?.message || 'Failed to save offer.'); }
-    finally { setSaving(false); }
+      setTimeout(() => loadOffers(), 800);
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to save offer.', false);
+    } finally { setSaving(false); }
   };
 
   const handleDelete = async (id: number) => {
@@ -2543,40 +2340,59 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
       await apiFetch(`/offers/${id}`, { method: 'DELETE' });
       setOffers(prev => prev.filter(o => o.id !== id));
       showToast('Offer deleted.');
-    } catch (e: any) { showToast(e?.message || 'Delete failed.'); }
+    } catch (e: any) { showToast(e?.message || 'Delete failed.', false); }
     finally { setDeleting(null); }
   };
 
-  const inputStyle: React.CSSProperties = { width: '100%', padding: '9px 12px', border: '1.5px solid #E2E8F0', borderRadius: 9, fontSize: 13, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' };
-  const labelStyle: React.CSSProperties = { display: 'block', fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 };
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '9px 12px', border: '1.5px solid #E2E8F0',
+    borderRadius: 9, fontSize: 13, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit',
+  };
+  const labelStyle: React.CSSProperties = {
+    display: 'block', fontSize: 11, fontWeight: 700, color: '#64748B',
+    textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5,
+  };
+
+  const getApprovalBadge = (offer: ConsultantOffer) => {
+    const status = (offer.approvalStatus || '').toUpperCase();
+    if (status === 'APPROVED') return { label: 'Approved', bg: '#DCFCE7', color: '#16A34A', border: '#86EFAC' };
+    if (status === 'REJECTED') return { label: 'Rejected', bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' };
+    if (status === 'PENDING') return { label: 'Pending Approval', bg: '#FFFBEB', color: '#D97706', border: '#FCD34D' };
+    return offer.isActive
+      ? { label: 'Active', bg: '#DCFCE7', color: '#16A34A', border: '#86EFAC' }
+      : { label: 'Inactive', bg: '#F1F5F9', color: '#94A3B8', border: '#E2E8F0' };
+  };
 
   return (
     <div style={{ padding: 24, fontFamily: "'Segoe UI', Arial, sans-serif" }}>
-      {toast && <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: '#0F172A', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: '0 4px 16px rgba(0,0,0,0.3)' }}>{toast}</div>}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: toast.ok ? '#0F172A' : '#7F1D1D', color: '#fff', padding: '10px 22px', borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: '0 4px 16px rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {toast.ok ? '✓' : '✕'} {toast.msg}
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#0F172A' }}>My Offers</h2>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748B' }}>Create and manage promotional offers for your services</p>
         </div>
-        <button onClick={openNew} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 18px', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-          New Offer
+        <button onClick={openNew} style={{ padding: '10px 18px', background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          + New Offer
         </button>
       </div>
 
       {/* Approval workflow info banner */}
       <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 12, padding: '12px 16px', marginBottom: 20, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <div style={{ fontSize: 13, color: '#1E40AF' }}>
-          <strong>How offers work:</strong> Offers you create are submitted to admin for approval. Once approved, they appear on the home page and booking page for customers. Approved offers are shown alongside admin-created offers.
+        <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>ℹ️</span>
+        <div style={{ fontSize: 13, color: '#1E40AF', lineHeight: 1.6 }}>
+          <strong>How offers work:</strong> Offers you create are submitted to admin for approval. Once approved, they appear on the home page and booking page for customers.
         </div>
       </div>
 
       {/* Create/Edit Form */}
       {showForm && (
         <div style={{ background: '#F8FAFC', border: '1.5px solid #BFDBFE', borderRadius: 16, padding: 24, marginBottom: 24 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', marginBottom: 18 }}>{editing ? 'Edit Offer' : 'Create New Offer'}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 18 }}>{editing ? 'Edit Offer' : 'Create New Offer'}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <div style={{ gridColumn: '1/-1' }}>
               <label style={labelStyle}>Title *</label>
@@ -2592,7 +2408,7 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 22 }}>
               <input type="checkbox" id="offer-active" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#2563EB' }} />
-              <label htmlFor="offer-active" style={{ fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>Active (visible to customers)</label>
+              <label htmlFor="offer-active" style={{ fontSize: 13, fontWeight: 600, color: '#374151', cursor: 'pointer' }}>Active (visible after approval)</label>
             </div>
             <div>
               <label style={labelStyle}>Valid From</label>
@@ -2605,7 +2421,9 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
             <button onClick={() => setShowForm(false)} style={{ padding: '9px 20px', borderRadius: 9, border: '1.5px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={handleSave} disabled={saving} style={{ padding: '9px 22px', borderRadius: 9, border: 'none', background: saving ? '#93C5FD' : '#2563EB', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>{saving ? 'Saving…' : editing ? 'Update Offer' : 'Create Offer'}</button>
+            <button onClick={handleSave} disabled={saving} style={{ padding: '9px 22px', borderRadius: 9, border: 'none', background: saving ? '#93C5FD' : '#2563EB', color: '#fff', fontSize: 13, fontWeight: 700, cursor: saving ? 'default' : 'pointer' }}>
+              {saving ? 'Saving…' : editing ? 'Update Offer' : 'Create Offer'}
+            </button>
           </div>
         </div>
       )}
@@ -2617,56 +2435,41 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
         </div>
       ) : offers.length === 0 && !showForm ? (
         <div style={{ textAlign: 'center', padding: '48px 20px', background: '#F8FAFC', borderRadius: 16, color: '#94A3B8' }}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 12 }}><polyline points="20 12 20 22 4 22 4 12" /><rect x="2" y="7" width="20" height="5" /><line x1="12" y1="22" x2="12" y2="7" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" /></svg>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🎁</div>
           <div style={{ fontWeight: 600, color: '#64748B', marginBottom: 12 }}>No offers yet</div>
           <button onClick={openNew} style={{ padding: '9px 20px', background: '#2563EB', color: '#fff', border: 'none', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Create Your First Offer</button>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {offers.map(offer => (
-            <div key={offer.id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #E2E8F0', padding: '18px 20px', display: 'flex', alignItems: 'flex-start', gap: 16, boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: offer.isActive ? '#EFF6FF' : '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={offer.isActive ? '#2563EB' : '#94A3B8'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 12 20 22 4 22 4 12" /><rect x="2" y="7" width="20" height="5" /><line x1="12" y1="22" x2="12" y2="7" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" /></svg>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{offer.title}</span>
-                  {offer.discount && <span style={{ fontSize: 11, fontWeight: 800, background: '#DC2626', color: '#fff', padding: '2px 8px', borderRadius: 20 }}>{offer.discount}</span>}
-                  {/* Approval status badge */}
-                  {offer.approvalStatus === 'APPROVED' && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: '#DCFCE7', color: '#16A34A', border: '1px solid #86EFAC' }}>Approved</span>
-                  )}
-                  {offer.approvalStatus === 'PENDING' && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: '#FFFBEB', color: '#D97706', border: '1px solid #FCD34D' }}>Pending Approval</span>
-                  )}
-                  {offer.approvalStatus === 'REJECTED' && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>Rejected</span>
-                  )}
-                  {!offer.approvalStatus && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: offer.isActive ? '#DCFCE7' : '#F1F5F9', color: offer.isActive ? '#16A34A' : '#94A3B8', border: `1px solid ${offer.isActive ? '#86EFAC' : '#E2E8F0'}` }}>
-                      {offer.isActive ? 'Active' : 'Inactive'}
-                    </span>
+          {offers.map(offer => {
+            const badge = getApprovalBadge(offer);
+            return (
+              <div key={offer.id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #E2E8F0', padding: '18px 20px', display: 'flex', alignItems: 'flex-start', gap: 16, boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: offer.isActive ? '#EFF6FF' : '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 20 }}>
+                  🎁
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{offer.title}</span>
+                    {offer.discount && <span style={{ fontSize: 11, fontWeight: 800, background: '#DC2626', color: '#fff', padding: '2px 8px', borderRadius: 20 }}>{offer.discount}</span>}
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}>{badge.label}</span>
+                  </div>
+                  {offer.description && <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.5, marginBottom: 4 }}>{offer.description}</div>}
+                  {(offer.validFrom || offer.validTo) && (
+                    <div style={{ fontSize: 11, color: '#94A3B8' }}>
+                      {offer.validFrom && `From: ${offer.validFrom}`}{offer.validFrom && offer.validTo && ' · '}{offer.validTo && `Until: ${offer.validTo}`}
+                    </div>
                   )}
                 </div>
-                {offer.description && <div style={{ fontSize: 12, color: '#64748B', lineHeight: 1.5, marginBottom: 4 }}>{offer.description}</div>}
-                {(offer.validFrom || offer.validTo) && (
-                  <div style={{ fontSize: 11, color: '#94A3B8' }}>
-                    {offer.validFrom && `From: ${offer.validFrom}`}{offer.validFrom && offer.validTo && ' · '}{offer.validTo && `Until: ${offer.validTo}`}
-                  </div>
-                )}
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button onClick={() => openEdit(offer)} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                  <button onClick={() => offer.id && handleDelete(offer.id)} disabled={deleting === offer.id} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: deleting === offer.id ? 0.6 : 1 }}>
+                    {deleting === offer.id ? '…' : 'Delete'}
+                  </button>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                <button onClick={() => openEdit(offer)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#2563EB', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                  Edit
-                </button>
-                <button onClick={() => offer.id && handleDelete(offer.id)} disabled={deleting === offer.id} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 8, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: deleting === offer.id ? 0.6 : 1 }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4h6v2" /></svg>
-                  {deleting === offer.id ? '…' : 'Delete'}
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -2674,6 +2477,9 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSULTANT SIDEBAR — Professional text-only, no icons
+// ─────────────────────────────────────────────────────────────────────────────
 interface ConsultantSidebarProps {
   consultantName?: string;
   activeItem?: string;
@@ -2683,53 +2489,118 @@ interface ConsultantSidebarProps {
   onClose?: () => void;
 }
 
-const ConsultantSidebar: React.FC<ConsultantSidebarProps> = ({ activeItem = 'bookings', onNavigate, onLogout, badges = {}, onClose }) => {
+const ConsultantSidebar: React.FC<ConsultantSidebarProps> = ({
+  activeItem = 'bookings',
+  onNavigate,
+  onLogout,
+  badges = {},
+  onClose,
+}) => {
   const sidebarItems = [
-    { id: 'bookings', label: 'My Bookings', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>) },
-    { id: 'tickets', label: 'My Tickets', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V9z" /></svg>) },
-    { id: 'analytics', label: 'Analytics', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>) },
-    { id: 'notifications', label: 'Notifications', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>) },
-    { id: 'calendar', label: 'My Schedule', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /><polyline points="9 16 11 18 15 14" /></svg>) },
-    { id: 'master-slots', label: 'Master Time Ranges', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>) },
-    { id: 'feedbacks', label: 'Feedbacks', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>) },
-    { id: 'profile', label: 'Profile', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>) },
-    { id: 'offers', label: 'My Offers', icon: (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 12 20 22 4 22 4 12" /><rect x="2" y="7" width="20" height="5" /><line x1="12" y1="22" x2="12" y2="7" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" /></svg>) },
+    { id: 'bookings', label: 'My Bookings' },
+    { id: 'tickets', label: 'My Tickets' },
+    { id: 'analytics', label: 'Analytics' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'calendar', label: 'My Schedule' },
+    { id: 'master-slots', label: 'Time Ranges' },
+    { id: 'feedbacks', label: 'Feedbacks' },
+    { id: 'profile', label: 'Profile' },
+    { id: 'offers', label: 'My Offers' },
   ];
-  return (
-    <aside style={{ width: 240, height: '100%', background: '#0f1117', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0 }}>
-      <div style={{ position: 'absolute', top: -60, left: -60, width: 220, height: 220, background: 'radial-gradient(circle, rgba(59,130,246,0.08) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
 
-      {/* Nav */}
-      <nav style={{ flex: 1, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 1, position: 'relative', zIndex: 1, overflowY: 'auto' }}>
-        {sidebarItems.map(({ id, label, icon }) => {
+  return (
+    <aside style={{
+      width: 220,
+      height: '100%',
+      background: '#0f1117',
+      borderRight: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflowY: 'auto',
+      flexShrink: 0,
+    }}>
+      {/* Divider */}
+      <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '0 16px 8px' }} />
+
+      {/* Nav Items */}
+      <nav style={{ flex: 1, padding: '8px', display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
+        {sidebarItems.map(({ id, label }) => {
           const isActive = activeItem === id;
           const badge = badges[id] ?? null;
           return (
-            <div key={id} onClick={() => onNavigate?.(id)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 10, cursor: 'pointer', transition: 'all 0.18s ease', border: `1px solid ${isActive ? 'rgba(59,130,246,0.2)' : 'transparent'}`, background: isActive ? '#2563EB' : 'transparent', position: 'relative' }}
+            <div
+              key={id}
+              onClick={() => onNavigate?.(id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '9px 14px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                background: isActive ? '#2563EB' : 'transparent',
+                border: `1px solid ${isActive ? 'rgba(59,130,246,0.3)' : 'transparent'}`,
+                position: 'relative',
+                transition: 'background 0.15s',
+              }}
               onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.05)'; }}
-              onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}>
-              {isActive && <div style={{ position: 'absolute', left: -8, top: '50%', transform: 'translateY(-50%)', width: 3, height: '60%', background: '#3b82f6', borderRadius: '0 2px 2px 0', boxShadow: '0 0 8px #3b82f6' }} />}
-              <span style={{ flexShrink: 0, display: "flex", alignItems: "center", color: isActive ? "#ffffff" : "#94a3b8" }}>{icon}</span>
-              <span style={{ fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive ? "#ffffff" : "#94a3b8", flex: 1, transition: "color 0.18s" }}>{label}</span>
-              {badge !== null && <span style={{ background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 20, minWidth: 18, textAlign: 'center', boxShadow: '0 0 8px rgba(239,68,68,0.4)' }}>{badge}</span>}
+              onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+            >
+              {isActive && (
+                <div style={{
+                  position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
+                  width: 3, height: '60%', background: '#60A5FA',
+                  borderRadius: '0 2px 2px 0',
+                }} />
+              )}
+              <span style={{
+                fontSize: 13,
+                fontWeight: isActive ? 600 : 400,
+                color: isActive ? '#fff' : '#94A3B8',
+                letterSpacing: '0.01em',
+                transition: 'color 0.15s',
+              }}>
+                {label}
+              </span>
+              {badge !== null && (
+                <span style={{
+                  background: '#EF4444', color: '#fff',
+                  fontSize: 10, fontWeight: 700,
+                  padding: '1px 6px', borderRadius: 20,
+                  minWidth: 18, textAlign: 'center',
+                  boxShadow: '0 0 6px rgba(239,68,68,0.4)',
+                }}>
+                  {badge}
+                </span>
+              )}
             </div>
           );
         })}
       </nav>
-      <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "6px 10px", position: "relative", zIndex: 1 }} />
-      <div style={{ padding: "8px 8px 18px", position: "relative", zIndex: 1 }}>
-        <button onClick={onLogout}
-          style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", borderRadius: 10, border: "none", background: "transparent", cursor: "pointer", transition: "all 0.18s", fontFamily: "inherit", color: "#94a3b8" }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#ffffff"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "#94a3b8"; }}>
-          <span style={{ display: "flex", alignItems: "center" }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /><line x1="9" y1="12" x2="21" y2="12" /></svg></span>
-          <span style={{ fontSize: 13, fontWeight: 500 }}>Back to Login</span>
-        </button>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '6px 16px' }} />
+
+      {/* Logout */}
+      <div style={{ padding: '8px 8px 18px' }}>
+        <div
+          onClick={onLogout}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '9px 14px', borderRadius: 8, cursor: 'pointer',
+            color: '#64748B', transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.color = '#fff'; (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.05)'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.color = '#64748B'; (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 400 }}>Sign Out</span>
+          <span style={{ fontSize: 16 }}>→</span>
+        </div>
       </div>
     </aside>
   );
 };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2752,7 +2623,6 @@ export default function AdvisorDashboard() {
         const user = await getCurrentUser();
         const advisorId = user?.consultantId || user?.advisorId || user?.id;
         if (!advisorId) { setError('No consultant profile linked.'); setLoading(false); return; }
-        // Parallel fetch: profile + bookings + tickets at once
         const [consultantRes, bRes, tRes] = await Promise.allSettled([
           getAdvisorById(advisorId),
           getBookingsByConsultant(advisorId),
@@ -2761,7 +2631,6 @@ export default function AdvisorDashboard() {
         if (consultantRes.status !== 'fulfilled') throw new Error('Profile load failed');
         const consultant = consultantRes.value;
         setProfileData(consultant);
-        // Pre-process tickets immediately (no enrichment needed)
         if (tRes.status === 'fulfilled') {
           const tickets = extractArray(tRes.value);
           setTicketCounts({
@@ -2769,7 +2638,6 @@ export default function AdvisorDashboard() {
             slaRisk: tickets.filter((t: any) => getSlaInfo(t)?.breached || getSlaInfo(t)?.warning).length,
           });
         }
-        // Bookings with deduped timeslot enrichment
         if (bRes.status === 'fulfilled') {
           const arr = extractArray(bRes.value);
           const token = localStorage.getItem('fin_token');
@@ -2788,16 +2656,10 @@ export default function AdvisorDashboard() {
           });
           setPendingBookings(enriched.filter((b: any) => deepFindStatus(b) === 'PENDING'));
         }
-
         try {
           const notifs = JSON.parse(localStorage.getItem(`fin_notifs_CONSULTANT_${advisorId}`) || '[]');
           setNewNotifCount(notifs.filter((n: any) => !n.read).length);
         } catch { }
-
-
-
-
-
       } catch {
         setError('Failed to load dashboard.');
       } finally { setLoading(false); }
@@ -2830,28 +2692,41 @@ export default function AdvisorDashboard() {
 
   const ticketBadge = ticketCounts.slaRisk > 0 ? ticketCounts.slaRisk : ticketCounts.open > 0 ? ticketCounts.open : null;
 
+  // Professional SVG icon components for mobile tabs
+  const TabIcon: React.FC<{ id: string; active: boolean }> = ({ id, active }) => {
+    const c = active ? '#2563EB' : '#64748B';
+    const w = 18; const h = 18;
+    switch (id) {
+      case 'bookings': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+      case 'tickets': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v2z"/></svg>;
+      case 'analytics': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>;
+      case 'notifications': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>;
+      case 'calendar': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="12" cy="16" r="1" fill={c}/></svg>;
+      case 'master-slots': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+      case 'feedbacks': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
+      case 'profile': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+      case 'offers': return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>;
+      default: return <svg width={w} height={h} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><circle cx="12" cy="12" r="10"/></svg>;
+    }
+  };
+
   const tabs = [
-    { id: 'bookings' as const, label: 'My Bookings', icon: '📅', badge: pendingBookings.length > 0 ? pendingBookings.length : null, badgeColor: '#2563EB' },
-    { id: 'tickets' as const, label: 'My Tickets', icon: '🎫', badge: ticketBadge, badgeColor: ticketCounts.slaRisk > 0 ? '#DC2626' : '#2563EB' },
-    { id: 'analytics' as const, label: 'Analytics', icon: '📊', badge: null, badgeColor: '#2563EB' },
-    { id: 'notifications' as const, label: 'Notifications', icon: '🔔', badge: newNotifCount > 0 ? newNotifCount : null, badgeColor: '#DC2626' },
-    { id: 'calendar' as const, label: 'My Schedule', icon: '🗓️', badge: null, badgeColor: '#2563EB' },
-    { id: 'master-slots' as const, label: 'Master Time Ranges', icon: '🕐', badge: null, badgeColor: '#2563EB' },
-    { id: 'feedbacks' as const, label: 'Feedbacks', icon: '⭐', badge: null, badgeColor: '#2563EB' },
-    { id: 'profile' as const, label: 'Profile', icon: '👤', badge: null, badgeColor: '#2563EB' },
-    { id: 'offers' as const, label: 'My Offers', icon: '🎁', badge: null, badgeColor: '#16A34A' },
+    { id: 'bookings' as const, label: 'Bookings', badge: pendingBookings.length > 0 ? pendingBookings.length : null, badgeColor: '#2563EB' },
+    { id: 'tickets' as const, label: 'Tickets', badge: ticketBadge, badgeColor: ticketCounts.slaRisk > 0 ? '#DC2626' : '#2563EB' },
+    { id: 'analytics' as const, label: 'Analytics', badge: null, badgeColor: '#2563EB' },
+    { id: 'notifications' as const, label: 'Alerts', badge: newNotifCount > 0 ? newNotifCount : null, badgeColor: '#DC2626' },
+    { id: 'calendar' as const, label: 'Schedule', badge: null, badgeColor: '#2563EB' },
+    { id: 'master-slots' as const, label: 'Time', badge: null, badgeColor: '#2563EB' },
+    { id: 'feedbacks' as const, label: 'Feedback', badge: null, badgeColor: '#2563EB' },
+    { id: 'profile' as const, label: 'Profile', badge: null, badgeColor: '#2563EB' },
+    { id: 'offers' as const, label: 'Offers', badge: null, badgeColor: '#16A34A' },
   ];
 
   return (
     <div className="advisor-layout">
-      {/* ── Top Navbar — sticky, full-width, gradient ── */}
+      {/* ── Top Navbar ── */}
       <header className="advisor-navbar">
-        {/* Hamburger — only visible on mobile via CSS */}
-        <button
-          onClick={() => setSidebarOpen(s => !s)}
-          className="hamburger-btn"
-          style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-        >☰</button>
+        <button onClick={() => setSidebarOpen(s => !s)} className="hamburger-btn" style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: '#fff', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 22, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>☰</button>
         <div className="nav-brand">
           <span className="brand-text" style={{ color: '#fff', letterSpacing: '0.06em' }}>MEET THE MASTERS</span>
           <span className="brand-sub" style={{ color: 'rgba(255,255,255,0.65)' }}>CONSULTANT PORTAL</span>
@@ -2868,12 +2743,8 @@ export default function AdvisorDashboard() {
               </div>
             </div>
           )}
-          <div
-            onClick={() => setActiveTab('notifications')}
-            style={{ position: 'relative', width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-            title="Notifications"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <div onClick={() => setActiveTab('notifications')} style={{ position: 'relative', width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="Notifications">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
             {newNotifCount > 0 && (
               <span style={{ position: 'absolute', top: -4, right: -4, background: '#EF4444', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 9, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #1E3A5F' }}>
                 {newNotifCount > 9 ? '9+' : newNotifCount}
@@ -2886,7 +2757,6 @@ export default function AdvisorDashboard() {
         </div>
       </header>
 
-      {/* Consultant notification live-monitor */}
       {profileData && (
         <ConsultantNotificationMonitor
           consultantId={profileData.id}
@@ -2896,17 +2766,10 @@ export default function AdvisorDashboard() {
         />
       )}
 
-      {/* ── Body: sidebar (left) + main content (right) ── */}
       <div className="advisor-body">
-        {/* Mobile overlay — closes sidebar when tapping outside */}
         {sidebarOpen && (
-          <div
-            onClick={() => setSidebarOpen(false)}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 200 }}
-          />
+          <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 200 }} />
         )}
-
-        {/* Sidebar — always visible on desktop, slide-in drawer on mobile */}
         <div className={`sidebar-wrapper ${sidebarOpen ? 'sidebar-open' : ''}`}>
           <ConsultantSidebar
             activeItem={activeTab}
@@ -2922,13 +2785,11 @@ export default function AdvisorDashboard() {
           />
         </div>
 
-        {/* Main Content */}
         <main className="advisor-main" style={{ overflow: activeTab === 'tickets' ? 'hidden' : 'auto', display: 'flex', flexDirection: 'column' }}>
-          {/* Ticket alert banner — inside main so it doesn't displace sidebar */}
           {ticketCounts.open > 0 && activeTab !== 'tickets' && (
             <div style={{ background: 'linear-gradient(90deg,#FEF9C3,#FFFBEB)', border: '1px solid #FCD34D', borderRadius: 12, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
                 <span style={{ fontWeight: 700, color: '#92400E', fontSize: 13 }}>
                   {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} — please review and respond.
                   {ticketCounts.slaRisk > 0 && <span style={{ marginLeft: 8, color: '#DC2626' }}>{ticketCounts.slaRisk} at SLA risk</span>}
@@ -2937,6 +2798,7 @@ export default function AdvisorDashboard() {
               <button onClick={() => setActiveTab('tickets')} style={{ padding: '6px 16px', background: '#D97706', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>View Tickets</button>
             </div>
           )}
+
           {activeTab === 'bookings' && profileData && <BookingsView consultantId={profileData.id} />}
           {activeTab === 'tickets' && profileData && <AdvisorTicketsView consultantId={profileData.id} />}
           {activeTab === 'analytics' && profileData && (
@@ -2944,11 +2806,7 @@ export default function AdvisorDashboard() {
           )}
           {activeTab === 'notifications' && profileData && <ConsultantNotificationsView consultantId={profileData.id} />}
           {activeTab === 'calendar' && profileData && (
-            <MySlotsView
-              consultantId={profileData.id}
-              shiftStartTime={profileData.shiftStartTime || ''}
-              shiftEndTime={profileData.shiftEndTime || ''}
-            />
+            <MySlotsView consultantId={profileData.id} shiftStartTime={profileData.shiftStartTime || ''} shiftEndTime={profileData.shiftEndTime || ''} />
           )}
           {activeTab === 'master-slots' && <MasterSlotsView />}
           {activeTab === 'feedbacks' && profileData && <FeedbacksView consultantId={profileData.id} />}
@@ -2957,19 +2815,22 @@ export default function AdvisorDashboard() {
 
           {/* Mobile Bottom Tab Bar */}
           <nav className="advisor-tabs-mobile">
-            {tabs.map(t => (
-              <button key={t.id} className={`tab-btn ${activeTab === t.id ? 'active' : ''}`} onClick={() => setActiveTab(t.id)} style={{ position: 'relative', flexShrink: 0 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <span style={{ fontSize: 16, display: 'flex', alignItems: 'center' }}>{t.icon}</span>
-                  <span style={{ fontSize: 9, fontWeight: 700 }}>{t.label.split(' ')[0]}</span>
-                </div>
-                {t.badge !== null && (
-                  <span style={{ position: 'absolute', top: 4, right: 4, background: t.badgeColor, color: '#fff', fontSize: 9, fontWeight: 800, minWidth: 14, height: 14, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px' }}>
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            ))}
+            {tabs.map(t => {
+              const isActive = activeTab === t.id;
+              return (
+                <button key={t.id} className={`tab-btn ${isActive ? 'active' : ''}`} onClick={() => setActiveTab(t.id)} style={{ position: 'relative', flexShrink: 0 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                    <TabIcon id={t.id} active={isActive} />
+                    <span style={{ fontSize: 9, fontWeight: isActive ? 700 : 500, color: isActive ? '#2563EB' : '#64748B' }}>{t.label}</span>
+                  </div>
+                  {t.badge !== null && (
+                    <span style={{ position: 'absolute', top: 4, right: 4, background: t.badgeColor, color: '#fff', fontSize: 9, fontWeight: 800, minWidth: 14, height: 14, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px' }}>
+                      {t.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </nav>
         </main>
       </div>
