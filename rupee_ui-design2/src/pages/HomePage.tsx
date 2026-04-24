@@ -21,6 +21,7 @@ import logoImg from '../assests/Meetmasterslogopng.png';
 import { API_BASE_URL } from "../config/api";
 import { getHighestRatedFeedbacks, getPublicHomeOffers, getRole } from "../services/api";
 import { decryptLocal } from "../services/crypto";
+import { isValidEmail, startsWithCapital, startsWithLetter } from "../utils/formUtils";
 
 interface Offer {
   id: number;
@@ -411,9 +412,35 @@ export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [contactForm, setContactForm] = useState({ name: "", email: "", message: "" });
-  const [contactError, setContactError] = useState("");
+  const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
+  const [contactTouched, setContactTouched] = useState<Record<string, boolean>>({});
   const [contactSending, setContactSending] = useState(false);
   const [contactSuccess, setContactSuccess] = useState(false);
+
+  const validateContact = (data = contactForm) => {
+    const newErrors: Record<string, string> = {};
+
+    if (!data.name.trim()) {
+      newErrors.name = "Name is required.";
+    } else if (!startsWithLetter(data.name)) {
+      newErrors.name = "Name must start with an alphabetic letter.";
+    } else if (!startsWithCapital(data.name)) {
+      newErrors.name = "Name must start with a capital letter.";
+    }
+
+    if (!data.email.trim()) {
+      newErrors.email = "Email is required.";
+    } else if (!isValidEmail(data.email)) {
+      newErrors.email = "Please enter a valid email address.";
+    }
+
+    if (!data.message.trim()) {
+      newErrors.message = "Message is required.";
+    }
+
+    setContactErrors(newErrors);
+    return newErrors;
+  };
 
   const [offers, setOffers] = useState<Offer[]>([]);
   const [offersLoading, setOffersLoading] = useState(true);
@@ -423,9 +450,15 @@ export default function HomePage() {
   const [reviewsLoading, setReviewsLoading] = useState(true);
 
   const openContact = () => {
-    setContactError("");
+    setContactErrors({});
+    setContactTouched({});
     setContactSuccess(false);
     setShowContact(true);
+  };
+
+  const handleContactBlur = (field: string) => {
+    setContactTouched(prev => ({ ...prev, [field]: true }));
+    validateContact();
   };
 
   const closeOverlays = () => {
@@ -704,12 +737,13 @@ export default function HomePage() {
   }, [displayOffers.length]);
 
   const handleContactSubmit = async () => {
-    if (!contactForm.name.trim() || !contactForm.email.trim() || !contactForm.message.trim()) {
-      setContactError("Please fill in all fields.");
-      return;
-    }
+    // Mark all as touched
+    setContactTouched({ name: true, email: true, message: true });
+    const e = validateContact();
+    if (Object.keys(e).length > 0) return;
+
     setContactSending(true);
-    setContactError("");
+    setContactErrors({});
     let backendSuccess = false;
     try {
       const res = await fetch(`${BASE}/contact/public/submit`, {
@@ -733,6 +767,7 @@ export default function HomePage() {
     } catch { }
     setContactSuccess(true);
     setContactForm({ name: "", email: "", message: "" });
+    setContactTouched({});
     setContactSending(false);
   };
 
@@ -1003,23 +1038,50 @@ export default function HomePage() {
                 </div>
               ) : (
                 <>
-                  <div className="hp-contact-input-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><User size={17} /></span>
-                    <input value={contactForm.name} onChange={(e) => setContactForm(f => ({ ...f, name: e.target.value }))} placeholder="Your Name" className="hp-contact-input" />
-                  </div>
-                  <div className="hp-contact-input-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><Mail size={17} /></span>
-                    <input value={contactForm.email} onChange={(e) => setContactForm(f => ({ ...f, email: e.target.value }))} placeholder="Email Address" type="email" className="hp-contact-input" />
-                  </div>
-                  <div className="hp-contact-textarea-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, marginTop: 2 }}><MessageSquare size={17} /></span>
-                    <textarea value={contactForm.message} onChange={(e) => setContactForm(f => ({ ...f, message: e.target.value }))} placeholder="Your message…" rows={4} className="hp-contact-textarea" />
-                  </div>
-                  {contactError && (
-                    <div style={{ color: "#FCA5A5", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-                      <AlertTriangle size={13} /> {contactError}
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><User size={17} /></span>
+                      <input 
+                        value={contactForm.name} 
+                        onChange={(e) => { setContactForm(f => ({ ...f, name: e.target.value })); if (contactTouched.name) validateContact({ ...contactForm, name: e.target.value }); }} 
+                        onBlur={() => handleContactBlur("name")}
+                        placeholder="Your Name" 
+                        className="hp-contact-input" 
+                      />
                     </div>
-                  )}
+                    {contactTouched.name && contactErrors.name && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.name}</div>}
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><Mail size={17} /></span>
+                      <input 
+                        value={contactForm.email} 
+                        onChange={(e) => { setContactForm(f => ({ ...f, email: e.target.value })); if (contactTouched.email) validateContact({ ...contactForm, email: e.target.value }); }} 
+                        onBlur={() => handleContactBlur("email")}
+                        placeholder="Email Address" 
+                        type="email" 
+                        className="hp-contact-input" 
+                      />
+                    </div>
+                    {contactTouched.email && contactErrors.email && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.email}</div>}
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-textarea-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, marginTop: 2 }}><MessageSquare size={17} /></span>
+                      <textarea 
+                        value={contactForm.message} 
+                        onChange={(e) => { setContactForm(f => ({ ...f, message: e.target.value })); if (contactTouched.message) validateContact({ ...contactForm, message: e.target.value }); }} 
+                        onBlur={() => handleContactBlur("message")}
+                        placeholder="Your message…" 
+                        rows={4} 
+                        className="hp-contact-textarea" 
+                      />
+                    </div>
+                    {contactTouched.message && contactErrors.message && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.message}</div>}
+                  </div>
+                  {/* Removed global error display */}
                   <button onClick={handleContactSubmit} disabled={contactSending} className="hp-contact-submit-btn">
                     <Send size={15} />
                     {contactSending ? "Sending…" : "Send Message"}

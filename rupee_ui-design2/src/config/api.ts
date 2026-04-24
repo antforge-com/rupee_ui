@@ -5,7 +5,7 @@ const stripTrailingSlashes = (value: string) => value.replace(/\/+$/, "");
 const normalizeApiPath = (pathname: string): string => {
   const cleanPath = stripTrailingSlashes(pathname || "");
 
-  if (!cleanPath || cleanPath === "/") return "/api";
+  if (!cleanPath || cleanPath === "/") return "";
   if (/\/swagger-ui(?:\/|$)/i.test(cleanPath)) return "/api";
   if (/\/v3\/api-docs(?:\/|$)/i.test(cleanPath)) return "/api";
 

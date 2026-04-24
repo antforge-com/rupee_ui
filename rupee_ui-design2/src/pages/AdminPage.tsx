@@ -1,5 +1,5 @@
 import { ArrowRight, ChevronLeft, ChevronRight, Star as StarIcon, X } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import logoImg from '../assests/Meetmasterslogopng.png';
@@ -8,6 +8,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ForcePasswordChangeModal from "../components/ForcePasswordChangeModal";
 import StatusBadge from "../components/StatusBadge";
 import { API_BASE_URL, buildBackendAssetUrl } from "../config/api";
+import { SUPPORT_EMAIL } from "../config/support";
 
 import {
   addHoliday as apiAddHoliday,
@@ -25,6 +26,7 @@ import {
   deleteSkill,
   deleteTicket,
   deleteTicketCategory,
+  emailToTicketHealth,
   escalateTicket,
   exportSingleTicketExcel,
   exportSingleTicketPdf,
@@ -32,6 +34,7 @@ import {
   exportTicketsPdf,
   extractArray,
   FeeConfig,
+  getActiveTicketCategories,
   getAllAdvisors,
   getAllBookings,
   getAllSkills,
@@ -46,7 +49,6 @@ import {
   getHolidays,
   getPublicReviews,
   getSlaInfo,
-  getTicketCategories,
   getTicketComments,
   getTicketsPage,
   getTicketSummary,
@@ -55,6 +57,7 @@ import {
   recordEscalationBlock,
   rejectOffer,
   SLA_HOURS,
+  triggerEmailToTicketPoll,
   updateAutoResponder,
   updateBusinessHours,
   updateFeeConfig,
@@ -251,7 +254,7 @@ const resolveTicketClientName = (ticket: Partial<Ticket> & Record<string, any>):
 
   if (directName) return String(directName).trim();
   if (ticket.user?.email) return prettifyEmailLocalPart(String(ticket.user.email));
-  return ticket.userId ? "Client" : "—";
+  return ticket.userId ? `User #${ticket.userId}` : "—";
 };
 
 const resolveUserRoleLabel = (user: any): string => {
@@ -283,6 +286,7 @@ type AdminSectionType =
   | "advisors"
   | "bookings"
   | "tickets"
+  | "email-to-ticket-inbox"
   | "analytics"
   | "summary"
   | "add-member"
@@ -510,12 +514,31 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
   const ticketDisplayId = getTicketDisplayId(ticket);
   const blockedIds = useMemo(() => {
     const blocks = getEscalationBlocks();
-    return new Set(
+    const ids = new Set(
       blocks
         .filter((b) => Number(b.ticketId) === Number(ticket.id))
         .map((b) => Number(b.consultantId))
     );
-  }, [ticket.id]);
+
+    // Cross-device fallback: consultants record an escalation marker in internal notes.
+    // This avoids relying on localStorage, which is not shared across admin/consultant browsers.
+    try {
+      const notes = ([] as any[])
+        .concat((ticket.internalNotes as any[]) || [])
+        .concat((ticket.notes as any[]) || []);
+      for (const n of notes) {
+        const txt = String(n?.noteText || "");
+        const re = /\[ESCALATED_BY:(\d+)\]/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(txt)) !== null) {
+          const cid = Number(m[1]);
+          if (Number.isFinite(cid) && cid > 0) ids.add(cid);
+        }
+      }
+    } catch { /* ignore */ }
+
+    return ids;
+  }, [ticket.id, ticket.internalNotes, ticket.notes]);
 
   const handleAssign = async () => {
     if (!selected) return;
@@ -1375,28 +1398,24 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
 // ─────────────────────────────────────────────────────────────────────────────
 export const CreateTicketModal: React.FC<{
   currentUserId: number;
+  consultants: Advisor[];
   onCreated: (t: any) => void;
   onClose: () => void;
-}> = ({ currentUserId, onCreated, onClose }) => {
-  const [form, setForm] = useState({ category: "", description: "", priority: "MEDIUM", consultantId: "" });
+}> = ({ currentUserId, consultants, onCreated, onClose }) => {
+  const [form, setForm] = useState({ categoryId: "", category: "", description: "", priority: "MEDIUM", consultantId: "" });
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [categories, setCategories] = useState<string[]>([]);
+  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
   useEffect(() => {
     setLoadingCategories(true);
-    getTicketCategories()
-      .then((records) => {
-        const names = (Array.isArray(records) ? records : [])
-          .filter((record: any) => record?.name && record?.active !== false)
-          .map((record: any) => formatNameLikeValue(String(record.name)))
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b));
-        setCategories(Array.from(new Set(names)));
-      })
+    // Single source of truth: /admin/config/categories via getActiveTicketCategories()
+    getActiveTicketCategories()
+      .then(items => setCategories(items))
       .catch(() => setCategories([]))
       .finally(() => setLoadingCategories(false));
   }, []);
@@ -1410,19 +1429,36 @@ export const CreateTicketModal: React.FC<{
     });
   };
 
-  const validateForm = () => {
+  const getClientValidationErrors = () => {
     const nextErrors: Record<string, string> = {};
-    const category = form.category.trim();
+    const categoryId = form.categoryId;
     const description = form.description.trim();
-    const consultantId = form.consultantId.trim();
 
-    if (!category) nextErrors.category = "Category is required.";
+    if (!categoryId) nextErrors.category = "Category is required.";
     if (!description) nextErrors.description = "Description is required.";
     else if (description.length < 10) nextErrors.description = "Description must be at least 10 characters.";
-    if (consultantId && (!Number.isInteger(Number(consultantId)) || Number(consultantId) <= 0)) {
-      nextErrors.consultantId = "Enter a valid agent ID.";
-    }
+    if (!form.consultantId) nextErrors.consultantId = "Consultant is required.";
 
+    return nextErrors;
+  };
+
+  const liveErrors = React.useMemo(() => getClientValidationErrors(), [form]);
+  const displayErrors = React.useMemo(() => {
+    const touchedLive: Record<string, string> = {};
+    Object.entries(liveErrors).forEach(([key, message]) => {
+      if (touchedFields[key]) touchedLive[key] = message;
+    });
+    return { ...touchedLive, ...fieldErrors };
+  }, [fieldErrors, liveErrors, touchedFields]);
+
+  const canSubmit = React.useMemo(() => {
+    if (saving || loadingCategories) return false;
+    return Object.keys(liveErrors).length === 0;
+  }, [liveErrors, loadingCategories, saving]);
+
+  const validateForm = () => {
+    const nextErrors = getClientValidationErrors();
+    setTouchedFields(prev => ({ ...prev, category: true, description: true, consultantId: true }));
     setFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -1440,11 +1476,64 @@ export const CreateTicketModal: React.FC<{
     try {
       const saved = await createTicket({
         userId: currentUserId,
+        categoryId: Number(form.categoryId),
         category: form.category.trim(),
         description: form.description.trim(),
         priority: form.priority,
         consultantId: form.consultantId ? Number(form.consultantId) : null,
       }, file);
+
+      // ── FAIL-SAFE NOTIFICATION TRIGGERS ──────────────────────────────────────
+      // Each trigger is wrapped in its own try/catch — exactly mirroring the Java
+      // TicketService pattern so a localStorage error never blocks the other trigger
+      // or the onCreated callback.
+
+      // Trigger 1: notifyNewAssignment
+      // Fires only when a consultant was assigned at creation time.
+      // Writes to fin_notifs_CONSULTANT_<id> so the consultant's bell lights up
+      // without waiting for their next poll cycle.
+      try {
+        const assignedConsultantId = saved.consultantId;
+        if (assignedConsultantId) {
+          const ticketNum = saved.ticketNumber || String(saved.id);
+          const categoryLabel = saved.categoryName || saved.category || "Support";
+          const consultantKey = `fin_notifs_CONSULTANT_${assignedConsultantId}`;
+          const prev: any[] = JSON.parse(localStorage.getItem(consultantKey) || "[]");
+          localStorage.setItem(consultantKey, JSON.stringify([{
+            id: `assign_${saved.id}_${Date.now()}`,
+            type: "warning",
+            title: `New Ticket Assigned — #${ticketNum}`,
+            message: `You have been assigned a new ${saved.priority || "MEDIUM"} priority ticket in ${categoryLabel}.`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            ticketId: saved.id,
+          }, ...prev].slice(0, 50)));
+        }
+      } catch { /* non-fatal — localStorage may be unavailable */ }
+
+      // Trigger 2: notifyTicketCreated
+      // Always fires for the submitting user regardless of consultant assignment.
+      // Writes to fin_notifs_USER_<id> so the user sees confirmation immediately.
+      try {
+        const userId = saved.userId || currentUserId;
+        if (userId) {
+          const ticketNum = saved.ticketNumber || String(saved.id);
+          const categoryLabel = saved.categoryName || saved.category || "Support";
+          const userKey = `fin_notifs_USER_${userId}`;
+          const prev: any[] = JSON.parse(localStorage.getItem(userKey) || "[]");
+          localStorage.setItem(userKey, JSON.stringify([{
+            id: `created_${saved.id}_${Date.now()}`,
+            type: "success",
+            title: `Ticket #${ticketNum} Submitted`,
+            message: `Your ticket has been received in ${categoryLabel}. ${saved.consultantId ? "A consultant has been assigned." : "A consultant will be assigned shortly."}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            ticketId: saved.id,
+          }, ...prev].slice(0, 50)));
+        }
+      } catch { /* non-fatal — localStorage may be unavailable */ }
+      // ─────────────────────────────────────────────────────────────────────────
+
       onCreated(saved);
     } catch (e: any) { setError(e.message || "Failed to create ticket."); }
     finally { setSaving(false); }
@@ -1464,34 +1553,43 @@ export const CreateTicketModal: React.FC<{
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Category *</label>
             {loadingCategories ? (
-              <div style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, color: "#94A3B8", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 10, background: fieldErrors.category ? "#FFF7F7" : "#fff" }}>
+              <div style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, color: "#94A3B8", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 10, background: displayErrors.category ? "#FFF7F7" : "#fff" }}>
                 <img src={logoImg} alt="" style={{ width: 20, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
                 Loading ticket categories...
               </div>
             ) : (
               <select
-                value={form.category}
-                onChange={e => { setForm({ ...form, category: e.target.value }); clearFieldError("category"); }}
-                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: fieldErrors.category ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
+                value={form.categoryId}
+                onChange={e => {
+                  const cat = categories.find(c => String(c.id) === e.target.value);
+                  setForm({ ...form, categoryId: e.target.value, category: cat ? cat.name : "" });
+                  setTouchedFields(prev => ({ ...prev, category: true }));
+                  clearFieldError("category");
+                }}
+                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: displayErrors.category ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
               >
                 <option value="">— Select category —</option>
-                {categories.map((category) => (
-                  <option key={category} value={category}>{category}</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={String(cat.id)}>{cat.name}</option>
                 ))}
               </select>
             )}
-            {fieldErrors.category && <div style={fieldErrorStyle}>{fieldErrors.category}</div>}
+            {displayErrors.category && <div style={fieldErrorStyle}>{displayErrors.category}</div>}
           </div>
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Description *</label>
             <textarea
               value={form.description}
-              onChange={e => { setForm({ ...form, description: e.target.value }); clearFieldError("description"); }}
+              onChange={e => {
+                setForm({ ...form, description: e.target.value });
+                setTouchedFields(prev => ({ ...prev, description: true }));
+                clearFieldError("description");
+              }}
               rows={4}
               placeholder="Describe the issue in detail…"
-              style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.description ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box", background: fieldErrors.description ? "#FFF7F7" : "#fff" }}
+              style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.description ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box", background: displayErrors.description ? "#FFF7F7" : "#fff" }}
             />
-            {fieldErrors.description && <div style={fieldErrorStyle}>{fieldErrors.description}</div>}
+            {displayErrors.description && <div style={fieldErrorStyle}>{displayErrors.description}</div>}
           </div>
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1 }}>
@@ -1502,15 +1600,24 @@ export const CreateTicketModal: React.FC<{
               </select>
             </div>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Agent ID (optional)</label>
-              <input
-                type="number"
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Consultant *</label>
+              <select
                 value={form.consultantId}
-                onChange={e => { setForm({ ...form, consultantId: e.target.value }); clearFieldError("consultantId"); }}
-                placeholder="Assign to agent…"
-                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.consultantId ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: fieldErrors.consultantId ? "#FFF7F7" : "#fff" }}
-              />
-              {fieldErrors.consultantId && <div style={fieldErrorStyle}>{fieldErrors.consultantId}</div>}
+                onChange={e => {
+                  setForm({ ...form, consultantId: e.target.value });
+                  setTouchedFields(prev => ({ ...prev, consultantId: true }));
+                  clearFieldError("consultantId");
+                }}
+                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.consultantId ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: displayErrors.consultantId ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
+              >
+                <option value="" disabled>— Select consultant —</option>
+                {consultants.map((consultant) => (
+                  <option key={consultant.id} value={String(consultant.id)}>
+                    {consultant.name || `Consultant #${consultant.id}`}
+                  </option>
+                ))}
+              </select>
+              {displayErrors.consultantId && <div style={fieldErrorStyle}>{displayErrors.consultantId}</div>}
             </div>
           </div>
           <div>
@@ -1519,8 +1626,8 @@ export const CreateTicketModal: React.FC<{
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
             <button onClick={onClose} style={{ padding: "9px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-            <button onClick={handleSubmit} disabled={saving}
-              style={{ padding: "9px 24px", borderRadius: 10, border: "none", background: saving ? "#99F6E4" : "#0F766E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            <button onClick={handleSubmit} disabled={!canSubmit}
+              style={{ padding: "9px 24px", borderRadius: 10, border: "none", background: !canSubmit ? "#E2E8F0" : (saving ? "#99F6E4" : "#0F766E"), color: !canSubmit ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !canSubmit ? "not-allowed" : "pointer" }}>
               {saving ? "Creating…" : "Create Ticket"}
             </button>
           </div>
@@ -1678,7 +1785,7 @@ interface TicketsSectionProps {
 const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdminId, onTicketsLoaded }) => {
   const { addNotification } = useNotifications();
   const TICKET_PAGE_SIZE = 10;
-  const ticketTableColumns = "110px minmax(260px,1.8fr) 110px 112px 150px 120px 92px 110px";
+  const ticketTableColumns = "110px minmax(260px,1.8fr) 110px 112px 150px 120px 64px 118px";
 
   const [tickets, setTickets] = useState<Ticket[]>([]);   // current page items
   const [totalElements, setTotalElements] = useState(0);
@@ -1698,10 +1805,26 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
   const [searchLoading, setSearchLoading] = useState(false);
   const hasSearch = searchQ.trim().length > 0;
 
+  const [emailToTicketStatus, setEmailToTicketStatus] = useState<"checking" | "ok" | "down">("checking");
+  const [emailToTicketPolling, setEmailToTicketPolling] = useState(false);
+  const [lastEmailPollAt, setLastEmailPollAt] = useState<number | null>(null);
+
   // Reset to page 0 when filters/search change
   useEffect(() => { setTicketPage(0); setPageCache({}); setSearchPool(null); }, [filterStatus, filterPriority]);
 
   useEffect(() => { loadPage(ticketPage); }, [ticketPage]);
+
+  const checkEmailToTicket = useCallback(async () => {
+    setEmailToTicketStatus("checking");
+    try {
+      await emailToTicketHealth();
+      setEmailToTicketStatus("ok");
+    } catch {
+      setEmailToTicketStatus("down");
+    }
+  }, []);
+
+  useEffect(() => { checkEmailToTicket(); }, [checkEmailToTicket]);
 
   // Silently pre-fetch adjacent pages after current page loads
   useEffect(() => {
@@ -1739,13 +1862,15 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         (t.consultantId ? (consultantLookup[Number(t.consultantId)] || null) : null) || null;
       return {
         ...t,
-        userName: name || (t.userId ? "Client" : "—"),
+        userName: name || (t.userId ? `User #${t.userId}` : "—"),
         ...(consultantName && !t.consultantName ? { consultantName, agentName: consultantName } : {}),
       };
     });
 
-    // Second pass: for tickets still showing "User #N", try multiple endpoints
-    const needsFetch = firstPass.filter((t: any) => t.userName?.startsWith("User #") && t.userId);
+    // Second pass: for tickets still showing "User #N" or plain "Client", try multiple endpoints
+    const needsFetch = firstPass.filter((t: any) =>
+      (t.userName?.startsWith("User #") || t.userName === "Client") && t.userId
+    );
     if (needsFetch.length > 0) {
       const uniqueIds = [...new Set(needsFetch.map((t: any) => t.userId))] as number[];
       const userMap: Record<number, string> = {};
@@ -1771,10 +1896,18 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
   };
 
   // load() — used by Refresh button and after ticket create/delete
-  const load = async () => { setPageCache({}); setSearchPool(null); setTicketPage(0); };
+  // FIX: setTicketPage(0) is a no-op when already on page 0 — React skips
+  // the state update so the useEffect never fires and loadPage(0) is never
+  // called. Fix: call loadPage(0, true) directly to bypass the stale cache.
+  const load = async () => {
+    setPageCache({});
+    setSearchPool(null);
+    setTicketPage(0);
+    await loadPage(0, true);  // force = true bypasses the stale pageCache
+  };
 
-  const loadPage = async (page: number) => {
-    if (pageCache[page]) {
+  const loadPage = async (page: number, force = false) => {
+    if (!force && pageCache[page]) {
       setTickets(pageCache[page]);
       setLoading(false);
       return;
@@ -1980,20 +2113,68 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
       {showCreate && (
         <CreateTicketModal
           currentUserId={currentAdminId}
+          consultants={consultants}
           onCreated={_t => { load(); setShowCreate(false); }}
           onClose={() => setShowCreate(false)}
         />
       )}
 
       {/* Email-to-Ticket feature notice */}
-      <div style={{ background: "linear-gradient(135deg,#ECFEFF,#F0FDF4)", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ display: "flex", alignItems: "center" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 2 }}>Email-to-Ticket is Active</div>
-          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
-            Emails sent to <strong style={{ color: "#0F766E" }}>support@meetthemasters.in</strong> are automatically converted to tickets.
-            Priority and category are auto-detected from email content. Duplicate emails are ignored.
+      <div style={{ background: "linear-gradient(135deg,#ECFEFF,#F0FDF4)", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 2 }}>Email-to-Ticket is Active</div>
+            <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+              Emails sent to <strong style={{ color: "#0F766E" }}>{SUPPORT_EMAIL}</strong> are automatically converted to tickets.
+              Priority and category are auto-detected from email content. Duplicate emails are ignored.
+            </div>
           </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" as const, justifyContent: "flex-end" }}>
+          <span style={{
+            fontSize: 11,
+            fontWeight: 800,
+            padding: "4px 10px",
+            borderRadius: 999,
+            border: "1px solid",
+            ...(emailToTicketStatus === "ok"
+              ? { background: "#F0FDF4", color: "#16A34A", borderColor: "#86EFAC" }
+              : emailToTicketStatus === "down"
+                ? { background: "#FEF2F2", color: "#DC2626", borderColor: "#FECACA" }
+                : { background: "#F1F5F9", color: "#64748B", borderColor: "#E2E8F0" }),
+          }}>
+            {emailToTicketStatus === "ok" ? "HEALTHY" : emailToTicketStatus === "down" ? "DOWN" : "CHECKING"}
+          </span>
+          <button
+            onClick={checkEmailToTicket}
+            disabled={emailToTicketStatus === "checking"}
+            style={{ padding: "7px 12px", background: "#fff", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+          >
+            Check
+          </button>
+          <button
+            onClick={async () => {
+              setEmailToTicketPolling(true);
+              try {
+                const msg = await triggerEmailToTicketPoll();
+                setLastEmailPollAt(Date.now());
+                addNotification({ type: "success", title: "Email polling started", message: msg || "Email polling initiated successfully." });
+                // refresh health (non-blocking)
+                checkEmailToTicket().catch(() => null);
+              } catch (e: any) {
+                addNotification({ type: "error", title: "Email polling failed", message: e?.message || "Failed to trigger email polling." });
+              } finally {
+                setEmailToTicketPolling(false);
+              }
+            }}
+            disabled={emailToTicketPolling}
+            style={{ padding: "7px 12px", background: "#0F766E", border: "none", color: "#fff", borderRadius: 10, fontSize: 12, fontWeight: 800, cursor: "pointer" }}
+            title={lastEmailPollAt ? `Last run: ${new Date(lastEmailPollAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` : "Trigger manual email polling"}
+          >
+            {emailToTicketPolling ? "Polling…" : "Poll Inbox"}
+          </button>
         </div>
       </div>
 
@@ -2175,24 +2356,24 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
                       {fmtIST(ticket.createdAt, { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" })}
                       {isOverdue && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.floor(hoursOpen)}h open</div>}
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifySelf: "end", gap: 3 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifySelf: "end", gap: 6 }}>
                       <button onClick={e => { e.stopPropagation(); setSelectedTicket(ticket); }}
-                        style={{ width: 82, padding: "4px 0", background: "#ECFEFF", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                        style={{ width: "100%", padding: "5px 0", background: "#ECFEFF", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
                         Open <ArrowRight size={12} />
                       </button>
-                      <div style={{ display: "flex", gap: 3 }}>
+                      <div style={{ display: "flex", gap: 6, width: "100%" }}>
                         <button onClick={async e => {
                           e.stopPropagation();
                           try { await exportSingleTicketExcel(ticket.id); }
                           catch { await clientExportTicketsExcel([ticket], `ticket_${ticket.id}.xlsx`); }
-                        }} style={{ width: 32, padding: "3px 0", background: "#F0FDF4", border: "1px solid #86EFAC", color: "#16A34A", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
+                        }} style={{ flex: 1, padding: "4px 0", background: "#F0FDF4", border: "1px solid #86EFAC", color: "#16A34A", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
                           XLS
                         </button>
                         <button onClick={async e => {
                           e.stopPropagation();
                           try { await exportSingleTicketPdf(ticket.id); }
                           catch { await clientExportTicketsPdf([ticket], `ticket_${ticket.id}.pdf`); }
-                        }} style={{ width: 32, padding: "3px 0", background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#DC2626", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
+                        }} style={{ flex: 1, padding: "4px 0", background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#DC2626", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
                           PDF
                         </button>
                       </div>
@@ -2564,7 +2745,6 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
 
   const TABS: { id: SettingsTab; label: string; icon: string; desc: string }[] = [
     { id: "profile", icon: "profile", label: "General Profile", desc: "Update your name, email, organisation details and avatar" },
-    { id: "notifications", icon: "notifications", label: "Notifications", desc: "Control which alerts you receive via email and in-app" },
     { id: "security", icon: "security", label: "Security", desc: "Change your password and manage account security" },
     { id: "logout", icon: "logout", label: "Logout", desc: "Sign out of your admin account" },
   ];
@@ -2689,49 +2869,6 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
               </div>
             )}
 
-            {/* ══════════════ NOTIFICATIONS PANEL ══════════════ */}
-            {activeTab === "notifications" && tab.id === "notifications" && (
-              <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-                  {/* Email Notifications */}
-                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#ECFEFF", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></div>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>Email Notifications</div>
-                    </div>
-                    <Toggle checked={notifPrefs.emailOnNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnNewTicket: v })} label="New ticket submitted" sub="Get emailed when a user raises a ticket" />
-                    <Toggle checked={notifPrefs.emailOnStatusChange} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnStatusChange: v })} label="Ticket status changes" sub="Notify when a ticket moves to RESOLVED or CLOSED" />
-                    <Toggle checked={notifPrefs.emailOnEscalation} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnEscalation: v })} label="Escalations" sub="Immediate alert on ticket escalation" />
-                    <Toggle checked={notifPrefs.dailySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, dailySummaryEmail: v })} label="Daily summary email" sub="Digest of open tickets every morning" />
-                    <Toggle checked={notifPrefs.weeklySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, weeklySummaryEmail: v })} label="Weekly report email" sub="Full analytics sent every Monday" />
-                  </div>
-
-                  {/* In-App Notifications */}
-                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#F5F3FF", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg></div>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>In-App Notifications</div>
-                    </div>
-                    <Toggle checked={notifPrefs.inAppNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, inAppNewTicket: v })} label="New tickets bell alert" sub="Shows in the top notification bell" />
-                    <Toggle checked={notifPrefs.inAppSlaBreaches} onChange={v => setNotifPrefs({ ...notifPrefs, inAppSlaBreaches: v })} label="SLA breach warnings" sub="Red alert when a ticket crosses SLA window" />
-                    <Toggle checked={notifPrefs.inAppAssignments} onChange={v => setNotifPrefs({ ...notifPrefs, inAppAssignments: v })} label="Consultant assignments" sub="Confirmation toast on successful assign" />
-                  </div>
-                </div>
-
-                {notifMsg && (
-                  <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 9, background: notifMsg.ok ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${notifMsg.ok ? "#86EFAC" : "#FECACA"}`, color: notifMsg.ok ? "#166534" : "#B91C1C", fontSize: 13, fontWeight: 600 }}>
-                    {notifMsg.ok ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>} {notifMsg.text}
-                  </div>
-                )}
-
-                <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
-                  <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-                  <button onClick={handleSaveNotifPrefs} disabled={notifSaving} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: notifSaving ? "#A78BFA" : "#7C3AED", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    {notifSaving ? "Saving…" : "Save Preferences"}
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* ══════════════ SECURITY PANEL ══════════════ */}
             {activeTab === "security" && tab.id === "security" && (
@@ -3034,17 +3171,19 @@ const CannedResponses: React.FC<{}> = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<Omit<CannedResponse, "id">>({ title: "", category: "General", body: "" });
+  const [form, setForm] = useState<Omit<CannedResponse, "id">>({ title: "", category: "", body: "" });
+  const [formErrors, setFormErrors] = useState<{ title?: string; category?: string; body?: string }>({});
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
 
   const openNewModal = () => {
     if (showModal) return; // prevent duplicate modals on rapid clicks
-    setForm({ title: "", category: "General", body: "" });
+    setForm({ title: "", category: "", body: "" });
+    setFormErrors({});
     setShowModal(true);
   };
-  const closeModal = () => { if (saving) return; setShowModal(false); };
+  const closeModal = () => { if (saving) return; setShowModal(false); setFormErrors({}); };
 
   // ── FIX 1: Load canned responses from the correct backend path ──────────────
   useEffect(() => {
@@ -3065,16 +3204,30 @@ const CannedResponses: React.FC<{}> = () => {
 
   // ── FIX 2: Save (create) via the correct backend path ─────────────────────
   const save = async () => {
-    if (!form.title.trim() || !form.body.trim()) return;
+    const title = form.title.trim();
+    const body = form.body.trim();
+    const newErrors: { title?: string; category?: string; body?: string } = {};
+    if (!title) newErrors.title = "Title is required";
+    else if (title.length < 3) newErrors.title = "Title must be at least 3 characters";
+    else if (title.length > 80) newErrors.title = "Title cannot exceed 80 characters";
+    else if (!/^[A-Za-z]/.test(title)) newErrors.title = "Title must start with a letter (no numbers/symbols first)";
+    else if (!/[A-Za-z]/.test(title)) newErrors.title = "Title must include letters, not only numbers";
+    if (!form.category) newErrors.category = "Category is required";
+    if (!body) newErrors.body = "Body text is required";
+    else if (body.length < 10) newErrors.body = "Body text must be at least 10 characters";
+    else if (body.length > 1000) newErrors.body = "Body text cannot exceed 1000 characters";
+    else if (!/[A-Za-z]/.test(body)) newErrors.body = "Body text must include meaningful content";
+    if (Object.keys(newErrors).length > 0) { setFormErrors(newErrors); return; }
     if (saving) return;
     setSaving(true);
+    setFormErrors({});
     try {
       const created = await apiFetch("/admin/config/canned-responses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: form.title, content: form.body, category: form.category }),
+        body: JSON.stringify({ title, content: body, category: form.category }),
       });
-      setResponses(p => [...p, { ...form, id: created?.id ?? Date.now() }]);
+      setResponses(p => [...p, { ...form, title, body, id: created?.id ?? Date.now() }]);
       closeModal();
       showToast("Response created");
     } catch (e: any) { showToast(e?.message || "Save failed"); }
@@ -3118,14 +3271,38 @@ const CannedResponses: React.FC<{}> = () => {
             </div>
             {/* Modal body */}
             <div style={{ padding: "24px" }}>
-              <label style={sc_styles.label}>Title</label>
-              <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Billing Refund" style={{ ...sc_styles.input, marginBottom: 14 }} />
-              <label style={sc_styles.label}>Category</label>
-              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={{ ...sc_styles.select, marginBottom: 14 }}>
+              <label style={sc_styles.label}>Title <span style={{ color: "#DC2626" }}>*</span></label>
+              <input
+                value={form.title}
+                onChange={e => {
+                  const raw = e.target.value || "";
+                  const sanitized = raw.replace(/^[^A-Za-z]*/, "");
+                  setForm({ ...form, title: sanitized });
+                  if (formErrors.title) setFormErrors(p => ({ ...p, title: undefined }));
+                }}
+                placeholder="e.g. Billing Refund"
+                style={{ ...sc_styles.input, marginBottom: formErrors.title ? 2 : 14, borderColor: formErrors.title ? "#FCA5A5" : undefined, background: formErrors.title ? "#FFF7F7" : undefined }}
+              />
+              {formErrors.title && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginBottom: 10 }}>{formErrors.title}</div>}
+              <label style={sc_styles.label}>Category <span style={{ color: "#DC2626" }}>*</span></label>
+              <select
+                value={form.category}
+                onChange={e => { setForm({ ...form, category: e.target.value }); if (formErrors.category) setFormErrors(p => ({ ...p, category: undefined })); }}
+                style={{ ...sc_styles.select, marginBottom: formErrors.category ? 2 : 14, borderColor: formErrors.category ? "#FCA5A5" : undefined, background: formErrors.category ? "#FFF7F7" : undefined }}
+              >
+                <option value="" disabled>Select a category</option>
                 {["General", "Billing", "Technical", "Escalation", "Advisory", "Compliance"].map(c => <option key={c} value={c}>{c}</option>)}
               </select>
-              <label style={sc_styles.label}>Body</label>
-              <textarea value={form.body} onChange={e => setForm({ ...form, body: e.target.value })} rows={6} placeholder="Use #{ticket_id}, #{user_name}" style={{ ...sc_styles.input, resize: "vertical" as any, marginBottom: 0 }} />
+              {formErrors.category && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginBottom: 10 }}>{formErrors.category}</div>}
+              <label style={sc_styles.label}>Body <span style={{ color: "#DC2626" }}>*</span></label>
+              <textarea
+                value={form.body}
+                onChange={e => { setForm({ ...form, body: e.target.value }); if (formErrors.body) setFormErrors(p => ({ ...p, body: undefined })); }}
+                rows={6}
+                placeholder=""
+                style={{ ...sc_styles.input, resize: "vertical" as any, marginBottom: formErrors.body ? 2 : 0, borderColor: formErrors.body ? "#FCA5A5" : undefined, background: formErrors.body ? "#FFF7F7" : undefined }}
+              />
+              {formErrors.body && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 2 }}>{formErrors.body}</div>}
             </div>
             {/* Modal footer */}
             <div style={{ padding: "16px 24px", borderTop: "1px solid #F1F5F9", display: "flex", gap: 10 }}>
@@ -3209,8 +3386,10 @@ const CategoriesConfig: React.FC<{}> = () => {
 
   useEffect(() => {
     setLoading(true);
-    getTicketCategories()
-      .then(arr => setCats(arr.map((c: any) => ({ id: Number(c.id), name: String(c.name || "").trim(), localOnly: Boolean(c.localOnly) }))))
+    // Single source of truth: /admin/config/categories via getActiveTicketCategories()
+    // Already returns normalised { id, name } objects — just add the localOnly flag.
+    getActiveTicketCategories()
+      .then(items => setCats(items.map(c => ({ ...c, localOnly: false }))))
       .catch(() => showToast("Failed to load categories"))
       .finally(() => setLoading(false));
   }, []);
@@ -3891,14 +4070,14 @@ const AddMemberPanel: React.FC = () => {
           if (!memberRoles.has(role)) return [];
           const id = Number(user?.id || 0);
           if (!id) return [];
-          return [{
+          return {
             id,
-            name: String(user?.name || user?.fullName || user?.firstName || user?.username || prettifyEmailLocalPart(String(user?.email || ""))).trim(),
+            name: String(user?.name || user?.fullName || user?.firstName || user?.username || "").trim(),
             email: String(user?.email || "").trim().toLowerCase(),
             role: role || "MEMBER",
             addedAt: String(user?.createdAt || user?.createdDate || user?.updatedAt || ""),
             mobileNumber: String(user?.phoneNumber || user?.mobileNumber || "").replace(/\D/g, "").slice(0, 10),
-          }];
+          };
         })
         .sort((a, b) => {
           const bDate = Date.parse(b.addedAt || "");
@@ -3907,7 +4086,30 @@ const AddMemberPanel: React.FC = () => {
           return b.id - a.id;
         })
         .slice(0, 10);
-      setAddedMembers(mapped);
+
+      // Async pass to fetch missing names from onboarding/member profiles
+      const enriched = await Promise.all(mapped.map(async (m) => {
+        if (m.name && !m.name.includes("@")) return m;
+        let resolvedName = m.name;
+        try {
+          // Try onboarding first
+          const ob = await apiFetch(`/onboarding/${m.id}`);
+          if (ob && ob.name) resolvedName = String(ob.name).trim();
+        } catch {
+          try {
+            // Secondary check
+            const mem = await apiFetch(`/members/${m.id}`);
+            if (mem && mem.name) resolvedName = String(mem.name).trim();
+          } catch { /* ignore */ }
+        }
+        return {
+          ...m,
+          name: resolvedName || prettifyEmailLocalPart(m.email)
+        };
+      }));
+
+      setAddedMembers(enriched);
+
     } catch {
       setAddedMembers([]);
     } finally {
@@ -4089,14 +4291,11 @@ const AddMemberPanel: React.FC = () => {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
-                        <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</div>
+                        {m.email && <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</div>}
                       </div>
                       <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC", flexShrink: 0 }}>
                         MEMBER
                       </span>
-                    </div>
-                    <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 5, marginLeft: 44 }}>
-                      Added {fmtIST(m.addedAt, IST_OPTS_DATE)}
                     </div>
                   </div>
                 );
@@ -4184,7 +4383,7 @@ const AutoResponderPanel: React.FC = () => {
     </label>
   );
 
-  const ResponderCard = ({
+  const ResponderCard = useCallback(({
     title, subtitle, tag, tagColor, enabled, onToggle, message, onMessageChange, saving, onSave,
   }: {
     title: string; subtitle: string; tag: string; tagColor: string;
@@ -4219,7 +4418,7 @@ const AutoResponderPanel: React.FC = () => {
         {saving ? "Saving…" : "Save"}
       </button>
     </div>
-  );
+  ), []);
 
   return (
     <div>
@@ -4512,7 +4711,7 @@ const CommissionConfigPanel: React.FC = () => {
       <div style={{ marginBottom: 28 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Commission Configuration</h2>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>
-          Set the platform commission added on top of each consultant's base fee. The backend (BookingService) adds this automatically when a booking is created.
+          Set the platform commission charged on each booking so customers see the final amount clearly during checkout.
         </p>
       </div>
       {loading ? (
@@ -4902,8 +5101,7 @@ const QuestionsManagementPanel: React.FC = () => {
         <div>
           {/* Info banner */}
           <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#115E59" }}>
-            <strong>Skills</strong> are categories shown to users during onboarding (e.g. "Tax Planning", "Investment").
-            Consultants are matched to clients based on their skill tags.
+            <strong>Skills</strong> are the tags used on consultant profiles for matching and filtering.
           </div>
 
           {showSkillForm && (
@@ -4958,7 +5156,7 @@ const QuestionsManagementPanel: React.FC = () => {
         <div>
           {/* Info banner */}
           <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#115E59" }}>
-            <strong>Post-booking questions</strong> are shown to clients right after booking. Answers are visible to the consultant before the session.
+            <strong>Post-booking questions</strong> are shown to clients right after a booking is confirmed. Their answers are visible to the consultant before the session.
           </div>
 
           {/* Question form */}
@@ -5733,28 +5931,79 @@ const AdminOffersPanel: React.FC = () => {
   const parseDiscountForForm = (discount: string) => {
     const raw = String(discount || '').trim();
     if (!raw) return { discountLabel: '', discountValue: '', discountType: '%' };
-    if (raw.includes('%')) {
+    if (/^\d+(\.\d+)?%$/.test(raw.replace(/\s+/g, ''))) {
       return {
         discountLabel: raw,
         discountValue: raw.replace('%', '').trim(),
         discountType: '%',
       };
     }
+    if (/^\d+(\.\d+)?$/.test(raw)) {
+      return {
+        discountLabel: raw,
+        discountValue: raw,
+        discountType: '₹',
+      };
+    }
     return {
       discountLabel: raw,
-      discountValue: raw,
-      discountType: '₹',
+      discountValue: '',
+      discountType: '%',
     };
   };
 
   const buildDiscountString = (offer: Pick<AdminOffer, 'discount' | 'discountValue' | 'discountType'>) => {
+    const manualLabel = String(offer.discount || '').trim();
     const explicitValue = String(offer.discountValue ?? '').trim();
-    if (explicitValue) {
-      return (offer.discountType || '%') === '%'
-        ? `${explicitValue}%`
-        : explicitValue;
+    const generatedValue = explicitValue
+      ? ((offer.discountType || '%') === '%' ? `${explicitValue}%` : explicitValue)
+      : '';
+    if (!manualLabel) {
+      return generatedValue;
     }
-    return String(offer.discount || '').trim();
+    if (generatedValue && /^\d+(\.\d+)?%?$/.test(manualLabel.replace(/\s+/g, ''))) {
+      return generatedValue;
+    }
+    return manualLabel;
+  };
+
+  const buildGeneratedDiscountValue = (discountValue: string | number | undefined, discountType: string | undefined) => {
+    const explicitValue = String(discountValue ?? '').trim();
+    if (!explicitValue) return '';
+    return (discountType || '%') === '%' ? `${explicitValue}%` : explicitValue;
+  };
+
+  const handleDiscountTypeChange = (nextType: string) => {
+    setForm((current) => {
+      const currentGenerated = buildGeneratedDiscountValue(current.discountValue, current.discountType || '%');
+      const nextGenerated = buildGeneratedDiscountValue(current.discountValue, nextType);
+      const shouldSyncLabel = !String(current.discount || '').trim()
+        || String(current.discount || '').trim() === currentGenerated;
+
+      return {
+        ...current,
+        discountType: nextType,
+        discount: shouldSyncLabel ? nextGenerated : current.discount,
+      } as any;
+    });
+  };
+
+  const handleDiscountValueChange = (rawValue: string) => {
+    setForm((current) => {
+      const nextValue = (current.discountType || '%') === '₹'
+        ? sanitizeWholeNumberInput(rawValue, MAX_OFFER_AMOUNT)
+        : sanitizeDecimalInput(rawValue, MAX_PERCENTAGE_VALUE, 2);
+      const currentGenerated = buildGeneratedDiscountValue(current.discountValue, current.discountType || '%');
+      const nextGenerated = buildGeneratedDiscountValue(nextValue, current.discountType || '%');
+      const shouldSyncLabel = !String(current.discount || '').trim()
+        || String(current.discount || '').trim() === currentGenerated;
+
+      return {
+        ...current,
+        discountValue: nextValue,
+        discount: shouldSyncLabel ? nextGenerated : current.discount,
+      } as any;
+    });
   };
 
   // Normalize backend offer — handles both isActive and active field names
@@ -5857,7 +6106,7 @@ const AdminOffersPanel: React.FC = () => {
   const handleSave = async () => {
     if (!form.title.trim()) { showToast('Title is required.'); return; }
     const discountStr = buildDiscountString(form);
-    if (!discountStr) { showToast('Discount is required. Use values like 20% or 500.'); return; }
+    if (!discountStr) { showToast('Discount is required. Use values like 20%, 500, or FLAT200.'); return; }
     if (!form.validFrom || !form.validTo) { showToast('Valid From and Valid To dates are required.'); return; }
     if (new Date(form.validTo) <= new Date(form.validFrom)) { showToast('Valid To must be after Valid From.'); return; }
     const discountValue = Number((form as any).discountValue || 0);
@@ -6023,13 +6272,13 @@ const AdminOffersPanel: React.FC = () => {
             <div>
               <label style={lbl}>
                 Discount Label
-                <span style={{ fontWeight: 400, color: '#94A3B8' }}> (auto-built from value/type below)</span>
+                <span style={{ fontWeight: 400, color: '#94A3B8' }}> (shown to customers)</span>
               </label>
               <input
                 type="text"
                 value={form.discount}
                 onChange={e => setForm(f => ({ ...f, discount: e.target.value }))}
-                placeholder="e.g. 20% or 500"
+                placeholder="e.g. 20%, 500, or FLAT200"
                 style={inp}
               />
             </div>
@@ -6043,7 +6292,7 @@ const AdminOffersPanel: React.FC = () => {
               <div style={{ display: 'flex', gap: 8 }}>
                 <select
                   value={(form as any).discountType || '%'}
-                  onChange={e => setForm(f => ({ ...f, discountType: e.target.value } as any))}
+                  onChange={e => handleDiscountTypeChange(e.target.value)}
                   style={{ ...inp, width: 72, flexShrink: 0 }}
                 >
                   <option value="%">%</option>
@@ -6053,15 +6302,13 @@ const AdminOffersPanel: React.FC = () => {
                   type="text"
                   inputMode="numeric"
                   value={(form as any).discountValue ?? ''}
-                  onChange={e => setForm(f => ({
-                    ...f,
-                    discountValue: (form as any).discountType === '₹'
-                      ? sanitizeWholeNumberInput(e.target.value, MAX_OFFER_AMOUNT)
-                      : sanitizeDecimalInput(e.target.value, MAX_PERCENTAGE_VALUE, 2),
-                  } as any))}
+                  onChange={e => handleDiscountValueChange(e.target.value)}
                   placeholder={(form as any).discountType === '₹' ? `e.g. 250 (max ${formatIndianNumber(MAX_OFFER_AMOUNT)})` : `e.g. 20 (max ${MAX_PERCENTAGE_VALUE})`}
                   style={{ ...inp, flex: 1 }}
                 />
+              </div>
+              <div style={{ marginTop: 4, fontSize: 11, color: '#64748B' }}>
+                Optional helper for the actual discount applied. Leave it blank if the label itself should be sent as-is.
               </div>
             </div>
 
@@ -7327,6 +7574,370 @@ const ContactSubmissionsPanel: React.FC = () => {
   );
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL → TICKET INBOX PANEL — shows inbound emails processed into tickets
+// ─────────────────────────────────────────────────────────────────────────────
+interface EmailToTicketMessage {
+  id: number;
+  from: string;
+  subject: string;
+  body: string;
+  receivedAt: string;
+  read: boolean;
+  hidden?: boolean;
+  ticketId?: number | null;
+  ticketNumber?: string | null;
+  syncedToBackend?: boolean;
+}
+
+const EmailToTicketInboxPanel: React.FC = () => {
+  const LS_KEY = "fin_email_to_ticket_messages";
+
+  const [messages, setMessages] = React.useState<EmailToTicketMessage[]>([]);
+  const [selected, setSelected] = React.useState<EmailToTicketMessage | null>(null);
+  const [filter, setFilter] = React.useState<"all" | "unread" | "read">("all");
+  const [search, setSearch] = React.useState("");
+  const [toast, setToast] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [page, setPage] = React.useState(0);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [deleteTarget, setDeleteTarget] = React.useState<EmailToTicketMessage | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = React.useState(false);
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+  const cleanEmailBody = (text: string) => {
+    if (!text) return "";
+    let cleaned = text;
+    // Remove appended HTML version often added by email clients/parsers at the end
+    cleaned = cleaned.replace(/<div\b[^>]*>[\s\S]*<\/div>\s*$/i, '');
+    // Strip any remaining basic HTML tags just in case
+    cleaned = cleaned.replace(/<[^>]+>/g, '');
+    return cleaned.trim();
+  };
+
+  const normalise = (r: any): EmailToTicketMessage => ({
+    id: r.id ?? r.localId ?? Date.now(),
+    from: r.from ?? r.fromEmail ?? r.sender ?? r.senderEmail ?? r.email ?? "--",
+    subject: r.subject ?? r.title ?? "(no subject)",
+    body: cleanEmailBody(r.body ?? r.message ?? r.text ?? ""),
+    read: r.isRead ?? r.read ?? false,
+    hidden: r.hidden ?? false,
+    receivedAt: r.receivedAt ?? r.createdAt ?? r.submittedAt ?? new Date().toISOString(),
+    ticketId: r.ticketId ?? r.createdTicketId ?? r.ticket?.id ?? null,
+    ticketNumber: r.ticketNumber ?? r.ticket?.ticketNumber ?? null,
+    syncedToBackend: r.syncedToBackend ?? true,
+  });
+
+  const isLikelyEmailTicket = (t: any): boolean => {
+    const d = String(t?.description ?? "");
+    // Many email-to-ticket converters include email header lines in the ticket description.
+    return (
+      /^from:/im.test(d) ||
+      /^subject:/im.test(d) ||
+      /^sent:/im.test(d) ||
+      /^date:/im.test(d) ||
+      /message-id:/im.test(d) ||
+      /original message/i.test(d)
+    );
+  };
+
+  const extractHeader = (text: string, key: string): string | null => {
+    const re = new RegExp(`^${key}\\s*:\\s*(.+)$`, "im");
+    const m = text.match(re);
+    return m?.[1]?.trim() || null;
+  };
+
+  const toMessageFromTicket = (t: any): EmailToTicketMessage => {
+    const desc = String(t?.description ?? "");
+    const from = extractHeader(desc, "From") || t?.user?.email || t?.email || "--";
+    const subject = extractHeader(desc, "Subject") || t?.title || t?.category || "(no subject)";
+    return {
+      id: Number(t?.id ?? Date.now()),
+      from: String(from),
+      subject: String(subject),
+      body: cleanEmailBody(desc),
+      receivedAt: String(t?.createdAt ?? new Date().toISOString()),
+      read: false,
+      hidden: false,
+      ticketId: Number(t?.id ?? 0) || null,
+      ticketNumber: t?.ticketNumber != null ? String(t.ticketNumber) : null,
+      syncedToBackend: true,
+    };
+  };
+
+  const fmtDate = (iso?: string) => {
+    try { return new Date(iso || "").toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }); } catch { return ""; }
+  };
+
+  const persistLocal = (arr: EmailToTicketMessage[]) => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(arr));
+    } catch { /* ignore */ }
+  };
+
+  const load = React.useCallback(async (pg = 0) => {
+    setLoading(true);
+    try {
+      // Backend does not expose a raw "email inbox messages" API in Swagger.
+      // Instead, approximate an inbox by showing the tickets that look like they were created from email content.
+      const data = await getTicketsPage(pg, 50);
+      const ticketArr = Array.isArray(data?.content) ? data.content : extractArray(data);
+      const derived = ticketArr
+        .filter(isLikelyEmailTicket)
+        .map(toMessageFromTicket);
+      setTotalPages(Number(data?.totalPages ?? 1));
+
+      // Merge read/hidden state from localStorage (single source of truth for inbox UX)
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        const local: any[] = raw ? JSON.parse(raw) : [];
+        const localMap = new Map<number, EmailToTicketMessage>(local.map((m: any) => [Number(m.id), normalise(m)]));
+        const merged = derived.map((m) => {
+          const prev = localMap.get(Number(m.id));
+          return prev ? { ...m, read: !!prev.read, hidden: !!prev.hidden } : m;
+        });
+        merged.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+        setMessages(merged);
+        persistLocal(merged);
+      } catch {
+        setMessages(derived);
+        persistLocal(derived);
+      }
+      setLoading(false);
+      return;
+    } catch { /* backend unreachable -- fall through */ }
+
+    // Fallback: localStorage only
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      const arr: EmailToTicketMessage[] = raw ? JSON.parse(raw).map(normalise) : [];
+      arr.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+      setMessages(arr);
+    } catch { setMessages([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { load(0); }, [load]);
+
+  const markRead = async (id: number) => {
+    setMessages(prev => {
+      const updated = prev.map(m => m.id === id ? { ...m, read: true } : m);
+      persistLocal(updated);
+      return updated;
+    });
+    if (selected?.id === id) setSelected(prev => prev ? { ...prev, read: true } : prev);
+  };
+
+  const handleSelect = (m: EmailToTicketMessage) => {
+    setSelected(m);
+    if (!m.read) markRead(m.id).catch(() => null);
+  };
+
+  const handleMarkAllRead = async () => {
+    const updated = messages.map(m => ({ ...m, read: true }));
+    setMessages(updated);
+    if (selected) setSelected({ ...selected, read: true });
+    persistLocal(updated);
+    showToast("Marked all as read");
+  };
+
+  const handleDeleteOne = async (id: number) => {
+    const updated = messages.map(m => m.id === id ? { ...m, hidden: true } : m);
+    setMessages(updated);
+    if (selected?.id === id) setSelected(null);
+    persistLocal(updated);
+    showToast("Removed from inbox");
+  };
+
+  const handleDeleteAll = async () => {
+    const updated = messages.map(m => ({ ...m, hidden: true }));
+    setMessages(updated);
+    setSelected(null);
+    persistLocal(updated);
+    showToast("Cleared");
+  };
+
+  const visibleMessages = messages.filter(m => !m.hidden);
+  const unreadCount = visibleMessages.filter(m => !m.read).length;
+  const filtered = visibleMessages.filter(m => {
+    if (filter === "unread" && m.read) return false;
+    if (filter === "read" && !m.read) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (m.from || "").toLowerCase().includes(q) ||
+      (m.subject || "").toLowerCase().includes(q) ||
+      (m.body || "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div>
+      {deleteTarget && (
+        <ConfirmDialog
+          open={true}
+          title="Delete Email"
+          message="This will remove the email from the admin inbox view. This action cannot be undone."
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          danger={true}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => { const id = deleteTarget.id; setDeleteTarget(null); handleDeleteOne(id); }}
+        />
+      )}
+      {showClearConfirm && (
+        <ConfirmDialog
+          open={true}
+          title="Clear Email Inbox"
+          message="This will clear all email-to-ticket messages from this admin view."
+          confirmLabel="Clear All"
+          cancelLabel="Cancel"
+          danger={true}
+          onClose={() => setShowClearConfirm(false)}
+          onConfirm={() => { setShowClearConfirm(false); handleDeleteAll(); }}
+        />
+      )}
+
+      {toast && <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#0F172A", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>{toast}</div>}
+
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Email Inbox</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
+            Emails sent to <strong style={{ color: "#0F766E" }}>{SUPPORT_EMAIL}</strong> (auto-converted into tickets)
+            {unreadCount > 0 && <span style={{ marginLeft: 10, background: "#DC2626", color: "#fff", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "2px 8px" }}>{unreadCount} unread</span>}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => load(page)} disabled={loading}
+            style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#0F766E", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+            {loading ? "Loading..." : "Refresh"}
+          </button>
+          {unreadCount > 0 && <button onClick={handleMarkAllRead} style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #A5F3FC", background: "#ECFEFF", color: "#0F766E", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Mark All Read</button>}
+          {messages.length > 0 && <button onClick={() => setShowClearConfirm(true)} style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Clear All</button>}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["all", "unread", "read"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${filter === f ? "#0F766E" : "#E2E8F0"}`, background: filter === f ? "#0F766E" : "#fff", color: filter === f ? "#fff" : "#64748B", fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }}>
+              {f} ({f === "all" ? messages.length : f === "unread" ? unreadCount : messages.length - unreadCount})
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 200, position: "relative" }}>
+          <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="13" height="13" fill="none" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2" /><path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" /></svg>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by from, subject, content..."
+            style={{ width: "100%", paddingLeft: 30, paddingRight: 12, paddingTop: 8, paddingBottom: 8, border: "1.5px solid #E2E8F0", borderRadius: 9, fontSize: 13, outline: "none", boxSizing: "border-box" as const }} />
+        </div>
+      </div>
+
+      {loading && messages.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "#94A3B8" }}>
+          <img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", display: "block", margin: "0 auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
+        </div>
+      ) : messages.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "80px 20px", background: "#F8FAFC", borderRadius: 16, color: "#94A3B8" }}>
+          <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" strokeLinecap="round" style={{ marginBottom: 14 }}>
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" />
+          </svg>
+          <div style={{ fontWeight: 600, fontSize: 15, color: "#64748B", marginBottom: 6 }}>No emails yet</div>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            This view shows tickets that look like they were created from an email (based on email headers in the ticket description).
+            If you don’t see anything, the backend may be converting emails without storing the original email headers/content in the ticket.
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: selected ? "1.2fr 1fr" : "1fr", gap: 16, alignItems: "start" }}>
+          {/* List */}
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>Messages</div>
+              <div style={{ fontSize: 12, color: "#64748B" }}>{filtered.length} shown</div>
+            </div>
+            <div style={{ maxHeight: "68vh", overflow: "auto" }}>
+              {filtered.map(m => (
+                <button key={m.id} onClick={() => handleSelect(m)}
+                  style={{
+                    width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #F8FAFC",
+                    padding: "12px 14px", background: selected?.id === m.id ? "#ECFEFF" : (m.read ? "#fff" : "#F8FAFF"),
+                    cursor: "pointer",
+                  }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                        {!m.read && <span style={{ width: 8, height: 8, borderRadius: 999, background: "#DC2626" }} />}
+                        <div style={{ fontSize: 13, fontWeight: 800, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.subject || "(no subject)"}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.from}</div>
+                      <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {(m.body || "").replace(/\s+/g, " ").trim().slice(0, 120)}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94A3B8", flexShrink: 0 }}>{fmtDate(m.receivedAt)}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {totalPages > 1 && (
+              <div style={{ padding: "10px 18px", borderTop: "1px solid #F1F5F9", display: "flex", gap: 8, justifyContent: "center" }}>
+                {Array.from({ length: totalPages }, (_, i) => (
+                  <button key={i} onClick={() => { setPage(i); load(i); }}
+                    style={{ width: 30, height: 30, borderRadius: 7, border: `1.5px solid ${page === i ? "#0F766E" : "#E2E8F0"}`, background: page === i ? "#0F766E" : "#fff", color: page === i ? "#fff" : "#374151", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Detail */}
+          {selected && (
+            <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden", position: "sticky", top: 20 }}>
+              <div style={{ background: "var(--portal-profile-gradient)", padding: "18px 22px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected.subject || "(no subject)"}</div>
+                    <div style={{ fontSize: 12, color: "#A5F3FC", marginTop: 4 }}>{selected.from}</div>
+                    <div style={{ fontSize: 11, color: "#99F6E4", marginTop: 8 }}>{fmtDate(selected.receivedAt)}</div>
+                    {(selected.ticketId || selected.ticketNumber) && (
+                      <div style={{ fontSize: 11, color: "#E0F2FE", marginTop: 8, fontWeight: 700 }}>
+                        Ticket: {selected.ticketNumber ? String(selected.ticketNumber) : `#${selected.ticketId}`}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => setSelected(null)} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 30, height: 30, borderRadius: "50%", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>x</button>
+                </div>
+              </div>
+              <div style={{ padding: "20px 22px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Email</div>
+                <div style={{ fontSize: 14, color: "#0F172A", lineHeight: 1.75, background: "#F8FAFC", borderRadius: 12, padding: "14px 16px", borderLeft: "3px solid #A5F3FC", whiteSpace: "pre-wrap" }}>
+                  {selected.body}
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" as const }}>
+                  <a href={`mailto:${selected.from}?subject=${encodeURIComponent(`Re: ${selected.subject || "Your message"}`)}`}
+                    style={{ flex: 1, minWidth: 160, padding: "10px", borderRadius: 10, border: "none", background: "var(--color-primary-gradient)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
+                    Reply via Email
+                  </a>
+                  <button onClick={() => setDeleteTarget(selected)}
+                    style={{ padding: "10px 16px", borderRadius: 10, border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 function AdminPageInner() {
   const navigate = useNavigate();
   const { addNotification } = useNotifications();
@@ -7462,6 +8073,15 @@ function AdminPageInner() {
     } catch { return 0; }
   });
 
+  // ── Email-to-ticket inbox unread count ───────────────────────────────────
+  const [emailInboxUnreadCount, setEmailInboxUnreadCount] = useState(() => {
+    try {
+      const raw = localStorage.getItem("fin_email_to_ticket_messages");
+      const arr = raw ? JSON.parse(raw) : [];
+      return arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length;
+    } catch { return 0; }
+  });
+
   // Refresh unread count when navigating to contact-submissions
   useEffect(() => {
     if (activeSection === "contact-submissions") {
@@ -7471,6 +8091,19 @@ function AdminPageInner() {
         const raw = localStorage.getItem("fin_contact_submissions");
         const arr = raw ? JSON.parse(raw) : [];
         setContactUnreadCount(arr.filter((s: any) => !s.read).length);
+      } catch { }
+    }
+  }, [activeSection]);
+
+  // Refresh unread count when navigating to email-to-ticket-inbox
+  useEffect(() => {
+    if (activeSection === "email-to-ticket-inbox") {
+      setEmailInboxUnreadCount(0);
+    } else {
+      try {
+        const raw = localStorage.getItem("fin_email_to_ticket_messages");
+        const arr = raw ? JSON.parse(raw) : [];
+        setEmailInboxUnreadCount(arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length);
       } catch { }
     }
   }, [activeSection]);
@@ -7862,6 +8495,18 @@ function AdminPageInner() {
         </svg>
       ),
     },
+    {
+      id: "email-to-ticket-inbox",
+      label: "Email Inbox",
+      badge: emailInboxUnreadCount > 0 ? emailInboxUnreadCount : undefined,
+      icon: (
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+          <polyline points="22,6 12,13 2,6" />
+          <path d="M22 10l-6 4" />
+        </svg>
+      ),
+    },
     { id: "contact-submissions", label: "Contact Messages", badge: contactUnreadCount > 0 ? contactUnreadCount : undefined, icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg> },
     { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
   ];
@@ -8226,7 +8871,7 @@ function AdminPageInner() {
                       </svg>
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: openTicketsAccent.title, lineHeight: 1.15 }}>{openTicketsHeading}</div>
+                      <div style={{ fontSize: loading ? 15 : 20, fontWeight: loading ? 600 : 800, color: openTicketsAccent.title, lineHeight: 1.35, fontStyle: loading ? "italic" : "normal", opacity: loading ? 0.75 : 1 }}>{openTicketsHeading}</div>
                       <div style={{ fontSize: 13, color: openTicketsAccent.sub, marginTop: 8 }}>{openTicketsSubtext}</div>
                     </div>
                   </div>
@@ -8668,6 +9313,7 @@ function AdminPageInner() {
           {/* ════ SUBSCRIPTION PLANS ════ */}
           {activeSection === "subscription-plans" && <SubscriptionPlansPanel />}
           {activeSection === "terms-conditions" && <TermsConditionsEditor />}
+          {activeSection === "email-to-ticket-inbox" && <EmailToTicketInboxPanel />}
           {activeSection === "contact-submissions" && <ContactSubmissionsPanel />}
 
           {/* ════ SETTINGS — FULLY DYNAMIC ════ */}

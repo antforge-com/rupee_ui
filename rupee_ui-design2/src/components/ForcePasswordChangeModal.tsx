@@ -96,12 +96,7 @@ export default function ForcePasswordChangeModal() {
       setForm({ newPass: "", confirmPass: "" });
       setVisible(false);
     } catch (err: any) {
-      const message = String(err?.message || "");
-      if (message.toLowerCase().includes("same")) {
-        setError("New password must be different from your current password.");
-      } else {
-        setError(message || "Failed to change password. Please try again.");
-      }
+      setError(String(err?.message || "Failed to change password. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -132,7 +127,7 @@ export default function ForcePasswordChangeModal() {
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "9px 12px", marginBottom: 14 }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B45309" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
             <span style={{ fontSize: 12, color: "#92400E", fontWeight: 600, lineHeight: 1.5 }}>
-              Enter a new password that is different from your temporary password.
+              Set a secure password to finish activating your account.
             </span>
           </div>
 
@@ -201,7 +196,7 @@ export default function ForcePasswordChangeModal() {
               { rule: "At least 8 characters", met: form.newPass.length >= 8 },
               { rule: "Uppercase letter (A-Z)", met: /[A-Z]/.test(form.newPass) },
               { rule: "Number (0-9)", met: /[0-9]/.test(form.newPass) },
-              { rule: "Different from temporary password", met: form.newPass.length > 0 },
+              { rule: "Special character (recommended)", met: /[^A-Za-z0-9]/.test(form.newPass) },
             ].map((rule) => (
               <div key={rule.rule} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: rule.met ? "#16A34A" : "#94A3B8", marginBottom: 4 }}>
                 {rule.met

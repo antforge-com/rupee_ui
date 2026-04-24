@@ -15,6 +15,7 @@ import { MouseEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import logoImg from '../assests/Meetmasterslogopng.png';
 import { API_BASE_URL } from "../config/api";
+import { checkOtp as apiCheckOtp, sendRegistrationOtp } from "../services/api";
 import { formatNameLikeInput, startsWithNumber } from "../utils/formUtils";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -158,7 +159,9 @@ export default function RegisterPage() {
 
       if (fetched.length > 0) {
         setPlans(fetched);
-        setSelectedPlan(fetched.find(p => !isFree(p)) || fetched[0]);
+        // Default to the most expensive (highest tier) plan
+        const highestPlan = [...fetched].sort((a, b) => (b.discountPrice || 0) - (a.discountPrice || 0))[0];
+        setSelectedPlan(highestPlan || fetched[0]);
       } else {
         setPlans([]); setSelectedPlan(null);
       }
@@ -185,10 +188,11 @@ export default function RegisterPage() {
     }
     setSendingOtp(true); setSendOtpError(""); setErrors(x => ({ ...x, email: "" }));
     try {
-      await publicFetch("/users/send-otp", {
-        method: "POST",
-        body: JSON.stringify({ email: clean }),
-      });
+      // Pass the mobile number so the backend can also dispatch an SMS OTP when
+      // SMS is enabled.  sendRegistrationOtp treats phoneNumber as optional —
+      // if the user hasn't filled it in yet we simply omit it.
+      const cleanMobile = mobileNumber.replace(/\s/g, "");
+      await sendRegistrationOtp(clean, cleanMobile || undefined);
       setOtpSentToEmail(clean);
       setInlineOtp(["", "", "", "", "", ""]);
       setInlineOtpError("");
@@ -245,12 +249,28 @@ export default function RegisterPage() {
     setInlineOtpError("");
 
     try {
-      // The live backend validates OTP on /onboarding itself. Keep the entered
-      // OTP and proceed; registration submit will be the source of truth.
+      // POST /api/users/check-otp — validates the OTP against the backend without
+      // consuming it. The OTP is marked as used later when /onboarding is called.
+      // This gives the user immediate feedback if they typed the wrong code.
+      await apiCheckOtp(sanitizeEmail(email), otp);
+
+      // Backend confirmed the OTP is valid — store it so handleSubmit can forward
+      // it to /onboarding which will do the final consume (verifyAndMarkOtpUsed).
       setConfirmedOtp(otp);
       setEmailVerified(true);
       setOtpBoxVisible(false);
       setErrors((x) => ({ ...x, email: "" }));
+    } catch (err: any) {
+      const raw = String(err?.message || "").toLowerCase();
+      if (raw.includes("expired")) {
+        setInlineOtpError("This OTP has expired. Please request a new one.");
+      } else if (raw.includes("attempt") || raw.includes("maximum")) {
+        setInlineOtpError(err?.message || "Too many incorrect attempts. Please request a new OTP.");
+      } else if (raw.includes("403") || raw.includes("forbidden")) {
+        setInlineOtpError("Verification service unavailable. Please contact support.");
+      } else {
+        setInlineOtpError(err?.message || "The OTP entered is incorrect. Please try again.");
+      }
     } finally {
       setInlineOtpVerifying(false);
     }
@@ -317,6 +337,18 @@ export default function RegisterPage() {
   };
 
   const emailIsValid = EMAIL_REGEX.test(sanitizeEmail(email));
+  const cleanMobile = mobileNumber.replace(/\s/g, "");
+  const mobileIsValid = MOBILE_REGEX.test(cleanMobile);
+  const cleanedName = name.trim().replace(/\s+/g, " ");
+  const nameIsValid = !!cleanedName && cleanedName.length >= MIN_TEXT_LENGTH && !startsWithNumber(cleanedName);
+  const canRegister =
+    !submitting &&
+    plans.length > 0 &&
+    !!selectedPlan &&
+    emailVerified &&
+    emailIsValid &&
+    mobileIsValid &&
+    nameIsValid;
 
   const handleInlineResend = async (e: MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -429,7 +461,7 @@ export default function RegisterPage() {
               ) : (
                 <button
                   onClick={handleSendEmailOtp}
-                  disabled={sendingOtp || !emailIsValid}
+                  disabled={sendingOtp || !emailIsValid || !mobileIsValid}
                   className="btn-primary"
                   style={{ height: 42, padding: '0 20px', whiteSpace: 'nowrap', fontSize: '13px' }}
                 >
@@ -608,7 +640,7 @@ export default function RegisterPage() {
         <button
           onClick={handleSubmit}
           className="btn-primary"
-          disabled={submitting || plans.length === 0 || !emailVerified}
+          disabled={!canRegister}
           style={{ width: '100%', padding: '18px', fontSize: '17px', borderRadius: 'var(--radius-lg)' }}
         >
           {submitting ? <><span className="animate-spin" style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block' }} /> Creating Account...</>

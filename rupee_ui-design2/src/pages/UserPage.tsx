@@ -32,12 +32,20 @@ import { useNavigate } from "react-router-dom";
 import logoImg from "../assests/Meetmasterslogopng.png";
 import StatusBadge from "../components/StatusBadge.tsx";
 import { API_BASE_URL, buildBackendAssetUrl } from "../config/api.ts";
+import { SUPPORT_EMAIL } from "../config/support";
 import {
   createBooking,
   createSpecialBooking,
   createTicket,
   createTimeslot,
+  emailOnBookingAlertConsultant,
+  emailOnBookingConfirmedUser,
+  emailOnSpecialBookingRequestConsultant,
+  emailOnSpecialBookingRequestUser,
+  emailOnTicketCreated,
+  emailOnTicketUpdated,
   extractArray,
+  getActiveTicketCategories,
   getAllConsultants,
   getAllSkills,
   getAvailableTimeslotsByConsultant,
@@ -55,7 +63,6 @@ import {
   getSpecialDaysByConsultant,
   getStatusStyle,
   getTermsAndConditions,
-  getTicketCategories,
   getTicketComments,
   getTicketsByUser,
   logoutUser,
@@ -206,6 +213,7 @@ type AvailableSpecialSlot = TimeSlotRecord & { timeRange?: string };
 interface Booking {
   id: number; consultantId: number; timeSlotId: number; amount: number;
   BookingStatus: string; paymentStatus: string; consultantName?: string;
+  consultant?: { name?: string };
   slotDate?: string; slotTime?: string; timeRange?: string; meetingMode?: string;
   userNotes?: string; meetingLink?: string; joinUrl?: string;
   isSpecialBooking?: boolean;
@@ -279,6 +287,7 @@ interface UserProfile {
   identifier?: string; role?: string; subscribed?: boolean; subscriptionPlanName?: string;
   subscriptionPlanId?: number;
   phone?: string; incomes?: IncomeItem[]; expenses?: ExpenseItem[]; createdAt?: string;
+  designation?: string; organizationName?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,7 +394,7 @@ const buildRollingDays = (count: number, startDate = new Date()) => {
   return buildDaysRange(startIso, toIsoDateLocal(end));
 };
 const ALL_DAYS = buildRollingDays(30);
-const VISIBLE_DAYS = 7;
+const VISIBLE_DAYS = 7; // show 7 days at a time with prev/next navigation
 const DEFAULT_DAY = ALL_DAYS[0];
 
 const resolvePhotoUrl = (path?: string | null): string => {
@@ -1107,7 +1116,8 @@ const CreateTicketModal: React.FC<{
   userId: number | null;
   onCreated: (t: Ticket) => void;
   onClose: () => void;
-}> = ({ userId, onCreated, onClose }) => {
+  onOpenEmailToTicket?: () => void;
+}> = ({ userId, onCreated, onClose, onOpenEmailToTicket }) => {
   const [form, setForm] = useState({
     category: "", description: "", priority: "MEDIUM" as TicketPriority
   });
@@ -1115,23 +1125,16 @@ const CreateTicketModal: React.FC<{
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // ── Dynamic categories from backend ──
-  const [categories, setCategories] = useState<string[]>([]);
+  // ── Dynamic categories from backend — single source: /admin/config/categories ──
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
   useEffect(() => {
-    // getTicketCategories() reads /tickets/unique-categories and merges any
-    // admin-added local categories from Support Config so both pages stay aligned.
     setLoadingCategories(true);
-    getTicketCategories()
-      .then(arr => {
-        const names = arr
-          .filter((c: any) => c?.name && c?.active !== false)
-          .map((c: any) => String(c.name).trim())
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b));
-        setCategories(names);
-      })
+    // getActiveTicketCategories() fetches exclusively from /admin/config/categories
+    // and already returns normalised { id, name } objects — no extra mapping needed.
+    getActiveTicketCategories()
+      .then(items => setCategories(items))
       .catch(() => setCategories([]))
       .finally(() => setLoadingCategories(false));
   }, []);
@@ -1158,12 +1161,59 @@ const CreateTicketModal: React.FC<{
       setError("Still submitting — the server is taking a moment, please wait…");
     }, 15_000);
     try {
-      // FIX Bug 4: removed spurious `title: form.category` — the Ticket DTO has
-      // no `title` field; strict backends were rejecting it with a 400. The
-      // `category` field from ...form already covers the intent.
-      const saved = await createTicket({ userId, ...form }, file);
+      // FIX: resolve categoryId from the loaded categories list so the backend
+      // TicketRequest DTO validation passes (it requires a numeric categoryId).
+      // Treat id=0 as invalid (backend auto-assigned or missing) and pass null
+      // so the api.ts fallback resolver can attempt a second lookup.
+      const matched = categories.find(c => c.name === form.category);
+      const categoryId = (matched?.id && matched.id > 0) ? matched.id : null;
+
+      const saved = await createTicket({ userId, ...form, categoryId }, file);
       clearTimeout(slowHintTimer);
       setError(""); // clear patience hint if it appeared
+
+      // ── FAIL-SAFE NOTIFICATION TRIGGERS ──────────────────────────────────
+      // Mirrors TicketService.createTicket() — each trigger has its own
+      // try/catch so one failure never blocks the other or the onCreated callback.
+
+      // Trigger 1: notifyNewAssignment
+      // Backend fires this when a consultant is assigned at creation time.
+      // We mirror it here so the consultant's bell updates without waiting
+      // for their next 30-second poll cycle.
+      try {
+        const assignedConsultantId = (saved as any).consultantId;
+        if (assignedConsultantId) {
+          const ticketNum = (saved as any).ticketNumber || String((saved as any).id);
+          const categoryLabel = (saved as any).categoryName || saved.category || "Support";
+          const consultantKey = `fin_notifs_CONSULTANT_${assignedConsultantId}`;
+          const prev: any[] = JSON.parse(localStorage.getItem(consultantKey) || "[]");
+          localStorage.setItem(consultantKey, JSON.stringify([{
+            id: `assign_${(saved as any).id}_${Date.now()}`,
+            type: "warning",
+            title: `New Ticket Assigned — #${ticketNum}`,
+            message: `You have been assigned a new ${saved.priority || "MEDIUM"} priority ticket in ${categoryLabel}.`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            ticketId: (saved as any).id,
+          }, ...prev].slice(0, 50)));
+        }
+      } catch { /* non-fatal — localStorage may be unavailable */ }
+
+      // Trigger 2: notifyTicketCreated
+      // Always fires — confirms submission to the user immediately via their
+      // notification bell, before the backend email even goes out.
+      try {
+        const ticketNum = (saved as any).ticketNumber || String((saved as any).id);
+        const categoryLabel = (saved as any).categoryName || saved.category || "Support";
+        addLocalNotification(userId, {
+          type: "success",
+          title: `Ticket #${ticketNum} Submitted`,
+          message: `Your ticket has been received in ${categoryLabel}. ${(saved as any).consultantId ? "A consultant has been assigned." : "A consultant will be assigned shortly."}`,
+          ticketId: (saved as any).id,
+        });
+      } catch { /* non-fatal */ }
+      // ─────────────────────────────────────────────────────────────────────
+
       onCreated(saved as Ticket);
     } catch (e: any) {
       clearTimeout(slowHintTimer);
@@ -1175,7 +1225,26 @@ const CreateTicketModal: React.FC<{
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000, backdropFilter: "blur(3px)" }} onClick={onClose}>
       <div style={{ background: "#fff", borderRadius: 20, width: 500, maxWidth: "95vw", boxShadow: "0 24px 80px rgba(0,0,0,0.3)", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
         <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "22px 24px" }}>
-          <h3 style={{ margin: 0, color: "#fff", fontSize: 17, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}><Ticket size={18} /> Raise a Support Ticket</h3>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" as const }}>
+            <h3 style={{ margin: 0, color: "#fff", fontSize: 17, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}><Ticket size={18} /> Raise a Support Ticket</h3>
+            <div style={{ display: "flex", alignItems: "center", borderRadius: 999, overflow: "hidden", border: "1px solid rgba(255,255,255,0.22)", background: "rgba(255,255,255,0.12)" }}>
+              <button
+                type="button"
+                style={{ padding: "6px 10px", fontSize: 11, fontWeight: 800, border: "none", background: "rgba(255,255,255,0.18)", color: "#fff", cursor: "default" }}
+              >
+                Raise Ticket
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenEmailToTicket?.()}
+                style={{ padding: "6px 10px", fontSize: 11, fontWeight: 800, border: "none", background: "transparent", color: "#DBEAFE", cursor: onOpenEmailToTicket ? "pointer" : "default" }}
+                title={onOpenEmailToTicket ? "Create tickets by sending an email" : "Email-to-ticket unavailable"}
+                disabled={!onOpenEmailToTicket}
+              >
+                Email to Ticket
+              </button>
+            </div>
+          </div>
           <p style={{ margin: "4px 0 0", color: "#BFDBFE", fontSize: 13 }}>Our team will respond within the SLA window.</p>
         </div>
         <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1202,7 +1271,7 @@ const CreateTicketModal: React.FC<{
               >
                 <option value="">— Select category —</option>
                 {categories.map(c => (
-                  <option key={c} value={c}>{c}</option>
+                  <option key={c.name} value={c.name}>{c.name}</option>
                 ))}
               </select>
             )}
@@ -1271,6 +1340,125 @@ const CreateTicketModal: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// EMAIL → TICKET MODAL (opens user's mail client)
+// ─────────────────────────────────────────────────────────────────────────────
+const EmailToTicketModal: React.FC<{
+  onClose: () => void;
+}> = ({ onClose }) => {
+  const [subject, setSubject] = useState("Support Request");
+  const [body, setBody] = useState(
+    "Hi Support Team,\n\nI need help with:\n\n- Issue:\n- Steps to reproduce:\n- Expected result:\n- Actual result:\n\nThanks,\n"
+  );
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copyText = async (label: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setCopied(label);
+        setTimeout(() => setCopied(null), 1500);
+      } catch { /* ignore */ }
+    }
+  };
+
+  const openMailClient = () => {
+    const to = SUPPORT_EMAIL;
+    const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = url;
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 16 }}>
+      <div style={{ width: "min(760px, 96vw)", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}>
+        <div style={{ padding: "16px 18px", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <Mail size={18} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, lineHeight: 1.2 }}>Email to Ticket</div>
+              <div style={{ fontSize: 12, opacity: 0.9, marginTop: 3 }}>
+                Send an email to create a ticket automatically
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close"
+            style={{ width: 34, height: 34, borderRadius: 10, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.12)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" as const }}>
+            <div style={{ fontSize: 13, color: "#1E3A8A", fontWeight: 700 }}>
+              To: <span style={{ color: "#2563EB" }}>{SUPPORT_EMAIL}</span>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
+              <button onClick={() => copyText("Address copied", SUPPORT_EMAIL)}
+                style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #BFDBFE", background: "#fff", color: "#1E40AF", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Copy Address
+              </button>
+              <button onClick={openMailClient}
+                style={{ padding: "8px 12px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#10B981,#059669)", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                Open Email App
+              </button>
+            </div>
+          </div>
+
+          {copied && (
+            <div style={{ marginBottom: 12, fontSize: 12, fontWeight: 700, color: "#16A34A" }}>{copied}</div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Subject
+              </label>
+              <input value={subject} onChange={e => setSubject(e.target.value)}
+                placeholder="E.g., Billing: refund request"
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #E2E8F0", outline: "none", fontSize: 13, boxSizing: "border-box" as const }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Message
+              </label>
+              <textarea value={body} onChange={e => setBody(e.target.value)}
+                rows={10}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #E2E8F0", outline: "none", fontSize: 13, boxSizing: "border-box" as const, resize: "vertical" }}
+              />
+              <div style={{ marginTop: 8, fontSize: 12, color: "#64748B", lineHeight: 1.55 }}>
+                Tip: Attach screenshots/documents in your email. Your email will be converted into a ticket and visible in your Tickets list.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" as const }}>
+            <button onClick={() => copyText("Template copied", `To: ${SUPPORT_EMAIL}\nSubject: ${subject}\n\n${body}`)}
+              style={{ padding: "10px 14px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#0F172A", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+              Copy Template
+            </button>
+            <button onClick={openMailClient}
+              style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>
+              Send Email
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TICKET DETAIL MODAL
 // ─────────────────────────────────────────────────────────────────────────────
 const TicketDetailModal: React.FC<{
@@ -1327,6 +1515,12 @@ const TicketDetailModal: React.FC<{
       setComments(p => [...p, (saved as TicketComment) || optimistic]);
       setMessage("");
       if (ticket.status === "NEW") onStatusChange(ticket.id, "OPEN");
+      // Fire email to consultant (ticket owner) — non-fatal
+      const consultantEmailTc = (ticket as any).consultantEmail || (ticket as any).assignedToEmail || '';
+      const ticketNumCmt = String((ticket as any).ticketNumber || ticket.id);
+      if (consultantEmailTc) {
+        emailOnTicketUpdated({ to: consultantEmailTc, ticketNumber: ticketNumCmt, status: ticket.status }).catch(() => null);
+      }
     } catch {
       setComments(p => [...p, optimistic]);
       setMessage("");
@@ -1498,6 +1692,12 @@ const TicketDetailModal: React.FC<{
                 try {
                   await updateTicketStatus(ticket.id, "CLOSED");
                   onStatusChange(ticket.id, "CLOSED");
+                  // Fire status email to user — non-fatal
+                  const userEmailCl = currentUser?.email || '';
+                  const ticketNumCl = String((ticket as any).ticketNumber || ticket.id);
+                  if (userEmailCl) {
+                    emailOnTicketUpdated({ to: userEmailCl, ticketNumber: ticketNumCl, status: 'CLOSED' }).catch(() => null);
+                  }
                   onClose();
                 } catch { /* skip */ }
               }} style={{ padding: "10px 20px", border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1523,7 +1723,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [avatarPreview, setAvatarPreview] = useState<string>("");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  const [form, setForm] = useState({ name: "", email: "", location: "", phone: "" });
+  const [form, setForm] = useState({ name: "", email: "", location: "", phone: "", designation: "", organizationName: "" });
 
   // ── Subscription plans state ──
   const [plans, setPlans] = useState<SubscriptionPlanDetail[]>([]);
@@ -1556,6 +1756,8 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           subscriptionPlanName: merged.subscriptionPlanName || merged.planName || merged.subscriptionPlan?.name || "",
           subscriptionPlanId: merged.subscriptionPlanId || merged.subscriptionPlan?.id || null,
           phone: merged.phone || merged.phoneNumber || merged.mobile || "",
+          designation: merged.designation || "",
+          organizationName: merged.organizationName || merged.organization_name || "",
           createdAt: merged.createdAt || merged.registeredAt || "",
           incomes: (merged.incomes || merged.incomeItems || []).map((i: any) => ({ incomeType: i.incomeType || i.label || "Income", incomeAmount: i.incomeAmount ?? i.amount ?? 0 })),
           expenses: (merged.expenses || merged.expenseItems || []).map((e: any) => ({ expenseType: e.expenseType || e.label || "Expense", expenseAmount: e.expenseAmount ?? e.amount ?? 0 })),
@@ -1565,7 +1767,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         if (existingPhoto) setAvatarPreview(resolvePhotoUrl(existingPhoto));
         setProfile(normalized);
         setSelectedPlanId(normalized.subscriptionPlanId ?? null);
-        setForm({ name: normalized.name || "", email: normalized.email || "", location: normalized.location || "", phone: normalized.phone || "" });
+        setForm({ name: normalized.name || "", email: normalized.email || "", location: normalized.location || "", phone: normalized.phone || "", designation: normalized.designation || "", organizationName: normalized.organizationName || "" });
       } catch { setProfile(null); }
       finally { setLoading(false); }
     })();
@@ -1615,9 +1817,21 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   const handleSave = async () => {
     if (!profile?.id) return;
+    if (!phoneIsValid) {
+      setSaveMsg("ERROR::Phone number is mandatory (10 digits).");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     setSaving(true); setSaveMsg("");
     try {
-      const payload = { name: form.name.trim(), email: form.email.trim(), location: form.location.trim(), phoneNumber: form.phone.trim() };
+      const payload: any = {
+        name: form.name.trim(),
+        email: form.email.trim(),
+        location: form.location.trim(),
+        phoneNumber: phoneDigitsForRequests,
+        ...(form.designation.trim() ? { designation: form.designation.trim() } : {}),
+        ...(form.organizationName.trim() ? { organizationName: form.organizationName.trim() } : {}),
+      };
       const onboardingForm = new FormData();
       onboardingForm.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
       if (avatarFile) onboardingForm.append("file", avatarFile);
@@ -1632,12 +1846,17 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // ── Change plan via PUT /onboarding/{id} with subscriptionPlanId ──
   const handleChangePlan = async (planId: number) => {
     if (!profile?.id) return;
+    if (!phoneIsValid) {
+      setSaveMsg("ERROR::Add a valid 10-digit phone number before changing plan.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     setPlanSaving(true); setSaveMsg("");
     try {
       const token = localStorage.getItem("fin_token");
       const headers: Record<string, string> = { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
       // Use the onboarding PUT endpoint with subscriptionPlanId — matches backend UpdateUserRegistrationRequest
-      const payload = { subscriptionPlanId: planId, phoneNumber: profile.phone || form.phone || "0000000000" };
+      const payload = { subscriptionPlanId: planId, phoneNumber: phoneDigitsForRequests };
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
       const res = await fetch(`${BASE_URL}/onboarding/${profile.id}`, { method: "PUT", headers, body: fd });
@@ -1676,6 +1895,9 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const totalExpense = (profile.expenses || []).reduce((s, e) => s + (Number(e.expenseAmount) || 0), 0);
   const fmtDate = (d?: string) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
   const inputStyle: React.CSSProperties = { width: "100%", padding: "9px 12px", border: "1.5px solid #BFDBFE", borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none", background: "#F8FBFF", color: "#1E293B", boxSizing: "border-box" };
+  const phoneDigitsForRequests = (form.phone || "").replace(/\D/g, "").slice(0, 10);
+  const phoneIsValid = phoneDigitsForRequests.length === 10;
+  const canSaveProfile = !saving && phoneIsValid && (form.name || "").trim().length >= 2 && (form.email || "").trim().length > 0;
 
   // Determine the "SUBSCRIBED" vs "GUEST" type badge
   const isSubscribedType = selectedPlanId != null
@@ -1699,7 +1921,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           ? <button onClick={() => setEditing(true)} style={{ padding: "8px 18px", borderRadius: 8, border: "1.5px solid #2563EB", background: "#EFF6FF", color: "#2563EB", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Edit</button>
           : <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setEditing(false)} disabled={saving} style={{ padding: "8px 16px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={handleSave} disabled={saving} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: saving ? "#93C5FD" : "#2563EB", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>{saving ? "Saving…" : "Save"}</button>
+            <button onClick={handleSave} disabled={!canSaveProfile} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: !canSaveProfile ? "#E2E8F0" : (saving ? "#93C5FD" : "#2563EB"), color: !canSaveProfile ? "#94A3B8" : "#fff", fontWeight: 700, fontSize: 13, cursor: !canSaveProfile ? "not-allowed" : "pointer" }}>{saving ? "Saving…" : "Save"}</button>
           </div>
         }
       </div>
@@ -1747,7 +1969,12 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div style={{ padding: "14px 20px 12px", borderBottom: "1px solid #F1F5F9", fontWeight: 700, fontSize: 13, color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em", display: "flex", alignItems: "center", gap: 6 }}><User size={13} style={{ flexShrink: 0 }} /> Personal Details</div>
         {editing ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "16px 20px" }}>
-            {([{ label: "Full Name", key: "name", type: "text" }, { label: "Email", key: "email", type: "email" }, { label: "Location", key: "location", type: "text" }, { label: "Phone", key: "phone", type: "tel" }] as const).map(field => {
+            {([
+              { label: "Full Name", key: "name", type: "text" },
+              { label: "Email", key: "email", type: "email" },
+              { label: "Location", key: "location", type: "text" },
+              { label: "Phone", key: "phone", type: "tel" },
+            ] as const).map(field => {
               const phoneDigits = field.key === "phone" ? (form.phone || "").replace(/\D/g, "") : "";
               return (
                 <div key={field.key}>
@@ -1796,7 +2023,13 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-            {[{ label: "Email", value: profile.email || "—" }, { label: "Location", value: profile.location || "—" }, { label: "Phone", value: profile.phone || "—" }, { label: "Plan", value: currentPlanName || "—" }, { label: "Member Since", value: (profile as any).memberSince ? new Date((profile as any).memberSince).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "—" }].map(d => (
+            {[
+              { label: "Email", value: profile.email || "—" },
+              { label: "Location", value: profile.location || "—" },
+              { label: "Phone", value: profile.phone || "—" },
+              { label: "Plan", value: currentPlanName || "—" },
+              { label: "Member Since", value: (profile as any).memberSince ? new Date((profile as any).memberSince).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "—" },
+            ].map(d => (
               <div key={d.label} style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", borderRight: "1px solid #F1F5F9" }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>{d.label}</div>
                 <div style={{ fontSize: 14, fontWeight: 600, color: "#0F172A" }}>{d.value}</div>
@@ -1905,8 +2138,8 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               )}
               <button
                 onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
-                disabled={planSaving || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()}
-                style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
+                disabled={planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()}
+                style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
                 {planSaving ? "Updating…" : "Change Plan"}
               </button>
             </div>
@@ -2671,6 +2904,7 @@ export default function UserPage() {
   const [ticketFilter, setTicketFilter] = useState<"ALL" | TicketStatus>("ALL");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [showCreateTicket, setShowCreateTicket] = useState(false);
+  const [showEmailToTicket, setShowEmailToTicket] = useState(false);
   const [showFreeTrialAlert, setShowFreeTrialAlert] = useState(() => sessionStorage.getItem("mtm_free_trial_alert_dismissed") !== "true");
   const [showGuestTrialExpiredPopup, setShowGuestTrialExpiredPopup] = useState(false);
   const [guestTrialDaysRemaining, setGuestTrialDaysRemaining] = useState(() => getGuestTrialDaysRemaining());
@@ -2812,7 +3046,10 @@ export default function UserPage() {
         }
       });
 
-      const skillArr = Array.from(allSkills).sort((a, b) => a.localeCompare(b));
+      // Filter out numeric-only junk or very short tags that ruin UI pills
+      const skillArr = Array.from(allSkills)
+        .filter(s => s && s.trim().length > 1 && !/^\d+$/.test(s.trim()))
+        .sort((a, b) => a.localeCompare(b));
 
       // FIX: If backend and consultant profiles returned zero skill categories,
       // fall back to a hardcoded list so the filter chips always appear
@@ -3101,8 +3338,23 @@ export default function UserPage() {
     };
     return map[s] ?? s;
   };
+  const resolveTicketCategory = (t: any): string => {
+    const raw = t?.category;
+    if (raw && typeof raw === "object") {
+      // Backend returned category as nested object { id, name }
+      return String(raw.name || raw.categoryName || raw.label || raw.id || "");
+    }
+    // Prefer string category, fall back to categoryName variants
+    const str = String(raw || t?.categoryName || t?.category_name || t?.categoryTitle || "").trim();
+    return str || "";
+  };
+
   const normalizeTickets = (raw: any[]): Ticket[] =>
-    raw.map((t: any) => ({ ...t, status: normalizeTicketStatus(t.status) }))
+    raw.map((t: any) => ({
+      ...t,
+      status: normalizeTicketStatus(t.status),
+      category: resolveTicketCategory(t),
+    }))
       .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as Ticket[];
 
   const fetchTickets = async () => {
@@ -3607,7 +3859,7 @@ export default function UserPage() {
       const consultantMasterSlots = (Array.isArray(consultantMasterSlotsRaw) ? consultantMasterSlotsRaw : extractArray(consultantMasterSlotsRaw))
         .map((slot: any) => ({
           id: Number(slot?.id || 0),
-          timeRange: String(slot?.timeRange || "").trim(),
+          timeRange: String(slot?.timeRange || slot?.time_range || "").trim(),
           durationMinutes: Number(slot?.duration || slot?.durationMinutes || 60) || 60,
         }))
         .filter((slot: { id: number; timeRange: string; durationMinutes: number }) => slot.id > 0 && !!slot.timeRange);
@@ -3617,7 +3869,7 @@ export default function UserPage() {
       );
       const availableSlotCount = Array.from(new Set(
         (Array.isArray(availabilityRaw) ? availabilityRaw : extractArray(availabilityRaw))
-          .map((slot: any) => normalise24(slot?.slotTime || parseLocalTime(slot?.slotTime) || slot?.timeRange || ""))
+          .map((slot: any) => normalise24(slot?.slotTime || slot?.slot_time || parseLocalTime(slot?.slotTime || slot?.slot_time) || slot?.timeRange || slot?.time_range || ""))
           .filter(Boolean)
       )).length;
       const derivedShiftSlotCount = getShiftSlotCount(c.shiftStartTime, c.shiftEndTime, consultantSlotDurationMinutes);
@@ -3680,12 +3932,13 @@ export default function UserPage() {
 
       const normalisedAvailability = (Array.isArray(availabilityRaw) ? availabilityRaw : extractArray(availabilityRaw))
         .map((s: any): AvailableSpecialSlot | null => {
-          const slotDate = s?.slotDate || s?.bookingDate || s?.date || "";
-          const slotTime = normalise24(s?.slotTime || parseLocalTime(s?.slotTime) || s?.timeRange || "");
+          const slotDate = s?.slotDate || s?.slot_date || s?.bookingDate || s?.date || "";
+          const slotTime = normalise24(s?.slotTime || s?.slot_time || parseLocalTime(s?.slotTime || s?.slot_time) || s?.timeRange || s?.time_range || "");
           if (!slotDate || !slotTime) return null;
           const masterTimeSlotId = Number(s?.masterTimeSlotId ?? s?.master_timeslot_id ?? s?.masterTimeSlot?.id ?? 0) || undefined;
           const masterRange = masterTimeSlotId ? masterSlotRangeById[masterTimeSlotId] : "";
           const label = s?.timeRange
+            || s?.time_range
             || s?.masterTimeSlot?.timeRange
             || s?.masterTimeslot?.timeRange
             || masterRange
@@ -3806,14 +4059,8 @@ export default function UserPage() {
         setSpecialBookingHours(1);
       } else if (firstDaySlots[0]) {
         setBookingMode("STANDARD");
-        const firstSlot = firstDaySlots[0];
-        const firstLabel = firstSlot.timeRange || formatSpecialTimeRange(firstSlot.slotTime, consultantSlotDurationHours);
-        setSelectedSlot({
-          start24h: firstSlot.slotTime,
-          label: firstLabel,
-          masterId: Number(firstSlot.masterTimeSlotId || 0),
-          timeslotId: Number(firstSlot.id || 0) > 0 ? Number(firstSlot.id) : undefined,
-        });
+        // FIX: Do not auto-select the first slot. Set selectedSlot to null to force manual selection.
+        setSelectedSlot(null);
         setSpecialBookingHours(1);
       }
     } catch (e) { console.error("Modal data load failed:", e); }
@@ -3907,6 +4154,16 @@ export default function UserPage() {
           timestamp: new Date().toISOString(),
           read: false,
         }, ...prev].slice(0, 50));
+        // Fire special booking request emails — non-fatal
+        const userEmailSp = currentUser?.email || '';
+        const consultantEmailSp = consultant.email || '';
+        const hoursReq = specialMeta?.hours ?? 1;
+        if (userEmailSp) {
+          emailOnSpecialBookingRequestUser({ to: userEmailSp, bookingId, hours: hoursReq, consultantEmail: consultantEmailSp, meetingMode }).catch(() => null);
+        }
+        if (consultantEmailSp) {
+          emailOnSpecialBookingRequestConsultant({ to: consultantEmailSp, bookingId, hours: hoursReq, clientEmail: userEmailSp, meetingMode, userNotes: buildSpecialBookingNotes(specialMeta) }).catch(() => null);
+        }
         setTab("bookings");
         await fetchBookings();
         setTimeout(() => {
@@ -4104,6 +4361,15 @@ export default function UserPage() {
       }
       succeeded.forEach(({ slot, bookingId }) => {
         sendBookingEmails({ bookingId, slotDate: slot.dayIso, timeRange: slot.label, meetingMode, amount: selectedConsultant!.fee, userName: currentUser?.name || "User", userEmail: currentUser?.email || "", consultantName: selectedConsultant!.name, consultantEmail, userNotes: userNotes || "" }).catch(() => { });
+        // Also fire EmailService-backed confirmation emails — non-fatal
+        const userEmailBk = currentUser?.email || '';
+        const amountStr = String(selectedConsultant!.fee ?? 0);
+        if (userEmailBk) {
+          emailOnBookingConfirmedUser({ to: userEmailBk, bookingId, meetingMode, amount: amountStr, discountAmount: '0', meetingLink: '' }).catch(() => null);
+        }
+        if (consultantEmail) {
+          emailOnBookingAlertConsultant({ to: consultantEmail, bookingId, meetingMode, clientEmail: userEmailBk, meetingLink: '' }).catch(() => null);
+        }
       });
 
     } catch (err: any) {
@@ -4130,11 +4396,6 @@ export default function UserPage() {
       const matchesTabCategory = category === "All Consultants" ||
         c.role.toLowerCase().includes(normalizedCategory) ||
         (c.tags || []).some(t => t.toLowerCase().includes(normalizedCategory) || normalizedCategory.includes(t.toLowerCase()));
-      // After onboarding: only show consultants that have at least one matching skill
-      if (hasOnboardingCategories && category === "All Consultants" && !search) {
-        const score = getConsultantScore(c);
-        return score > 0;
-      }
       return matchesSearch && matchesTabCategory;
     })
     .sort((a, b) => {
@@ -4147,9 +4408,7 @@ export default function UserPage() {
     });
 
   // If filter produces 0 results after onboarding, fall back to all consultants
-  const displayList = (hasOnboardingCategories && filteredList.length === 0 && category === "All Consultants" && !search)
-    ? consultants.sort((a, b) => b.rating - a.rating)
-    : filteredList;
+  const displayList = filteredList;
 
   const specialAvailabilityByDate = specialAvailabilitySlots.reduce((acc, slot) => {
     if (!slot?.slotDate || !slot?.slotTime) return acc;
@@ -4708,7 +4967,7 @@ export default function UserPage() {
                               <div style={{ width: 8, height: 8, borderRadius: "50%", background: getStatusColor(status), flexShrink: 0 }} />
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {special.isSpecial ? `Special Booking with ${b.consultantName}` : `Session with ${b.consultantName}`}
+                                  {special.isSpecial ? `Special Booking with ${b.consultantName || b.consultant?.name || "Consultant"}` : `Session with ${b.consultantName || b.consultant?.name || "Consultant"}`}
                                 </div>
                                 <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{displayTime} · {displayMode}</div>
                               </div>
@@ -4781,7 +5040,7 @@ export default function UserPage() {
                       <div className="up-card-header">
                         <div className="up-calendar-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round" /></svg></div>
                         <div className="up-card-info">
-                          <div className="up-session-title">{special.isSpecial ? `Special Booking with ${b.consultantName}` : `Session with ${b.consultantName}`}</div>
+                          <div className="up-session-title">{special.isSpecial ? `Special Booking with ${b.consultantName || b.consultant?.name || "Consultant"}` : `Session with ${b.consultantName || b.consultant?.name || "Consultant"}`}</div>
                           <div className="up-session-date-time">
                             {resolvedDisplayDate}
                             {resolvedDisplayTime && <span className="up-booked-time-pill">{resolvedDisplayTime}</span>}
@@ -4980,9 +5239,23 @@ export default function UserPage() {
             {showCreateTicket && (
               <CreateTicketModal
                 userId={currentUserId}
-                onCreated={t => { setTickets(p => [t, ...p]); setShowCreateTicket(false); setSelectedTicket(t); }}
+                onCreated={t => {
+                  setTickets(p => [t, ...p]);
+                  setShowCreateTicket(false);
+                  setSelectedTicket(t);
+                  // Fire ticket-created email — non-fatal
+                  const userEmailTc = currentUser?.email || '';
+                  const ticketNumTc = String((t as any).ticketNumber || t.id);
+                  if (userEmailTc) {
+                    emailOnTicketCreated({ to: userEmailTc, ticketNumber: ticketNumTc, category: t.category || 'Support' }).catch(() => null);
+                  }
+                }}
+                onOpenEmailToTicket={() => { setShowCreateTicket(false); setShowEmailToTicket(true); }}
                 onClose={() => setShowCreateTicket(false)}
               />
+            )}
+            {showEmailToTicket && (
+              <EmailToTicketModal onClose={() => setShowEmailToTicket(false)} />
             )}
 
             {/* Header */}
@@ -4990,6 +5263,10 @@ export default function UserPage() {
               <h2 className="up-section-title" style={{ margin: 0 }}>Support Tickets</h2>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={fetchTickets} disabled={loading.tickets} className="up-ticket-refresh-btn">{loading.tickets ? <><Clock size={12} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Loading</> : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><RefreshCw size={12} /> Refresh</span>}</button>
+                <button onClick={() => setShowEmailToTicket(true)}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: "1.5px solid #BFDBFE", background: "#EFF6FF", color: "#1E40AF", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Mail size={12} /> Email to Ticket
+                </button>
                 {(() => {
                   const role = (getLocalRole()).toUpperCase().replace(/^ROLE_/, "");
                   // MEMBER = admin-created full-access user. GUEST in trial also allowed.
@@ -5021,7 +5298,7 @@ export default function UserPage() {
                   You can also raise a support ticket by <strong>sending an email directly to our support inbox</strong>.
                   Your email will be automatically converted into a ticket and our team will respond here.
                   <br />
-                  <span style={{ color: "#2563EB", fontWeight: 600 }}>support@meetthemasters.in</span>
+                  <span style={{ color: "#2563EB", fontWeight: 600 }}>{SUPPORT_EMAIL}</span>
                   {" "}· Use keywords like "urgent" or "billing" to set priority automatically.
                 </div>
               </div>
@@ -5586,7 +5863,6 @@ export default function UserPage() {
 
                 <div className="up-settings-card">
                   <div className="up-settings-item" onClick={() => setSettingsView("profile")}><span>Account Profile</span><span style={{ display: "flex", alignItems: "center" }}><ArrowRight size={15} /></span></div>
-                  <div className="up-settings-item" onClick={() => setSettingsView("notifications")}><span>Notifications</span><span style={{ display: "flex", alignItems: "center" }}><ArrowRight size={15} /></span></div>
                   <div className="up-settings-item" onClick={() => { setChangingPassword(false); setPrivacyPwForm({ current: "", newPass: "", confirm: "" }); setPrivacyPwError(""); setPrivacyPwSuccess(""); setSettingsView("privacy"); }}><span>Privacy &amp; Security</span><span style={{ display: "flex", alignItems: "center" }}><ArrowRight size={15} /></span></div>
                   <div className="up-settings-item up-settings-item-danger" onClick={handleLogout}><span>Log Out</span></div>
                 </div>
@@ -6479,11 +6755,7 @@ export default function UserPage() {
 
                 {/* Action buttons */}
                 <div style={{ display: "flex", gap: 10 }}>
-                  <button
-                    onClick={() => { setShowCategoryModal(false); setTempSelectedCategories([]); }}
-                    style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                    Cancel
-                  </button>
+
                   <button
                     onClick={() => handleSaveMultiCategories(tempSelectedCategories)}
                     disabled={tempSelectedCategories.length === 0}
@@ -7031,7 +7303,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
               {/* Info banner */}
               <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "10px 14px", marginBottom: 18 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B45309" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                <span style={{ fontSize: 12, color: "#92400E", fontWeight: 600, lineHeight: 1.5 }}>Your initial password was sent to your registered email. Enter a NEW password below that is different from it.</span>
+                <span style={{ fontSize: 12, color: "#92400E", fontWeight: 600, lineHeight: 1.5 }}>Your initial password was sent to your registered email. Set a secure new password below to continue.</span>
               </div>
 
               {pwError && (
@@ -7118,7 +7390,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                   { rule: "At least 8 characters", met: pwForm.newPass.length >= 8 },
                   { rule: "Uppercase letter (A–Z)", met: /[A-Z]/.test(pwForm.newPass) },
                   { rule: "Number (0–9)", met: /[0-9]/.test(pwForm.newPass) },
-                  { rule: "Different from temporary password", met: pwForm.newPass.length > 0 },
+                  { rule: "Special character (recommended)", met: /[^A-Za-z0-9]/.test(pwForm.newPass) },
                 ].map(r => (
                   <div key={r.rule} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: r.met ? "#16A34A" : "#94A3B8", marginBottom: 4 }}>
                     {r.met
@@ -7158,11 +7430,6 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                         if (r.ok || r.status === 200 || r.status === 204) { ok = true; break; }
                         // 400 means wrong payload shape but endpoint exists - still mark ok
                         if (r.status === 400) {
-                          const d = await r.json().catch(() => ({}));
-                          if (d?.message?.toLowerCase().includes("same")) {
-                            setPwError("New password must be different from your current password.");
-                            setPwSaving(false); return;
-                          }
                           ok = true; break; // 400 but endpoint reached — treat as attempted
                         }
                       } catch { /* try next */ }

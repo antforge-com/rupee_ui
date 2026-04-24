@@ -4,24 +4,36 @@ export const normalizeSpaces = (value: string): string =>
 export const stripLeadingNumberText = (value: string): string =>
     String(value ?? "").replace(/^\s*\d+\s*/, "");
 
+export const stripNonAlphabeticText = (value: string): string =>
+    String(value ?? "").replace(/[^A-Za-z\s]/g, " ");
+
 export const startsWithNumber = (value: string): boolean =>
     /^\d/.test(String(value ?? "").trimStart());
+
+export const startsWithLetter = (value: string): boolean =>
+    /^[a-zA-Z]/.test(String(value ?? "").trimStart());
+
+export const startsWithCapital = (value: string): boolean =>
+    /^[A-Z]/.test(String(value ?? "").trimStart());
+
+export const isValidEmail = (email: string): boolean =>
+    /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(email);
 
 const capitalizeWord = (word: string): string =>
     word ? word.charAt(0).toUpperCase() + word.slice(1).toLowerCase() : "";
 
 export const toTitleCaseWords = (value: string): string =>
-    normalizeSpaces(stripLeadingNumberText(value))
+    normalizeSpaces(stripNonAlphabeticText(stripLeadingNumberText(value)))
         .split(" ")
         .filter(Boolean)
-        .map((word) => word.split("-").map(capitalizeWord).join("-"))
+        .map(capitalizeWord)
         .join(" ");
 
 export const formatNameLikeValue = (value: string): string =>
     toTitleCaseWords(value);
 
 export const formatNameLikeInput = (value: string): string => {
-    const sanitized = stripLeadingNumberText(String(value ?? "")).replace(/^\s+/, "");
+    const sanitized = stripNonAlphabeticText(stripLeadingNumberText(String(value ?? ""))).replace(/^\s+/, "");
     if (!sanitized) return "";
     const hasTrailingSpace = /\s$/.test(sanitized);
     const normalized = toTitleCaseWords(sanitized);
@@ -29,7 +41,7 @@ export const formatNameLikeInput = (value: string): string => {
 };
 
 export const capitalizeFirstCharacter = (value: string): string => {
-    const sanitized = stripLeadingNumberText(String(value ?? ""));
+    const sanitized = normalizeSpaces(stripNonAlphabeticText(stripLeadingNumberText(String(value ?? ""))));
     const index = sanitized.search(/[A-Za-z]/);
     if (index < 0) return sanitized;
     return `${sanitized.slice(0, index)}${sanitized.charAt(index).toUpperCase()}${sanitized.slice(index + 1)}`;

@@ -234,7 +234,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
               </button>
             </div>
             <div className="badge badge-warning" style={{ marginBottom: 16, width: '100%', justifyContent: 'flex-start', padding: '10px 14px' }}>
-              <Lock size={16} /> New password must be different
+              <Lock size={16} /> Choose a strong new password
             </div>
             <label className="label-base">NEW PASSWORD</label>
             <PasswordInput value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
@@ -295,6 +295,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [errorType, setErrorType] = useState<ErrorType>("");
+  const [slowAuthHint, setSlowAuthHint] = useState(false);
 
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -344,14 +345,16 @@ export default function LoginPage() {
     if (msg.includes("cannot connect") || msg.includes("failed to fetch") ||
       msg.includes("networkerror") || msg.includes("load failed"))
       return { msg: "Cannot reach the server. Please check your connection.", type: "network" };
+    if (msg.includes("taking too long") || msg.includes("timed out"))
+      return { msg: "Login is taking longer than expected. Please try again, or use Forgot Password if needed.", type: "auth" };
     if (msg.includes("500") || msg.includes("internal server"))
       return { msg: "Server error occurred. Please try again later.", type: "server" };
     if (msg.includes("already registered") || msg.includes("already exists") || msg.includes("conflict"))
       return { msg: "Email already registered. Please log in or reset password.", type: "registered" };
     if (msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") ||
       msg.includes("invalid") || msg.includes("bad credentials") || msg.includes("incorrect"))
-      return { msg: "Incorrect email or password. If you recently changed your password, please use Forgot Password to reset it.", type: "auth" };
-    return { msg: err?.message || "Login failed. Please try Forgot Password if you recently changed your password.", type: "auth" };
+      return { msg: "Incorrect email or password. Please try again or use Forgot Password.", type: "auth" };
+    return { msg: err?.message || "Login failed. Please try again or use Forgot Password.", type: "auth" };
   };
 
   const handleLogin = async () => {
@@ -363,8 +366,10 @@ export default function LoginPage() {
     if (!termsAccepted) { shakeTerms(); return; }
 
     setLoading(true);
+    setSlowAuthHint(false);
     setApiError("");
     setErrorType("");
+    const slowHintTimer = window.setTimeout(() => setSlowAuthHint(true), 4000);
 
     try {
       // ── api.ts loginUser already:
@@ -415,9 +420,12 @@ export default function LoginPage() {
       //   might block navigate() if it runs before the router context updates
       const destination = getDestinationForRole(finalRole);
       console.log(`✅ Redirecting → ${destination}`);
+      window.clearTimeout(slowHintTimer);
       window.location.href = destination;
 
     } catch (err: any) {
+      window.clearTimeout(slowHintTimer);
+      setSlowAuthHint(false);
       const { msg, type } = classifyError(err);
       setApiError(msg);
       setErrorType(type);
@@ -564,6 +572,12 @@ export default function LoginPage() {
             }} /> Authenticating...</>
             : "Login to Account"}
         </button>
+        {loading && slowAuthHint && (
+          <div className="badge badge-warning" style={{ marginTop: 12, width: "100%", justifyContent: "flex-start", padding: "10px 14px", textTransform: "none" }}>
+            <AlertTriangle size={16} />
+            Authentication is taking longer than usual. If the password is incorrect, the server should return an error shortly.
+          </div>
+        )}
 
         <p className="auth-footer-text">
           Don't have an account?{" "}

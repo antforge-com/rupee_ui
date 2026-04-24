@@ -28,7 +28,7 @@ import React, {
   useState,
 } from "react";
 import { buildApiUrl } from "../config/api";
-import { getUserDisplayName } from "../services/api";
+import { getUserDisplayName, markNotificationAsRead } from "../services/api";
 import { decryptLocal } from "../services/crypto";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,17 +126,30 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const markRead = useCallback((id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    const nid = Number(id);
+    if (!isNaN(nid)) markNotificationAsRead(nid).catch(() => { });
   }, []);
 
   const markAllRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    setNotifications(prev => {
+      prev.forEach(n => {
+        if (!n.read) {
+          const nid = Number(n.id);
+          if (!isNaN(nid)) markNotificationAsRead(nid).catch(() => { });
+        }
+      });
+      return prev.map(n => ({ ...n, read: true }));
+    });
   }, []);
 
   const clearAll = useCallback(() => {
     setNotifications([]);
-    // Clear from localStorage immediately so EscalationMonitor re-seed finds nothing
-    try { localStorage.removeItem(STORAGE_KEY()); } catch { }
-    // Persist a sentinel so EscalationMonitor doesn't immediately re-fire on same session
+    const key = STORAGE_KEY();
+    // Clear from localStorage immediately so monitors re-seed finds nothing
+    try { localStorage.removeItem(key); } catch { }
+    // Persist a sentinel so monitors don't immediately re-fire on same session
+    try { localStorage.setItem(`${key}_CLEARED_AT`, String(Date.now())); } catch { }
+    // Legacy sentinel for EscalationMonitor
     try { localStorage.setItem("fin_notifs_alerted_cleared", String(Date.now())); } catch { }
   }, []);
 
@@ -571,7 +584,12 @@ export const UserNotificationMonitor: React.FC<UserNotificationMonitorProps> = (
       const raw = localStorage.getItem(`fin_notifs_USER_${userId}`);
       if (!raw) return;
       const items: any[] = JSON.parse(raw);
-      const fresh = items.filter(n => n?.id && !importedIds.current.has(String(n.id)));
+      const clearedAt = Number(localStorage.getItem(`fin_notifs_USER_${userId}_CLEARED_AT`) || 0);
+      const fresh = items.filter(n => {
+        if (!n?.id || importedIds.current.has(String(n.id))) return false;
+        const createdAt = new Date(n.timestamp || n.createdAt || Date.now()).getTime();
+        return createdAt > clearedAt;
+      });
       if (fresh.length === 0) return;
 
       // Mark them as seen for this session
@@ -679,7 +697,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
       });
 
       if (onNewNotifications) onNewNotifications(fresh);
-    } catch { }
+    } catch { recordFailure(); }
   }, [consultantId, addNotification, onNewNotifications]);
 
   // ── Poll bookings API for status changes ──
@@ -739,6 +757,14 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
           (prevStatus === undefined && (st === "PENDING" || st === "CONFIRMED" || st === "BOOKED"));
 
         if (needsNotif && !isSeeding.current) {
+          // Check if this booking was created after the most recent 'Clear all' action
+          const clearedAt = Number(localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}_CLEARED_AT`) || 0);
+          const createdAt = new Date(b.createdAt || b.created_at || b.timestamp || Date.now()).getTime();
+          if (createdAt <= clearedAt) {
+            seenBookingIds.current.set(id, st);
+            return;
+          }
+
           if (embeddedName) {
             // Name already in booking — use it directly
             buildNotif(embeddedName);
@@ -777,8 +803,25 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
   }, [consultantId, addNotification, onNewNotifications]);
 
   // ── Poll tickets API for assignment and status changes ──
+  const apiFailures = useRef(0);
+  const backoffUntil = useRef(0);
+
+  const isBackingOff = () => Date.now() < backoffUntil.current;
+
+  const recordFailure = () => {
+    apiFailures.current += 1;
+    // Exponential backoff: 1 fail = 30s, 2 = 60s, 3+ = 5 min
+    const backoffMs = apiFailures.current >= 3 ? 5 * 60_000
+      : apiFailures.current === 2 ? 60_000
+        : 30_000;
+    backoffUntil.current = Date.now() + backoffMs;
+    console.warn(`[NotificationSystem] Backend unreachable (${apiFailures.current} failures). Pausing polls for ${backoffMs / 1000}s.`);
+  };
+
+  const recordSuccess = () => { apiFailures.current = 0; backoffUntil.current = 0; };
+
   const pollTickets = useCallback(async () => {
-    if (!consultantId) return;
+    if (!consultantId || isBackingOff()) return;
     try {
       const token = localStorage.getItem("fin_token");
       const res = await fetch(buildApiUrl(`/tickets/consultant/${consultantId}`), {
@@ -798,7 +841,16 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
         if (prevStatus === undefined) {
           // First time seeing — only notify after the initial seed pass
           const notifId = `ticket_new_${id}`;
-          if (!isSeeding.current && !importedIds.current.has(notifId) && ["NEW", "OPEN", "IN_PROGRESS"].includes(st)) {
+          const isRelevant = ["NEW", "OPEN", "IN_PROGRESS"].includes(st);
+          if (!isSeeding.current && !importedIds.current.has(notifId) && isRelevant) {
+            // Check if this ticket was created after the most recent 'Clear all' action
+            const clearedAt = Number(localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}_CLEARED_AT`) || 0);
+            const createdAt = new Date(t.createdAt || t.created_at || t.timestamp || Date.now()).getTime();
+            if (createdAt <= clearedAt) {
+               seenTicketIds.current.set(id, st);
+               return;
+            }
+
             importedIds.current.add(notifId);
             newNotifs.push({ id: notifId, type: "warning", title: `Ticket Assigned${title ? ` — ${title}` : ""}`, message: `"${title}" has been assigned to you. Priority: ${t.priority || "MEDIUM"}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
           }
@@ -816,6 +868,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
         seenTicketIds.current.set(id, st);
       });
 
+      recordSuccess();
       if (newNotifs.length > 0) {
         try {
           const key = `fin_notifs_CONSULTANT_${consultantId}`;
@@ -889,7 +942,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
 export const markNotificationReadOnBackend = async (notifId: string | number): Promise<void> => {
   const token = localStorage.getItem("fin_token");
   try {
-    await fetch(buildApiUrl(`/notifications/${notifId}/mark-read`), {
+    await fetch(buildApiUrl(`/notifications/${notifId}/read`), {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

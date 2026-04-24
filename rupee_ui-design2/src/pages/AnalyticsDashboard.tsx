@@ -416,10 +416,17 @@ const TicketVolumeModule: React.FC<{ tickets: AnalyticsTicket[] }> = ({ tickets 
     });
   }, [tickets, period]);
 
-  const totalCreated = tickets.length;
-  const totalResolved = tickets.filter(t => ["RESOLVED", "CLOSED"].includes(t.status)).length;
-  const totalOpen = tickets.filter(t => ["NEW", "OPEN", "PENDING"].includes(t.status)).length;
-  const resolutionRate = totalCreated > 0 ? Math.round((totalResolved / totalCreated) * 100) : 0;
+  const { totalCreated, totalResolved, totalOpen, resolutionRate } = useMemo(() => {
+    let created = 0;
+    let resolved = 0;
+    chartData.forEach(d => {
+      created += d.created;
+      resolved += d.resolved;
+    });
+    const open = tickets.filter(t => ["NEW", "OPEN", "PENDING"].includes(t.status)).length;
+    const rate = created > 0 ? Math.round((resolved / created) * 100) : 0;
+    return { totalCreated: created, totalResolved: resolved, totalOpen: open, resolutionRate: rate };
+  }, [chartData, tickets]);
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: "1px solid #E2E8F0", padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
@@ -1243,13 +1250,6 @@ const BookingAnalyticsModule: React.FC<{
     URL.revokeObjectURL(url);
   };
 
-  const totalBookings = bookings.length;
-  const completedBookings = bookings.filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b))).length;
-  const totalRevenue = bookings
-    .filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b)))
-    .reduce((sum, b) => sum + getBookingAmount(b), 0);
-  const avgTicketSize = completedBookings > 0 ? Math.round(totalRevenue / completedBookings) : 0;
-
   const chartData = useMemo(() => {
     const dataMap: Record<string, { bookings: number; revenue: number; _isoKey: string }> = {};
 
@@ -1288,6 +1288,21 @@ const BookingAnalyticsModule: React.FC<{
       .map(([label, val]) => ({ label, bookings: val.bookings, revenue: val.revenue, _isoKey: val._isoKey }))
       .sort((a, b) => a._isoKey.localeCompare(b._isoKey));
   }, [bookings, period]);
+
+  const { totalBookings, completedBookings, totalRevenue, avgTicketSize } = useMemo(() => {
+    const currentChart = chartData; // already computed based on period
+    let count = 0;
+    let rev = 0;
+    currentChart.forEach(d => {
+      count += d.bookings;
+      rev += d.revenue;
+    });
+    // For completed/success count, we can derive it from the revenue-generating points or just use the proportion
+    // Actually, it's better to just use the sums from chartData as that's what the user sees
+    const completed = bookings.filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b))).length;
+    const avg = count > 0 ? Math.round(rev / count) : 0;
+    return { totalBookings: count, totalRevenue: rev, completedBookings: completed, avgTicketSize: avg };
+  }, [chartData, bookings]);
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: "1px solid #E2E8F0", padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
@@ -1434,14 +1449,20 @@ const AnalyticsDashboard: React.FC<Props> = ({
     (async () => {
       setLoading(true);
 
-      // ── Tickets: only fetch if parent didn't provide ─────────────────────
-      if (!ticketsProp || ticketsProp.length === 0) {
+      // ── Tickets: always fetch from the analytics endpoint ───────────────
+      // FIX: The old code only fetched when ticketsProp was empty, which meant
+      // that the parent's paginated data (10 rows by default) was used for ALL
+      // analytics computations. We now always call the dedicated unpaginated
+      // analytics endpoint so Ticket Volume, Agent Performance, Response Times
+      // and SLA Breach are computed on the complete dataset.
+      {
         try {
           let arr: AnalyticsTicket[] = [];
           if (mode === "consultant" && consultantId) {
-            // ✅ Only valid endpoint for consultant tickets
+            // FIX: Use /analytics/tickets/consultant — returns ALL consultant tickets
+            // (not paginated) with consultantName, resolvedAt, closedAt and firstResponseAt.
             try {
-              const d = await apiFetch(`/tickets/consultant/${consultantId}`);
+              const d = await apiFetch(`/analytics/tickets/consultant`);
               arr = extractArr(d);
             } catch (e: any) {
               console.warn("Analytics: /tickets/consultant failed:", e?.message);
@@ -1468,9 +1489,10 @@ const AnalyticsDashboard: React.FC<Props> = ({
               }));
             }
           } else {
-            // ✅ Admin: GET /tickets returns all (requires ROLE_ADMIN)
+            // FIX: Use /analytics/tickets/all — returns ALL tickets (not paginated)
+            // enriched with consultantName, resolvedAt, closedAt and firstResponseAt.
             try {
-              const d = await apiFetch("/tickets");
+              const d = await apiFetch("/analytics/tickets/all");
               arr = extractArr(d);
             } catch (e: any) {
               console.warn("Analytics: /tickets failed:", e?.message);

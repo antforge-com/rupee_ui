@@ -1,14 +1,25 @@
 import React, { useEffect, useState } from "react";
 import { API_BASE_URL } from "../config/api";
-import { getToken } from "../services/api";
+import { getAllSkills, getToken } from "../services/api";
+import {
+  canonicalTextKey,
+  capitalizeFirstCharacter,
+  formatIndianCurrency,
+  formatNameLikeInput,
+  formatNameLikeValue,
+  sanitizeDecimalInput,
+  startsWithNumber,
+} from "../utils/formUtils";
 
 interface AddAdvisorProps {
   onClose: () => void;
   onSave: (advisorData: any) => void;
 }
 
+type SkillGroup = { group: string; icon: string; skills: string[] };
+
 // ─── Predefined skill options grouped by category ───────────────────────────
-const SKILL_GROUPS: { group: string; icon: string; skills: string[] }[] = [
+const SKILL_GROUPS: SkillGroup[] = [
   {
     group: "Tax & Compliance",
     icon: "🧾",
@@ -40,6 +51,40 @@ const SKILL_GROUPS: { group: string; icon: string; skills: string[] }[] = [
     skills: ["Business Planning", "Startup Finance", "Cash Flow", "Accounting", "MSME Advisory", "Valuation"],
   },
 ];
+
+const DEFAULT_SKILL_GROUPS: SkillGroup[] = SKILL_GROUPS.map((group) => ({
+  ...group,
+  skills: group.skills.map((skill) => formatNameLikeValue(skill)),
+}));
+
+const getAvailableSkillGroups = (records: any[]): { groups: SkillGroup[]; label: string } => {
+  const dbSkills = Array.from(new Map(
+    (Array.isArray(records) ? records : [])
+      .map((item: any) => formatNameLikeValue(item?.name || item?.skillName || ""))
+      .filter(Boolean)
+      .map((skill) => [canonicalTextKey(skill), skill]),
+  ).values()).sort((a, b) => a.localeCompare(b));
+
+  const existingSkillKeys = new Set(
+    DEFAULT_SKILL_GROUPS.flatMap((group) => group.skills.map((skill) => canonicalTextKey(skill))),
+  );
+  const additionalSkills = dbSkills.filter((skill) => !existingSkillKeys.has(canonicalTextKey(skill)));
+  const groups = additionalSkills.length > 0
+    ? [
+      ...DEFAULT_SKILL_GROUPS,
+      {
+        group: "Skills & Questions",
+        icon: "✨",
+        skills: additionalSkills,
+      },
+    ]
+    : DEFAULT_SKILL_GROUPS;
+
+  return {
+    groups,
+    label: additionalSkills.length > 0 ? "Default + Skills & Questions" : "Default skill set",
+  };
+};
 
 // ─── Material Time Picker (Circular Clock) ───────────────────────────────────
 const MaterialTimePicker: React.FC<{
@@ -197,8 +242,12 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [customSkill, setCustomSkill] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
+  const [availableSkillGroups, setAvailableSkillGroups] = useState(DEFAULT_SKILL_GROUPS);
+  const [skillsSourceLabel, setSkillsSourceLabel] = useState("Default skill set");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
 
   // ── Time picker state ──────────────────────────────────────────────────────
   const [timePickerConfig, setTimePickerConfig] = useState<{
@@ -208,66 +257,212 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
   }>({ isOpen: false, field: null, value: "" });
 
   const openTimePicker = (field: "shiftStartTime" | "shiftEndTime") => {
+    setTouchedFields(prev => ({ ...prev, [field]: true }));
     setTimePickerConfig({ isOpen: true, field, value: formData[field] });
+  };
+
+  useEffect(() => {
+    let active = true;
+    getAllSkills()
+      .then((records: any[]) => {
+        if (!active) return;
+        const { groups, label } = getAvailableSkillGroups(records);
+        setAvailableSkillGroups(groups);
+        setSkillsSourceLabel(label);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAvailableSkillGroups(DEFAULT_SKILL_GROUPS);
+        setSkillsSourceLabel("Default skill set");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const clearFieldError = (field: string) => {
+    setFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const getClientValidationErrors = () => {
+    const nextErrors: Record<string, string> = {};
+
+    const name = formData.name.trim();
+    const email = formData.email.trim().toLowerCase();
+    const designation = formData.designation.trim();
+    const yearsOfExperience = Number(formData.yearsOfExperience);
+    const charges = Number(formData.charges);
+    const duration = Number(formData.slotsDurationHours);
+
+    if (!name) nextErrors.name = "Name is required.";
+    else if (startsWithNumber(name)) nextErrors.name = "Name cannot start with a number.";
+    else if (name.length < 2) nextErrors.name = "Enter the consultant's full name.";
+
+    if (!email) nextErrors.email = "Email is required.";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) nextErrors.email = "Enter a valid email address.";
+
+    if (!designation) nextErrors.designation = "Designation is required.";
+    else if (startsWithNumber(designation)) nextErrors.designation = "Designation cannot start with a number.";
+    else if (designation.length < 2) nextErrors.designation = "Enter a valid designation.";
+
+    if (selectedSkills.size === 0) nextErrors.skills = "Select at least one skill.";
+
+    if (!formData.shiftStartTime) nextErrors.shiftStartTime = "Availability start time is required.";
+    if (!formData.shiftEndTime) nextErrors.shiftEndTime = "Availability end time is required.";
+    if (
+      formData.shiftStartTime &&
+      formData.shiftEndTime &&
+      formData.shiftStartTime !== formData.shiftEndTime &&
+      formData.shiftEndTime <= formData.shiftStartTime
+    ) {
+      nextErrors.shiftEndTime = "Availability end time must be after the start time.";
+    }
+
+    if (!formData.slotsDurationHours) nextErrors.slotsDurationHours = "Session duration is required.";
+    else if (Number.isNaN(duration) || duration <= 0) nextErrors.slotsDurationHours = "Select a valid session duration.";
+
+    if (!formData.charges) nextErrors.charges = "Base charge is required.";
+    else if (Number.isNaN(charges) || charges <= 0) nextErrors.charges = "Enter a valid charge amount.";
+    else if (charges > 100000) nextErrors.charges = "Base charge cannot exceed ₹1,00,000.";
+
+    if (!formData.yearsOfExperience) nextErrors.yearsOfExperience = "Years of experience is required.";
+    else if (Number.isNaN(yearsOfExperience) || yearsOfExperience < 0) nextErrors.yearsOfExperience = "Enter valid years of experience.";
+    else if (yearsOfExperience > 60) nextErrors.yearsOfExperience = "Years of experience cannot exceed 60.";
+
+    return nextErrors;
+  };
+
+  const liveErrors = React.useMemo(() => getClientValidationErrors(), [formData, selectedSkills]);
+  const displayErrors = React.useMemo(() => {
+    const touchedLive: Record<string, string> = {};
+    Object.entries(liveErrors).forEach(([key, message]) => {
+      if (touchedFields[key]) touchedLive[key] = message;
+    });
+    return { ...touchedLive, ...fieldErrors };
+  }, [fieldErrors, liveErrors, touchedFields]);
+
+  const isFormReady = React.useMemo(() => Object.keys(liveErrors).length === 0, [liveErrors]);
+
+  const inputErrorStyle = (field: string, defaultBorder = "#E2E8F0"): React.CSSProperties => ({
+    border: `1.5px solid ${displayErrors[field] ? "#FCA5A5" : defaultBorder}`,
+    background: displayErrors[field] ? "#FFF7F7" : "#fff",
+  });
+
+  const fieldErrorStyle: React.CSSProperties = {
+    fontSize: 11,
+    color: "#DC2626",
+    fontWeight: 600,
+    marginTop: 4,
   };
 
   const handleTimePickerSave = (time24h: string) => {
     if (timePickerConfig.field) {
       setFormData(prev => ({ ...prev, [timePickerConfig.field!]: time24h }));
+      setTouchedFields(prev => ({ ...prev, [timePickerConfig.field!]: true }));
+      clearFieldError(timePickerConfig.field);
       if (error) setError("");
     }
     setTimePickerConfig({ isOpen: false, field: null, value: "" });
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    let nextValue = value;
+
+    if (name === "name" || name === "designation") nextValue = formatNameLikeInput(value);
+    if (name === "description") nextValue = capitalizeFirstCharacter(value);
+    if (name === "email") nextValue = value.trimStart().toLowerCase();
+    if (name === "charges") nextValue = sanitizeDecimalInput(value, 100000, 2);
+    if (name === "yearsOfExperience") nextValue = sanitizeDecimalInput(value, 60, 1);
+
+    setFormData({ ...formData, [name]: nextValue });
+    setTouchedFields(prev => ({ ...prev, [name]: true }));
+    clearFieldError(name);
     if (error) setError("");
   };
 
   const toggleSkill = (skill: string) => {
+    setTouchedFields(prev => ({ ...prev, skills: true }));
     setSelectedSkills(prev => {
       const next = new Set(prev);
-      next.has(skill) ? next.delete(skill) : next.add(skill);
+      const normalizedSkill = formatNameLikeValue(skill);
+      const existing = [...next].find((item) => canonicalTextKey(item) === canonicalTextKey(normalizedSkill));
+      if (existing) next.delete(existing);
+      else next.add(normalizedSkill);
       return next;
     });
+    clearFieldError("skills");
+    if (error) setError("");
   };
 
   const addCustomSkill = () => {
+    setTouchedFields(prev => ({ ...prev, skills: true }));
     const trimmed = customSkill.trim();
     if (!trimmed) return;
-    trimmed.split(",").map(s => s.trim()).filter(Boolean).forEach(s => {
-      setSelectedSkills(prev => new Set([...prev, s]));
+    const parsedSkills = trimmed
+      .split(",")
+      .map((skill) => formatNameLikeValue(skill))
+      .filter(Boolean);
+
+    setSelectedSkills((prev) => {
+      const next = new Set(prev);
+      let duplicateFound = false;
+      parsedSkills.forEach((skill) => {
+        const exists = [...next].some((item) => canonicalTextKey(item) === canonicalTextKey(skill));
+        if (exists) {
+          duplicateFound = true;
+          return;
+        }
+        next.add(skill);
+      });
+      if (duplicateFound) setError("Duplicate skills are not allowed.");
+      return next;
     });
     setCustomSkill("");
+    clearFieldError("skills");
+    if (error && error !== "Duplicate skills are not allowed.") setError("");
   };
 
   const removeSkill = (skill: string) => {
+    setTouchedFields(prev => ({ ...prev, skills: true }));
     setSelectedSkills(prev => { const n = new Set(prev); n.delete(skill); return n; });
   };
 
-  const filteredGroups = SKILL_GROUPS.map(g => ({
+  const filteredGroups = availableSkillGroups.map(g => ({
     ...g,
     skills: g.skills.filter(s => !skillSearch || s.toLowerCase().includes(skillSearch.toLowerCase())),
   })).filter(g => g.skills.length > 0);
 
+  const validateForm = () => {
+    const nextErrors = getClientValidationErrors();
+    setTouchedFields(prev => ({
+      ...prev,
+      name: true,
+      email: true,
+      designation: true,
+      skills: true,
+      shiftStartTime: true,
+      shiftEndTime: true,
+      slotsDurationHours: true,
+      charges: true,
+      yearsOfExperience: true,
+    }));
+    setFieldErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.name.trim()) { setError("Full Name is required."); return; }
-    if (!formData.email.trim()) { setError("Email is required."); return; }
-    if (!formData.designation.trim()) { setError("Designation is required."); return; }
-    if (selectedSkills.size === 0) { setError("Please select at least one skill."); return; }
-    if (!formData.shiftStartTime) { setError("Availability Start time is required."); return; }
-    if (!formData.shiftEndTime) { setError("Availability End time is required."); return; }
-    if (!formData.slotsDurationHours || isNaN(Number(formData.slotsDurationHours))) {
-      setError("Session duration is required."); return;
-    }
-    if (!formData.charges || isNaN(Number(formData.charges))) {
-      setError("A valid charge amount is required."); return;
-    }
-    // ADDED: yearsOfExperience validation
-    if (!formData.yearsOfExperience || isNaN(Number(formData.yearsOfExperience))) {
-      setError("Years of experience is required and must be a number."); return;
+    if (!validateForm()) {
+      setError("Please fill all required consultant details.");
+      return;
     }
 
     setLoading(true); setError("");
@@ -309,8 +504,19 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
 
       if (!response.ok) {
         if (data?.fieldErrors) {
-          const msgs = Object.entries(data.fieldErrors).map(([f, m]) => `${f}: ${m}`).join(", ");
-          setError(`Validation error — ${msgs}`);
+          const normalizedFieldErrors = Object.entries(data.fieldErrors).reduce<Record<string, string>>((acc, [field, message]) => {
+            const mappedField = ({
+              slotDuration: "slotsDurationHours",
+              slotsDuration: "slotsDurationHours",
+              shiftStart: "shiftStartTime",
+              shiftEnd: "shiftEndTime",
+              experience: "yearsOfExperience",
+            } as Record<string, string>)[field] || field;
+            acc[mappedField] = String(message);
+            return acc;
+          }, {});
+          setFieldErrors(normalizedFieldErrors);
+          setError("Please fix the highlighted consultant details.");
         } else if (response.status === 409) {
           setError("A consultant with this email already exists.");
         } else if (response.status === 403) {
@@ -346,13 +552,17 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
           <div className="advisor-form-group">
             <label>FULL NAME <span className="advisor-required">*</span></label>
             <input type="text" name="name" placeholder="Enter consultant name"
-              value={formData.name} onChange={handleChange} disabled={loading} />
+              value={formData.name} onChange={handleChange} disabled={loading}
+              style={inputErrorStyle("name")} />
+            {displayErrors.name && <div style={fieldErrorStyle}>{displayErrors.name}</div>}
           </div>
 
           <div className="advisor-form-group">
             <label>EMAIL (LOGIN ID) <span className="advisor-required">*</span></label>
             <input type="email" name="email" placeholder="e.g. name@meetthemasters.com"
-              value={formData.email} onChange={handleChange} disabled={loading} />
+              value={formData.email} onChange={handleChange} disabled={loading}
+              style={inputErrorStyle("email")} />
+            {displayErrors.email && <div style={fieldErrorStyle}>{displayErrors.email}</div>}
           </div>
 
           {/* ── Designation + Experience side by side ── */}
@@ -360,20 +570,23 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             <div className="advisor-form-group" style={{ flex: 2 }}>
               <label>DESIGNATION <span className="advisor-required">*</span></label>
               <input type="text" name="designation" placeholder="e.g. Senior Tax Consultant"
-                value={formData.designation} onChange={handleChange} disabled={loading} />
+                value={formData.designation} onChange={handleChange} disabled={loading}
+                style={inputErrorStyle("designation")} />
+              {displayErrors.designation && <div style={fieldErrorStyle}>{displayErrors.designation}</div>}
             </div>
             <div className="advisor-form-group" style={{ flex: 1 }}>
               <label>EXP. (YEARS) <span className="advisor-required">*</span></label>
               <input
-                type="number"
+                type="text"
                 name="yearsOfExperience"
                 placeholder="e.g. 5.5"
                 value={formData.yearsOfExperience}
                 onChange={handleChange}
                 disabled={loading}
-                min="0"
-                step="0.1"
+                inputMode="decimal"
+                style={inputErrorStyle("yearsOfExperience")}
               />
+              {displayErrors.yearsOfExperience && <div style={fieldErrorStyle}>{displayErrors.yearsOfExperience}</div>}
             </div>
           </div>
 
@@ -409,7 +622,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             <label>
               SKILL SET <span className="advisor-required">*</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: "#64748B", marginLeft: 8, textTransform: "none" }}>
-                Click to select · {selectedSkills.size} selected
+                Click to select · {selectedSkills.size} selected · {skillsSourceLabel}
               </span>
             </label>
 
@@ -418,7 +631,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 display: "flex", flexWrap: "wrap", gap: 6,
                 marginBottom: 10, padding: "10px 12px",
                 background: "#ECFEFF", borderRadius: 10,
-                border: "1.5px solid #A5F3FC", minHeight: 42,
+                border: `1.5px solid ${displayErrors.skills ? "#FCA5A5" : "#A5F3FC"}`, minHeight: 42,
               }}>
                 {[...selectedSkills].map(skill => (
                   <span key={skill} style={{
@@ -524,7 +737,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 type="text"
                 placeholder="Add custom skill (press Enter or click +)"
                 value={customSkill}
-                onChange={e => setCustomSkill(e.target.value)}
+                onChange={e => { setCustomSkill(formatNameLikeInput(e.target.value)); if (error === "Duplicate skills are not allowed.") setError(""); }}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCustomSkill(); } }}
                 disabled={loading}
                 style={{
@@ -545,6 +758,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 }}
               >+ Add</button>
             </div>
+            {displayErrors.skills && <div style={fieldErrorStyle}>{displayErrors.skills}</div>}
           </div>
 
           {/* ── Availability Times ── */}
@@ -555,11 +769,11 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 onClick={() => !loading && openTimePicker("shiftStartTime")}
                 style={{
                   width: "100%", padding: "9px 12px",
-                  border: `1.5px solid ${!formData.shiftStartTime ? "#E2E8F0" : "#A5F3FC"}`,
+                  border: `1.5px solid ${displayErrors.shiftStartTime ? "#FCA5A5" : (!formData.shiftStartTime ? "#E2E8F0" : "#A5F3FC")}`,
                   borderRadius: 8, fontSize: 13,
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   cursor: loading ? "not-allowed" : "pointer",
-                  background: loading ? "#F8FAFC" : "#fff",
+                  background: displayErrors.shiftStartTime ? "#FFF7F7" : (loading ? "#F8FAFC" : "#fff"),
                   color: formData.shiftStartTime ? "#0F172A" : "#94A3B8",
                   boxSizing: "border-box",
                 }}
@@ -570,6 +784,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                   <path d="M12 6v6l4 2" strokeLinecap="round" />
                 </svg>
               </div>
+              {displayErrors.shiftStartTime && <div style={fieldErrorStyle}>{displayErrors.shiftStartTime}</div>}
             </div>
 
             <div className="advisor-form-group" style={{ flex: 1 }}>
@@ -578,11 +793,11 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 onClick={() => !loading && openTimePicker("shiftEndTime")}
                 style={{
                   width: "100%", padding: "9px 12px",
-                  border: `1.5px solid ${!formData.shiftEndTime ? "#E2E8F0" : "#A5F3FC"}`,
+                  border: `1.5px solid ${displayErrors.shiftEndTime ? "#FCA5A5" : (!formData.shiftEndTime ? "#E2E8F0" : "#A5F3FC")}`,
                   borderRadius: 8, fontSize: 13,
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   cursor: loading ? "not-allowed" : "pointer",
-                  background: loading ? "#F8FAFC" : "#fff",
+                  background: displayErrors.shiftEndTime ? "#FFF7F7" : (loading ? "#F8FAFC" : "#fff"),
                   color: formData.shiftEndTime ? "#0F172A" : "#94A3B8",
                   boxSizing: "border-box",
                 }}
@@ -593,6 +808,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                   <path d="M12 6v6l4 2" strokeLinecap="round" />
                 </svg>
               </div>
+              {displayErrors.shiftEndTime && <div style={fieldErrorStyle}>{displayErrors.shiftEndTime}</div>}
             </div>
           </div>
 
@@ -605,13 +821,17 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                   <button
                     key={hours}
                     type="button"
-                    onClick={() => setFormData(prev => ({ ...prev, slotsDurationHours: String(hours) }))}
+                    onClick={() => {
+                      setFormData(prev => ({ ...prev, slotsDurationHours: String(hours) }));
+                      setTouchedFields(prev => ({ ...prev, slotsDurationHours: true }));
+                      clearFieldError("slotsDurationHours");
+                    }}
                     disabled={loading}
                     style={{
                       padding: "11px 10px",
                       borderRadius: 10,
-                      border: `1.5px solid ${active ? "#0F766E" : "#CBD5E1"}`,
-                      background: active ? "#ECFEFF" : "#fff",
+                      border: `1.5px solid ${displayErrors.slotsDurationHours ? "#FCA5A5" : (active ? "#0F766E" : "#CBD5E1")}`,
+                      background: displayErrors.slotsDurationHours ? "#FFF7F7" : (active ? "#ECFEFF" : "#fff"),
                       color: active ? "#0F766E" : "#334155",
                       fontSize: 13,
                       fontWeight: 700,
@@ -626,22 +846,25 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
               Used to generate bookable slots for this consultant.
             </div>
+            {displayErrors.slotsDurationHours && <div style={fieldErrorStyle}>{displayErrors.slotsDurationHours}</div>}
           </div>
 
           {/* ── Charges ── */}
           <div className="advisor-form-group">
             <label>BASE CHARGE PER PERSON (₹) <span className="advisor-required">*</span></label>
-            <input type="number" name="charges" placeholder="e.g. 1200"
+            <input type="text" name="charges" placeholder="e.g. 1200"
               value={formData.charges} onChange={handleChange}
-              disabled={loading} min="0" step="0.01" />
+              disabled={loading} inputMode="decimal"
+              style={inputErrorStyle("charges")} />
             <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 4 }}>
-              Session fee charged to the customer
+              Session fee charged to the customer. Current value: {formData.charges ? formatIndianCurrency(formData.charges) : "—"}
             </div>
+            {displayErrors.charges && <div style={fieldErrorStyle}>{displayErrors.charges}</div>}
           </div>
 
           <div className="advisor-form-actions">
             <button type="button" className="advisor-btn-cancel" onClick={onClose} disabled={loading}>Cancel</button>
-            <button type="submit" className="advisor-btn-save" disabled={loading}>
+            <button type="submit" className="advisor-btn-save" disabled={loading || !isFormReady}>
               {loading ? "Adding..." : "Add Consultant"}
             </button>
           </div>
