@@ -1,5 +1,5 @@
 import { ArrowRight, ChevronLeft, ChevronRight, Star as StarIcon, X } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import logoImg from '../assests/Meetmasterslogopng.png';
@@ -8,6 +8,13 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ForcePasswordChangeModal from "../components/ForcePasswordChangeModal";
 import StatusBadge from "../components/StatusBadge";
 import { API_BASE_URL, buildBackendAssetUrl } from "../config/api";
+import { SUPPORT_EMAIL } from "../config/support";
+import {
+  durationHoursToMinutes,
+  durationMinutesToHours,
+  formatHourRangeLabel,
+  HourRangeClockPicker
+} from "../pages/timeSlotUtils";
 
 import {
   addHoliday as apiAddHoliday,
@@ -25,6 +32,7 @@ import {
   deleteSkill,
   deleteTicket,
   deleteTicketCategory,
+  emailToTicketHealth,
   escalateTicket,
   exportSingleTicketExcel,
   exportSingleTicketPdf,
@@ -32,6 +40,7 @@ import {
   exportTicketsPdf,
   extractArray,
   FeeConfig,
+  getActiveTicketCategories,
   getAllAdvisors,
   getAllBookings,
   getAllSkills,
@@ -46,15 +55,16 @@ import {
   getHolidays,
   getPublicReviews,
   getSlaInfo,
-  getTicketCategories,
   getTicketComments,
   getTicketsPage,
   getTicketSummary,
+  logoutUser,
   postInternalNote,
   postTicketComment,
   recordEscalationBlock,
   rejectOffer,
   SLA_HOURS,
+  triggerEmailToTicketPoll,
   updateAutoResponder,
   updateBusinessHours,
   updateFeeConfig,
@@ -67,6 +77,7 @@ import {
   formatIndianCurrency,
   formatIndianNumber,
   formatNameLikeInput,
+  formatTitleLikeInput,
   formatNameLikeValue,
   sanitizeDecimalInput,
   sanitizeWholeNumberInput,
@@ -84,7 +95,7 @@ import TicketSummaryChart from "./TicketSummaryChart";
 
 const BASE_URL = API_BASE_URL;
 
-// ─── IST Time Formatter ────────────────────────────────────────────────────
+// â"€â"€â"€ IST Time Formatter â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Always display times in India Standard Time (UTC+5:30) regardless of the
 // browser's locale/timezone. The backend stores timestamps in UTC; we convert
 // explicitly to IST (Asia/Kolkata = UTC+5:30) for all display.
@@ -106,7 +117,7 @@ const IST_OPTS_TIME: Intl.DateTimeFormatOptions = {
  * Format any ISO / epoch timestamp as IST.
  * Works even if the backend sends timestamps WITHOUT a timezone suffix
  * (i.e. "2026-03-21T10:01:00" instead of "2026-03-21T10:01:00Z").
- * Such strings are treated as LOCAL time by JS Date — we correct that by
+ * Such strings are treated as LOCAL time by JS Date - we correct that by
  * appending "Z" only when the string has no offset, so JS always parses UTC
  * and then we render in IST (UTC+5:30).
  */
@@ -119,13 +130,13 @@ const fmtIST = (iso: string | null | undefined, opts: Intl.DateTimeFormatOptions
     return new Date(normalised).toLocaleString("en-IN", opts);
   } catch { return iso; }
 };
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // TYPES  (previously in types.ts)
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 export type BookingStatus = "CONFIRMED" | "PENDING" | "COMPLETED";
 
@@ -139,9 +150,9 @@ export interface Booking {
   meetingLink: string;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // LOCAL-TIME PARSER
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const parseLocalTime = (t: any): string => {
   if (!t) return "";
   if (typeof t === "object" && t.hour !== undefined)
@@ -150,9 +161,9 @@ const parseLocalTime = (t: any): string => {
   return "";
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // INTERNAL TYPES
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface Advisor {
   id: number;
   name: string;
@@ -228,7 +239,7 @@ interface Ticket {
 const getTicketDisplayId = (ticketLike: { id?: number | string; ticketNumber?: string | null }) => {
   const ticketNumber = String(ticketLike.ticketNumber || "").trim();
   if (ticketNumber) return ticketNumber;
-  return ticketLike.id != null ? `#${ticketLike.id}` : "—";
+  return ticketLike.id != null ? `#${ticketLike.id}` : "-";
 };
 
 const TERMINAL_TICKET_STATUSES: TicketStatus[] = ["RESOLVED", "CLOSED", "ESCALATED"];
@@ -242,16 +253,35 @@ const prettifyEmailLocalPart = (email: string): string =>
     .replace(/[._-]+/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 
-const resolveTicketClientName = (ticket: Partial<Ticket> & Record<string, any>): string => {
-  const directName =
-    ticket.user?.name || ticket.user?.fullName || ticket.user?.firstName ||
-    ticket.user?.username || ticket.userName || ticket.clientName || ticket.raisedByName ||
-    ticket.raisedBy || ticket.submittedBy || ticket.createdByName || ticket.memberName ||
-    ticket.bookedByName;
+const isGenericTicketUserLabel = (value: any): boolean =>
+  /^(client|user)\s*#?\s*\d*$/i.test(String(value ?? "").trim());
 
-  if (directName) return String(directName).trim();
+const resolveTicketClientName = (ticket: Partial<Ticket> & Record<string, any>): string => {
+  const directName = [
+    ticket.user?.name,
+    ticket.user?.fullName,
+    ticket.user?.firstName,
+    ticket.user?.username,
+    ticket.userName,
+    ticket.clientName,
+    ticket.raisedByName,
+    ticket.raisedBy,
+    ticket.submittedBy,
+    ticket.createdByName,
+    ticket.memberName,
+    ticket.bookedByName,
+  ].map((value) => String(value ?? "").trim()).find((value) => value && !isGenericTicketUserLabel(value));
+
+  if (directName) return directName;
   if (ticket.user?.email) return prettifyEmailLocalPart(String(ticket.user.email));
-  return ticket.userId ? "Client" : "—";
+  if (ticket.userId) {
+    const roleHint = String(
+      ticket.userRole || ticket.createdByRole || ticket.raisedByRole || ticket.createdByType || ticket.source || ""
+    ).toUpperCase();
+    if (roleHint.includes("ADMIN")) return `Admin #${ticket.userId}`;
+    return `User #${ticket.userId}`;
+  }
+  return "-";
 };
 
 const resolveUserRoleLabel = (user: any): string => {
@@ -283,6 +313,7 @@ type AdminSectionType =
   | "advisors"
   | "bookings"
   | "tickets"
+  | "email-to-ticket-inbox"
   | "analytics"
   | "summary"
   | "add-member"
@@ -293,13 +324,14 @@ type AdminSectionType =
   | "questions"
   | "commission"
   | "terms-conditions"
+  | "privacy-policy"
   | "contact-submissions"
   | "subscription-plans"
   | "settings";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // TICKET STATUS / PRIORITY CONFIG
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const TICKET_STATUS_CFG: Record<string, { label: string; color: string; bg: string; border: string }> = {
   NEW: { label: "New", color: "#6366F1", bg: "#EEF2FF", border: "#C7D2FE" },
   OPEN: { label: "Open", color: "#0F766E", bg: "#ECFEFF", border: "#99F6E4" },
@@ -320,9 +352,9 @@ const TICKET_PRIORITY_CFG: Record<string, { label: string; color: string; bg: st
 
 const ALL_TICKET_STATUSES = ["NEW", "OPEN", "PENDING", "RESOLVED", "CLOSED"] as const;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // SHARED BADGE
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const Badge: React.FC<{ label: string; style: { bg: string; color: string; border: string } }> = ({ label, style }) => (
   <span style={{
     padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
@@ -333,9 +365,9 @@ const Badge: React.FC<{ label: string; style: { bg: string; color: string; borde
   </span>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // SLA STRIP
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const SlaStrip: React.FC<{ ticket: Ticket; compact?: boolean }> = ({ ticket, compact }) => {
   const sla = getSlaInfo(ticket);
   if (!sla) return null;
@@ -350,21 +382,21 @@ const SlaStrip: React.FC<{ ticket: Ticket; compact?: boolean }> = ({ ticket, com
       <div>
         <div style={{ fontSize: 11, fontWeight: 700, color: sla.breached ? "#B91C1C" : sla.warning ? "#92400E" : "#15803D" }}>
           SLA {sla.breached ? "BREACHED" : sla.warning ? "WARNING" : "ON TRACK"}
-          {" · "}{ticket.priority} — {SLA_HOURS[ticket.priority] ?? 24}h window
+          {" Â· "}{ticket.priority} - {SLA_HOURS[ticket.priority] ?? 24}h window
         </div>
         <div style={{ fontSize: 11, color: "#64748B" }}>
           {sla.breached
             ? `Overdue by ${Math.abs(sla.minsLeft)} min`
-            : `Due ${sla.deadlineStr} · ${sla.label}`}
+            : `Due ${sla.deadlineStr} Â· ${sla.label}`}
         </div>
       </div>
     </div>
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // SVG ICON HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const SvgIcon: React.FC<{ d: string | string[]; size?: number; color?: string; fill?: string; strokeWidth?: number; viewBox?: string; style?: React.CSSProperties }> =
   ({ d, size = 14, color = "currentColor", fill = "none", strokeWidth = 2, viewBox = "0 0 24 24", style }) => (
     <svg width={size} height={size} viewBox={viewBox} fill={fill} stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, ...style }}>
@@ -438,9 +470,9 @@ const getConfigTabSvg = (id: string, active: boolean) => {
   return null;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // TICKET PROGRESS STEPPER
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const STEPS = [
   { key: "NEW", label: "Submitted", icon: "NEW" },
   { key: "OPEN", label: "Assigned", icon: "OPEN" },
@@ -492,9 +524,9 @@ const TicketStepper: React.FC<{ status: string }> = ({ status }) => {
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // ASSIGN CONSULTANT MODAL
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface AssignModalProps {
   ticket: Ticket;
   consultants: Advisor[];
@@ -510,12 +542,31 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
   const ticketDisplayId = getTicketDisplayId(ticket);
   const blockedIds = useMemo(() => {
     const blocks = getEscalationBlocks();
-    return new Set(
+    const ids = new Set(
       blocks
         .filter((b) => Number(b.ticketId) === Number(ticket.id))
         .map((b) => Number(b.consultantId))
     );
-  }, [ticket.id]);
+
+    // Cross-device fallback: consultants record an escalation marker in internal notes.
+    // This avoids relying on localStorage, which is not shared across admin/consultant browsers.
+    try {
+      const notes = ([] as any[])
+        .concat((ticket.internalNotes as any[]) || [])
+        .concat((ticket.notes as any[]) || []);
+      for (const n of notes) {
+        const txt = String(n?.noteText || "");
+        const re = /\[ESCALATED_BY:(\d+)\]/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(txt)) !== null) {
+          const cid = Number(m[1]);
+          if (Number.isFinite(cid) && cid > 0) ids.add(cid);
+        }
+      }
+    } catch { /* ignore */ }
+
+    return ids;
+  }, [ticket.id, ticket.internalNotes, ticket.notes]);
 
   const handleAssign = async () => {
     if (!selected) return;
@@ -534,7 +585,7 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
       const newNotif = {
         id: `${Date.now()}`,
         type: "info",
-        title: `New Ticket Assigned — ${ticketDisplayId}`,
+        title: `New Ticket Assigned - ${ticketDisplayId}`,
         message: `You have been assigned: "${ticket.title || ticket.category}" (${ticket.category}). Priority: ${ticket.priority}.`,
         timestamp: new Date().toISOString(),
         read: false,
@@ -625,7 +676,7 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
                       )}
                     </div>
                     <div style={{ fontSize: 12, color: isBlocked ? "#B91C1C" : "#64748B", marginTop: 2 }}>
-                      {isBlocked ? "This consultant escalated this ticket - cannot reassign" : `${c.role}${c.shiftStartTime ? ` · ${c.shiftStartTime}–${c.shiftEndTime}` : ""}`}
+                      {isBlocked ? "This consultant escalated this ticket - cannot reassign" : `${c.role}${c.shiftStartTime ? ` Â· ${c.shiftStartTime}-${c.shiftEndTime}` : ""}`}
                     </div>
                     {!isBlocked && (
                       <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
@@ -657,7 +708,7 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
                 fontSize: 13, fontWeight: 700, cursor: (!selected || assigning) ? "default" : "pointer",
               }}
             >
-              {assigning ? "Assigning…" : `Assign to ${consultants.find(c => c.id === selected)?.name || "Consultant"}`}
+              {assigning ? "Assigning..." : `Assign to ${consultants.find(c => c.id === selected)?.name || "Consultant"}`}
             </button>
           </div>
         </div>
@@ -667,9 +718,9 @@ const AssignConsultantModal: React.FC<AssignModalProps> = ({ ticket, consultants
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // TICKET DETAIL PANEL
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface TicketDetailProps {
   ticket: Ticket;
   consultants: Advisor[];
@@ -696,7 +747,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
   const [localStatus, setLocalStatus] = useState<TicketStatus>(ticket.status);
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
-  // ── Priority editing (Admin can change priority inline) ───────────────────
+  // â"€â"€ Priority editing (Admin can change priority inline) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [localPriority, setLocalPriority] = useState<TicketPriority>(ticket.priority);
   const [updatingPriority, setUpdatingPriority] = useState(false);
   const [showPriorityDropdown, setShowPriorityDropdown] = useState(false);
@@ -889,7 +940,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
       setNoteText("");
       showToast("Note saved locally");
     } finally {
-      // ── Notify assigned consultant about new admin internal note ──
+      // â"€â"€ Notify assigned consultant about new admin internal note â"€â"€
       const consultantId = ticket.consultantId;
       if (consultantId) {
         try {
@@ -900,7 +951,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
             type: "info",
             ticketId: ticket.id,
             title: `Admin Note on Ticket ${ticketDisplayId}`,
-            message: `Admin added a private note: "${capturedNote.substring(0, 80)}${capturedNote.length > 80 ? "…" : ""}"`,
+            message: `Admin added a private note: "${capturedNote.substring(0, 80)}${capturedNote.length > 80 ? "..." : ""}"`,
             timestamp: new Date().toISOString(),
             read: false,
           }, ...prev].slice(0, 50)));
@@ -920,7 +971,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
       addNotification({ type: "warning", title: `Ticket ${ticketDisplayId} Escalated`, message: `"${ticket.title || ticket.category}" has been escalated.`, ticketId: ticket.id });
       showToast("Ticket escalated");
 
-      // ── Block the currently-assigned consultant from being reassigned ──
+      // â"€â"€ Block the currently-assigned consultant from being reassigned â"€â"€
       // This mirrors consultant-side escalation so the assign modal shows BLOCKED
       const consultantId = ticket.consultantId;
       if (consultantId) {
@@ -929,7 +980,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
         });
       }
 
-      // ── Notify assigned consultant about escalation ──
+      // â"€â"€ Notify assigned consultant about escalation â"€â"€
       if (consultantId) {
         try {
           const consultantKey = `fin_notifs_CONSULTANT_${consultantId}`;
@@ -1009,11 +1060,11 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                   {ticket.title || ticket.category}
                 </div>
                 <div style={{ fontSize: 12, color: "#A5F3FC" }}>
-                  {getUserLabel()} · {ticket.category}
+                  {getUserLabel()} Â· {ticket.category}
                   {(ticket.agentName || ticket.consultantName) &&
-                    ` · Assigned to ${ticket.agentName || ticket.consultantName}`}
+                    ` Â· Assigned to ${ticket.agentName || ticket.consultantName}`}
                   {!(ticket.agentName || ticket.consultantName) && ticket.consultantId &&
-                    ` · Agent #${ticket.consultantId}`}
+                    ` Â· Agent #${ticket.consultantId}`}
                 </div>
               </div>
               <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><X size={16} /></button>
@@ -1028,7 +1079,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg> Escalated</span>
                 </span>
               )}
-              {/* ── PRIORITY — clickable dropdown for inline edit ── */}
+              {/* â"€â"€ PRIORITY - clickable dropdown for inline edit â"€â"€ */}
               <div style={{ position: "relative" }}>
                 <button
                   onClick={() => setShowPriorityDropdown(v => !v)}
@@ -1047,7 +1098,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                     ? <span style={{ width: 10, height: 10, border: "2px solid rgba(0,0,0,0.2)", borderTopColor: pc.color, borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />
                     : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>}
                   {pc.label}
-                  {!isPriorityLocked && <span style={{ fontSize: 9, opacity: 0.7 }}>▼</span>}
+                  {!isPriorityLocked && <span style={{ fontSize: 9, opacity: 0.7 }}>â-¼</span>}
                 </button>
                 {showPriorityDropdown && !isPriorityLocked && (
                   <div style={{
@@ -1092,8 +1143,8 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               <ExportDropdown tickets={[ticket]} label="Export" compact={true} />
               {(localStatus === "CLOSED" || localStatus === "RESOLVED" || localStatus === "ESCALATED") ? (
                 <span style={{ marginLeft: "auto", padding: "4px 12px", borderRadius: 20, background: localStatus === "ESCALATED" ? "rgba(220,38,38,0.2)" : "rgba(255,255,255,0.07)", border: `1px solid ${localStatus === "ESCALATED" ? "rgba(252,165,165,0.5)" : "rgba(255,255,255,0.15)"}`, color: localStatus === "ESCALATED" ? "#FCA5A5" : "rgba(255,255,255,0.4)", fontSize: 11, fontWeight: 600, cursor: "not-allowed", display: "inline-flex", alignItems: "center", gap: 5 }}
-                  title={`Ticket is ${localStatus} — cannot reassign`}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg> {localStatus === "CLOSED" ? "Closed" : localStatus === "ESCALATED" ? "Escalated — No Reassign" : "Resolved"} — No Reassign</span>
+                  title={`Ticket is ${localStatus} - cannot reassign`}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg> {localStatus === "CLOSED" ? "Closed" : localStatus === "ESCALATED" ? "Escalated - No Reassign" : "Resolved"} - No Reassign</span>
                 </span>
               ) : (
                 <button
@@ -1121,7 +1172,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
             {/* Status changer */}
             <div style={{ padding: "14px 24px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
-                Change Status {updatingStatus && <span style={{ color: "#0F766E" }}>· updating…</span>}
+                Change Status {updatingStatus && <span style={{ color: "#0F766E" }}>Â· updating...</span>}
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {ALL_TICKET_STATUSES.map(s => {
@@ -1149,10 +1200,10 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               </div>
             </div>
 
-            {/* ── Priority changer (Admin only) ── */}
+            {/* â"€â"€ Priority changer (Admin only) â"€â"€ */}
             <div style={{ padding: "14px 24px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
-                Change Priority {updatingPriority && <span style={{ color: "#D97706" }}>· updating…</span>}
+                Change Priority {updatingPriority && <span style={{ color: "#D97706" }}>Â· updating...</span>}
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {(["LOW", "MEDIUM", "HIGH", "URGENT", "CRITICAL"] as const).map(p => {
@@ -1244,7 +1295,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                                 CUSTOMER
                               </span>
                             )}
-                            {" · "}{fmtIST(c.createdAt, IST_OPTS_TIME)}
+                            {" Â· "}{fmtIST(c.createdAt, IST_OPTS_TIME)}
                           </div>
                           <div style={{
                             padding: "10px 13px", borderRadius: 12, fontSize: 13, lineHeight: 1.6,
@@ -1272,12 +1323,12 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                 <textarea
                   value={reply} onChange={e => setReply(e.target.value)} rows={2}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendReply(); } }}
-                  placeholder="Type a reply… (Enter to send, customer will be notified)"
+                  placeholder="Type a reply... (Enter to send, customer will be notified)"
                   style={{ flex: 1, padding: "9px 12px", border: "1.5px solid #A5F3FC", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", background: "#fff" }}
                 />
                 <button onClick={handleSendReply} disabled={!reply.trim() || sending}
                   style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: !reply.trim() ? "#E2E8F0" : "#0F766E", color: !reply.trim() ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !reply.trim() ? "default" : "pointer", flexShrink: 0, alignSelf: "flex-end" }}>
-                  {sending ? "…" : "Send"}
+                  {sending ? "..." : "Send"}
                 </button>
               </div>
             </div>
@@ -1293,7 +1344,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                     <div key={n.id} style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, padding: "9px 12px" }}>
                       <div style={{ fontSize: 12, color: "#1E293B", lineHeight: 1.55 }}>{n.noteText}</div>
                       <div style={{ fontSize: 10, color: "#92400E", marginTop: 4 }}>
-                        Agent #{n.authorId} · {fmtIST(n.createdAt, { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true })}
+                        Agent #{n.authorId} Â· {fmtIST(n.createdAt, { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true })}
                       </div>
                     </div>
                   ))}
@@ -1303,12 +1354,12 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                 <textarea
                   value={noteText} onChange={e => setNoteText(e.target.value)} rows={2}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePostNote(); } }}
-                  placeholder="Add a private note… (Enter to save)"
+                  placeholder="Add a private note... (Enter to save)"
                   style={{ flex: 1, padding: "9px 12px", border: "1.5px solid #FDE68A", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", background: "#fff" }}
                 />
                 <button onClick={handlePostNote} disabled={!noteText.trim() || postingNote}
                   style={{ padding: "9px 14px", borderRadius: 10, border: "none", background: !noteText.trim() ? "#F1F5F9" : "#D97706", color: !noteText.trim() ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", alignSelf: "flex-end", flexShrink: 0 }}>
-                  {postingNote ? "…" : "Save"}
+                  {postingNote ? "..." : "Save"}
                 </button>
               </div>
             </div>
@@ -1329,7 +1380,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
                   </div>
                   <button onClick={handleEscalate} disabled={escalating}
                     style={{ padding: "9px 16px", borderRadius: 10, border: "none", background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
-                    {escalating ? "…" : "Escalate"}
+                    {escalating ? "..." : "Escalate"}
                   </button>
                 </div>
               )}
@@ -1340,7 +1391,7 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
               <div style={{ fontSize: 11, fontWeight: 700, color: "#B91C1C", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>Danger Zone</div>
               <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting}
                 style={{ padding: "9px 18px", borderRadius: 10, border: "1.5px solid #FECACA", background: deleting ? "#FEE2E2" : "#fff", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                {deleting ? "Deleting…" : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Delete Ticket {ticketDisplayId}</>}
+                {deleting ? "Deleting..." : <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Delete Ticket {ticketDisplayId}</>}
               </button>
             </div>
           </div>
@@ -1370,33 +1421,29 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // CREATE TICKET MODAL
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 export const CreateTicketModal: React.FC<{
   currentUserId: number;
+  consultants: Advisor[];
   onCreated: (t: any) => void;
   onClose: () => void;
-}> = ({ currentUserId, onCreated, onClose }) => {
-  const [form, setForm] = useState({ category: "", description: "", priority: "MEDIUM", consultantId: "" });
+}> = ({ currentUserId, consultants, onCreated, onClose }) => {
+  const [form, setForm] = useState({ categoryId: "", category: "", description: "", priority: "MEDIUM", consultantId: "" });
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [categories, setCategories] = useState<string[]>([]);
+  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
   useEffect(() => {
     setLoadingCategories(true);
-    getTicketCategories()
-      .then((records) => {
-        const names = (Array.isArray(records) ? records : [])
-          .filter((record: any) => record?.name && record?.active !== false)
-          .map((record: any) => formatNameLikeValue(String(record.name)))
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b));
-        setCategories(Array.from(new Set(names)));
-      })
+    // Single source of truth: /admin/config/categories via getActiveTicketCategories()
+    getActiveTicketCategories()
+      .then(items => setCategories(items))
       .catch(() => setCategories([]))
       .finally(() => setLoadingCategories(false));
   }, []);
@@ -1410,19 +1457,36 @@ export const CreateTicketModal: React.FC<{
     });
   };
 
-  const validateForm = () => {
+  const getClientValidationErrors = () => {
     const nextErrors: Record<string, string> = {};
-    const category = form.category.trim();
+    const categoryId = form.categoryId;
     const description = form.description.trim();
-    const consultantId = form.consultantId.trim();
 
-    if (!category) nextErrors.category = "Category is required.";
+    if (!categoryId) nextErrors.category = "Category is required.";
     if (!description) nextErrors.description = "Description is required.";
     else if (description.length < 10) nextErrors.description = "Description must be at least 10 characters.";
-    if (consultantId && (!Number.isInteger(Number(consultantId)) || Number(consultantId) <= 0)) {
-      nextErrors.consultantId = "Enter a valid agent ID.";
-    }
+    if (!form.consultantId) nextErrors.consultantId = "Consultant is required.";
 
+    return nextErrors;
+  };
+
+  const liveErrors = React.useMemo(() => getClientValidationErrors(), [form]);
+  const displayErrors = React.useMemo(() => {
+    const touchedLive: Record<string, string> = {};
+    Object.entries(liveErrors).forEach(([key, message]) => {
+      if (touchedFields[key]) touchedLive[key] = message;
+    });
+    return { ...touchedLive, ...fieldErrors };
+  }, [fieldErrors, liveErrors, touchedFields]);
+
+  const canSubmit = React.useMemo(() => {
+    if (saving || loadingCategories) return false;
+    return Object.keys(liveErrors).length === 0;
+  }, [liveErrors, loadingCategories, saving]);
+
+  const validateForm = () => {
+    const nextErrors = getClientValidationErrors();
+    setTouchedFields(prev => ({ ...prev, category: true, description: true, consultantId: true }));
     setFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -1440,11 +1504,64 @@ export const CreateTicketModal: React.FC<{
     try {
       const saved = await createTicket({
         userId: currentUserId,
+        categoryId: Number(form.categoryId),
         category: form.category.trim(),
         description: form.description.trim(),
         priority: form.priority,
         consultantId: form.consultantId ? Number(form.consultantId) : null,
       }, file);
+
+      // â"€â"€ FAIL-SAFE NOTIFICATION TRIGGERS â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // Each trigger is wrapped in its own try/catch - exactly mirroring the Java
+      // TicketService pattern so a localStorage error never blocks the other trigger
+      // or the onCreated callback.
+
+      // Trigger 1: notifyNewAssignment
+      // Fires only when a consultant was assigned at creation time.
+      // Writes to fin_notifs_CONSULTANT_<id> so the consultant's bell lights up
+      // without waiting for their next poll cycle.
+      try {
+        const assignedConsultantId = saved.consultantId;
+        if (assignedConsultantId) {
+          const ticketNum = saved.ticketNumber || String(saved.id);
+          const categoryLabel = saved.categoryName || saved.category || "Support";
+          const consultantKey = `fin_notifs_CONSULTANT_${assignedConsultantId}`;
+          const prev: any[] = JSON.parse(localStorage.getItem(consultantKey) || "[]");
+          localStorage.setItem(consultantKey, JSON.stringify([{
+            id: `assign_${saved.id}_${Date.now()}`,
+            type: "warning",
+            title: `New Ticket Assigned - #${ticketNum}`,
+            message: `You have been assigned a new ${saved.priority || "MEDIUM"} priority ticket in ${categoryLabel}.`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            ticketId: saved.id,
+          }, ...prev].slice(0, 50)));
+        }
+      } catch { /* non-fatal - localStorage may be unavailable */ }
+
+      // Trigger 2: notifyTicketCreated
+      // Always fires for the submitting user regardless of consultant assignment.
+      // Writes to fin_notifs_USER_<id> so the user sees confirmation immediately.
+      try {
+        const userId = saved.userId || currentUserId;
+        if (userId) {
+          const ticketNum = saved.ticketNumber || String(saved.id);
+          const categoryLabel = saved.categoryName || saved.category || "Support";
+          const userKey = `fin_notifs_USER_${userId}`;
+          const prev: any[] = JSON.parse(localStorage.getItem(userKey) || "[]");
+          localStorage.setItem(userKey, JSON.stringify([{
+            id: `created_${saved.id}_${Date.now()}`,
+            type: "success",
+            title: `Ticket #${ticketNum} Submitted`,
+            message: `Your ticket has been received in ${categoryLabel}. ${saved.consultantId ? "A consultant has been assigned." : "A consultant will be assigned shortly."}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            ticketId: saved.id,
+          }, ...prev].slice(0, 50)));
+        }
+      } catch { /* non-fatal - localStorage may be unavailable */ }
+      // â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
       onCreated(saved);
     } catch (e: any) { setError(e.message || "Failed to create ticket."); }
     finally { setSaving(false); }
@@ -1464,34 +1581,43 @@ export const CreateTicketModal: React.FC<{
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Category *</label>
             {loadingCategories ? (
-              <div style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, color: "#94A3B8", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 10, background: fieldErrors.category ? "#FFF7F7" : "#fff" }}>
+              <div style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, color: "#94A3B8", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 10, background: displayErrors.category ? "#FFF7F7" : "#fff" }}>
                 <img src={logoImg} alt="" style={{ width: 20, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
                 Loading ticket categories...
               </div>
             ) : (
               <select
-                value={form.category}
-                onChange={e => { setForm({ ...form, category: e.target.value }); clearFieldError("category"); }}
-                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: fieldErrors.category ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
+                value={form.categoryId}
+                onChange={e => {
+                  const cat = categories.find(c => String(c.id) === e.target.value);
+                  setForm({ ...form, categoryId: e.target.value, category: cat ? cat.name : "" });
+                  setTouchedFields(prev => ({ ...prev, category: true }));
+                  clearFieldError("category");
+                }}
+                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.category ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: displayErrors.category ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
               >
-                <option value="">— Select category —</option>
-                {categories.map((category) => (
-                  <option key={category} value={category}>{category}</option>
+                <option value="">- Select category -</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={String(cat.id)}>{cat.name}</option>
                 ))}
               </select>
             )}
-            {fieldErrors.category && <div style={fieldErrorStyle}>{fieldErrors.category}</div>}
+            {displayErrors.category && <div style={fieldErrorStyle}>{displayErrors.category}</div>}
           </div>
           <div>
             <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Description *</label>
             <textarea
               value={form.description}
-              onChange={e => { setForm({ ...form, description: e.target.value }); clearFieldError("description"); }}
+              onChange={e => {
+                setForm({ ...form, description: e.target.value });
+                setTouchedFields(prev => ({ ...prev, description: true }));
+                clearFieldError("description");
+              }}
               rows={4}
-              placeholder="Describe the issue in detail…"
-              style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.description ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box", background: fieldErrors.description ? "#FFF7F7" : "#fff" }}
+              placeholder="Describe the issue in detail..."
+              style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.description ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", resize: "vertical", fontFamily: "inherit", boxSizing: "border-box", background: displayErrors.description ? "#FFF7F7" : "#fff" }}
             />
-            {fieldErrors.description && <div style={fieldErrorStyle}>{fieldErrors.description}</div>}
+            {displayErrors.description && <div style={fieldErrorStyle}>{displayErrors.description}</div>}
           </div>
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1 }}>
@@ -1502,15 +1628,24 @@ export const CreateTicketModal: React.FC<{
               </select>
             </div>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Agent ID (optional)</label>
-              <input
-                type="number"
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Consultant *</label>
+              <select
                 value={form.consultantId}
-                onChange={e => { setForm({ ...form, consultantId: e.target.value }); clearFieldError("consultantId"); }}
-                placeholder="Assign to agent…"
-                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${fieldErrors.consultantId ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: fieldErrors.consultantId ? "#FFF7F7" : "#fff" }}
-              />
-              {fieldErrors.consultantId && <div style={fieldErrorStyle}>{fieldErrors.consultantId}</div>}
+                onChange={e => {
+                  setForm({ ...form, consultantId: e.target.value });
+                  setTouchedFields(prev => ({ ...prev, consultantId: true }));
+                  clearFieldError("consultantId");
+                }}
+                style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${displayErrors.consultantId ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", background: displayErrors.consultantId ? "#FFF7F7" : "#fff", fontFamily: "inherit", cursor: "pointer" }}
+              >
+                <option value="" disabled>- Select consultant -</option>
+                {consultants.map((consultant) => (
+                  <option key={consultant.id} value={String(consultant.id)}>
+                    {(consultant.name || `Consultant #${consultant.id}`)} (ID: {consultant.id})
+                  </option>
+                ))}
+              </select>
+              {displayErrors.consultantId && <div style={fieldErrorStyle}>{displayErrors.consultantId}</div>}
             </div>
           </div>
           <div>
@@ -1519,9 +1654,9 @@ export const CreateTicketModal: React.FC<{
           </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
             <button onClick={onClose} style={{ padding: "9px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-            <button onClick={handleSubmit} disabled={saving}
-              style={{ padding: "9px 24px", borderRadius: 10, border: "none", background: saving ? "#99F6E4" : "#0F766E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-              {saving ? "Creating…" : "Create Ticket"}
+            <button onClick={handleSubmit} disabled={!canSubmit}
+              style={{ padding: "9px 24px", borderRadius: 10, border: "none", background: !canSubmit ? "#E2E8F0" : (saving ? "#99F6E4" : "#0F766E"), color: !canSubmit ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !canSubmit ? "not-allowed" : "pointer" }}>
+              {saving ? "Creating..." : "Create Ticket"}
             </button>
           </div>
         </div>
@@ -1530,9 +1665,9 @@ export const CreateTicketModal: React.FC<{
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // EXPORT DROPDOWN
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface ExportDropdownProps {
   tickets: any[];
   label?: string;
@@ -1558,7 +1693,7 @@ const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Expor
   const run = async (action: () => Promise<void>, successMsg: string) => {
     setOpen(false);
     setStatus("loading");
-    setStatusMsg("Generating…");
+    setStatusMsg("Generating...");
     try {
       await action();
       setStatus("done");
@@ -1606,7 +1741,7 @@ const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Expor
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <button onClick={() => status === "idle" && setOpen(o => !o)} style={btnStyle} title={isSingle ? `Export Ticket ${singleTicketDisplayId}` : `Export ${tickets.length} tickets`}>
         {status === "loading" ? (
-          <><span style={{ width: 12, height: 12, border: "2px solid #CBD5E1", borderTopColor: "#0F766E", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Exporting…</>
+          <><span style={{ width: 12, height: 12, border: "2px solid #CBD5E1", borderTopColor: "#0F766E", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />Exporting...</>
         ) : status === "done" ? (<><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> {statusMsg}</>
         ) : status === "error" ? (<><SvgIcon d={SVGS.warning} size={12} color="currentColor" strokeWidth={2.2} /> {statusMsg.slice(0, 28)}</>
         ) : (
@@ -1640,7 +1775,7 @@ const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Expor
             </div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Download Excel</div>
-              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Single ticket .xlsx file" : `.xlsx · ${tickets.length} rows`}</div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Single ticket .xlsx file" : `.xlsx Â· ${tickets.length} rows`}</div>
             </div>
           </button>
           <div style={{ height: 1, background: "#F1F5F9", margin: "0 14px" }} />
@@ -1653,7 +1788,7 @@ const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Expor
             </div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>Download PDF</div>
-              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Formatted ticket report" : `Printable report · ${tickets.length} tickets`}</div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{isSingle ? "Formatted ticket report" : `Printable report Â· ${tickets.length} tickets`}</div>
             </div>
           </button>
           <div style={{ padding: "8px 14px 10px", borderTop: "1px solid #F1F5F9", background: "#F8FAFC" }}>
@@ -1666,9 +1801,9 @@ const ExportDropdown: React.FC<ExportDropdownProps> = ({ tickets, label = "Expor
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // TICKETS SECTION
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface TicketsSectionProps {
   consultants: Advisor[];
   currentAdminId: number;
@@ -1678,7 +1813,7 @@ interface TicketsSectionProps {
 const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdminId, onTicketsLoaded }) => {
   const { addNotification } = useNotifications();
   const TICKET_PAGE_SIZE = 10;
-  const ticketTableColumns = "110px minmax(260px,1.8fr) 110px 112px 150px 120px 92px 110px";
+  const ticketTableColumns = "110px minmax(260px,1.8fr) 110px 112px 150px 120px 64px 118px";
 
   const [tickets, setTickets] = useState<Ticket[]>([]);   // current page items
   const [totalElements, setTotalElements] = useState(0);
@@ -1692,16 +1827,32 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
-  // Cache: page-number → Ticket[] for instant adjacent-page navigation
+  // Cache: page-number â†' Ticket[] for instant adjacent-page navigation
   const [pageCache, setPageCache] = useState<Record<number, Ticket[]>>({});
   const [searchPool, setSearchPool] = useState<Ticket[] | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const hasSearch = searchQ.trim().length > 0;
 
+  const [emailToTicketStatus, setEmailToTicketStatus] = useState<"checking" | "ok" | "down">("checking");
+  const [emailToTicketPolling, setEmailToTicketPolling] = useState(false);
+  const [lastEmailPollAt, setLastEmailPollAt] = useState<number | null>(null);
+
   // Reset to page 0 when filters/search change
   useEffect(() => { setTicketPage(0); setPageCache({}); setSearchPool(null); }, [filterStatus, filterPriority]);
 
   useEffect(() => { loadPage(ticketPage); }, [ticketPage]);
+
+  const checkEmailToTicket = useCallback(async () => {
+    setEmailToTicketStatus("checking");
+    try {
+      await emailToTicketHealth();
+      setEmailToTicketStatus("ok");
+    } catch {
+      setEmailToTicketStatus("down");
+    }
+  }, []);
+
+  useEffect(() => { checkEmailToTicket(); }, [checkEmailToTicket]);
 
   // Silently pre-fetch adjacent pages after current page loads
   useEffect(() => {
@@ -1729,7 +1880,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
 
     const firstPass = arr.map((t: any) => {
       // Already has a real name (not a placeholder)
-      if (t.userName && !t.userName.startsWith("User #")) return t;
+      if (t.userName && !t.userName.startsWith("User #") && !isGenericTicketUserLabel(t.userName)) return t;
       const name = resolveTicketClientName(t);
       // Also grab consultant/agent name if missing
       const consultantName =
@@ -1739,18 +1890,20 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         (t.consultantId ? (consultantLookup[Number(t.consultantId)] || null) : null) || null;
       return {
         ...t,
-        userName: name || (t.userId ? "Client" : "—"),
+        userName: name || (t.userId ? `User #${t.userId}` : "-"),
         ...(consultantName && !t.consultantName ? { consultantName, agentName: consultantName } : {}),
       };
     });
 
-    // Second pass: for tickets still showing "User #N", try multiple endpoints
-    const needsFetch = firstPass.filter((t: any) => t.userName?.startsWith("User #") && t.userId);
+    // Second pass: for tickets still showing "User #N" or plain "Client", try multiple endpoints
+    const needsFetch = firstPass.filter((t: any) =>
+      (t.userName?.startsWith("User #") || t.userName === "Client") && t.userId
+    );
     if (needsFetch.length > 0) {
       const uniqueIds = [...new Set(needsFetch.map((t: any) => t.userId))] as number[];
       const userMap: Record<number, string> = {};
       await Promise.all(uniqueIds.slice(0, 30).map(async (uid) => {
-        // Try multiple endpoints — backend may expose user info via different routes
+        // Try multiple endpoints - backend may expose user info via different routes
         for (const endpoint of [`/users/${uid}`, `/onboarding/${uid}`, `/members/${uid}`]) {
           try {
             const data = await apiFetch(endpoint);
@@ -1764,17 +1917,29 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
         }
       }));
       return firstPass.map((t: any) =>
-        userMap[t.userId] ? { ...t, userName: userMap[t.userId] } : t
+        userMap[t.userId]
+          ? { ...t, userName: userMap[t.userId] }
+          : (t.userId && Number(t.userId) === Number(currentAdminId))
+            ? { ...t, userName: "Admin" }
+            : t
       );
     }
     return firstPass;
   };
 
-  // load() — used by Refresh button and after ticket create/delete
-  const load = async () => { setPageCache({}); setSearchPool(null); setTicketPage(0); };
+  // load() - used by Refresh button and after ticket create/delete
+  // FIX: setTicketPage(0) is a no-op when already on page 0 - React skips
+  // the state update so the useEffect never fires and loadPage(0) is never
+  // called. Fix: call loadPage(0, true) directly to bypass the stale cache.
+  const load = async () => {
+    setPageCache({});
+    setSearchPool(null);
+    setTicketPage(0);
+    await loadPage(0, true);  // force = true bypasses the stale pageCache
+  };
 
-  const loadPage = async (page: number) => {
-    if (pageCache[page]) {
+  const loadPage = async (page: number, force = false) => {
+    if (!force && pageCache[page]) {
       setTickets(pageCache[page]);
       setLoading(false);
       return;
@@ -1980,20 +2145,68 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
       {showCreate && (
         <CreateTicketModal
           currentUserId={currentAdminId}
+          consultants={consultants}
           onCreated={_t => { load(); setShowCreate(false); }}
           onClose={() => setShowCreate(false)}
         />
       )}
 
       {/* Email-to-Ticket feature notice */}
-      <div style={{ background: "linear-gradient(135deg,#ECFEFF,#F0FDF4)", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ display: "flex", alignItems: "center" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 2 }}>Email-to-Ticket is Active</div>
-          <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
-            Emails sent to <strong style={{ color: "#0F766E" }}>support@meetthemasters.in</strong> are automatically converted to tickets.
-            Priority and category are auto-detected from email content. Duplicate emails are ignored.
+      <div style={{ background: "linear-gradient(135deg,#ECFEFF,#F0FDF4)", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center" }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1E3A8A", marginBottom: 2 }}>Email-to-Ticket is Active</div>
+            <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+              This panel shows inbound support emails processed by the currently configured mailbox integration.
+              Configured support email: <strong style={{ color: "#0F766E" }}>{SUPPORT_EMAIL}</strong>.
+            </div>
           </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" as const, justifyContent: "flex-end" }}>
+          <span style={{
+            fontSize: 11,
+            fontWeight: 800,
+            padding: "4px 10px",
+            borderRadius: 999,
+            border: "1px solid",
+            ...(emailToTicketStatus === "ok"
+              ? { background: "#F0FDF4", color: "#16A34A", borderColor: "#86EFAC" }
+              : emailToTicketStatus === "down"
+                ? { background: "#FEF2F2", color: "#DC2626", borderColor: "#FECACA" }
+                : { background: "#F1F5F9", color: "#64748B", borderColor: "#E2E8F0" }),
+          }}>
+            {emailToTicketStatus === "ok" ? "HEALTHY" : emailToTicketStatus === "down" ? "DOWN" : "CHECKING"}
+          </span>
+          <button
+            onClick={checkEmailToTicket}
+            disabled={emailToTicketStatus === "checking"}
+            style={{ padding: "7px 12px", background: "#fff", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+          >
+            Check
+          </button>
+          <button
+            onClick={async () => {
+              setEmailToTicketPolling(true);
+              try {
+                const msg = await triggerEmailToTicketPoll();
+                setLastEmailPollAt(Date.now());
+                addNotification({ type: "success", title: "Email polling started", message: msg || "Email polling initiated successfully." });
+                // refresh health (non-blocking)
+                checkEmailToTicket().catch(() => null);
+              } catch (e: any) {
+                addNotification({ type: "error", title: "Email polling failed", message: e?.message || "Failed to trigger email polling." });
+              } finally {
+                setEmailToTicketPolling(false);
+              }
+            }}
+            disabled={emailToTicketPolling}
+            style={{ padding: "7px 12px", background: "#0F766E", border: "none", color: "#fff", borderRadius: 10, fontSize: 12, fontWeight: 800, cursor: "pointer" }}
+            title={lastEmailPollAt ? `Last run: ${new Date(lastEmailPollAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}` : "Trigger manual email polling"}
+          >
+            {emailToTicketPolling ? "Polling..." : "Poll Inbox"}
+          </button>
         </div>
       </div>
 
@@ -2034,7 +2247,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
           { label: "Closed", value: counts.CLOSED, color: "#64748B", bg: "#F1F5F9" },
         ].map(s => (
           <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "12px 14px", minWidth: 90, textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{loading ? "…" : s.value}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{loading ? "..." : s.value}</div>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: 4, lineHeight: 1.3 }}>{s.label}</div>
           </div>
         ))}
@@ -2046,7 +2259,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
             <circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2" />
             <path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" />
           </svg>
-          <input value={searchQ} onChange={e => { setSearchQ(e.target.value); setTicketPage(0); }} placeholder="Search by ID, title, user, consultant, status, priority…"
+          <input value={searchQ} onChange={e => { setSearchQ(e.target.value); setTicketPage(0); }} placeholder="Search by ID, title, user, consultant, status, priority..."
             style={{ width: "100%", paddingLeft: 32, paddingRight: 12, paddingTop: 9, paddingBottom: 9, border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }} />
         </div>
         <select value={filterPriority} onChange={e => { setFilterPriority(e.target.value as any); setTicketPage(0); setPageCache({}); }}
@@ -2084,7 +2297,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
       {hasSearch && (
         <div style={{ marginBottom: 14, fontSize: 12, color: searchLoading ? "#0F766E" : "#64748B", fontWeight: 600 }}>
           {searchLoading
-            ? "Searching across all tickets…"
+            ? "Searching across all tickets..."
             : `${visible.length} matching ticket${visible.length === 1 ? "" : "s"} found`}
         </div>
       )}
@@ -2175,24 +2388,24 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
                       {fmtIST(ticket.createdAt, { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" })}
                       {isOverdue && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.floor(hoursOpen)}h open</div>}
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifySelf: "end", gap: 3 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifySelf: "end", gap: 6 }}>
                       <button onClick={e => { e.stopPropagation(); setSelectedTicket(ticket); }}
-                        style={{ width: 82, padding: "4px 0", background: "#ECFEFF", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "center", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                        style={{ width: "100%", padding: "5px 0", background: "#ECFEFF", border: "1px solid #A5F3FC", color: "#0F766E", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
                         Open <ArrowRight size={12} />
                       </button>
-                      <div style={{ display: "flex", gap: 3 }}>
+                      <div style={{ display: "flex", gap: 6, width: "100%" }}>
                         <button onClick={async e => {
                           e.stopPropagation();
                           try { await exportSingleTicketExcel(ticket.id); }
                           catch { await clientExportTicketsExcel([ticket], `ticket_${ticket.id}.xlsx`); }
-                        }} style={{ width: 32, padding: "3px 0", background: "#F0FDF4", border: "1px solid #86EFAC", color: "#16A34A", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
+                        }} style={{ flex: 1, padding: "4px 0", background: "#F0FDF4", border: "1px solid #86EFAC", color: "#16A34A", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
                           XLS
                         </button>
                         <button onClick={async e => {
                           e.stopPropagation();
                           try { await exportSingleTicketPdf(ticket.id); }
                           catch { await clientExportTicketsPdf([ticket], `ticket_${ticket.id}.pdf`); }
-                        }} style={{ width: 32, padding: "3px 0", background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#DC2626", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
+                        }} style={{ flex: 1, padding: "4px 0", background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#DC2626", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer", textAlign: "center" }}>
                           PDF
                         </button>
                       </div>
@@ -2203,16 +2416,16 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
             </div>
           </div>
 
-          {/* ── Pagination Bar ── */}
+          {/* â"€â"€ Pagination Bar â"€â"€ */}
           {!hasSearch && totalPages > 1 && (() => {
-            const pageNums = (): (number | "…")[] => {
+            const pageNums = (): (number | "...")[] => {
               if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i);
               const set = new Set([0, totalPages - 1, ticketPage - 1, ticketPage, ticketPage + 1]
                 .filter(p => p >= 0 && p < totalPages));
               const sorted = [...set].sort((a, b) => a - b);
-              const result: (number | "…")[] = [];
+              const result: (number | "...")[] = [];
               sorted.forEach((p, i) => {
-                if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("…");
+                if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("...");
                 result.push(p);
               });
               return result;
@@ -2221,7 +2434,7 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
             return (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20, flexWrap: "wrap", gap: 10 }}>
                 <span style={{ fontSize: 12, color: "#64748B", fontWeight: 600 }}>
-                  Page {ticketPage + 1} of {totalPages} &nbsp;·&nbsp; {totalElements} total tickets
+                  Page {ticketPage + 1} of {totalPages} &nbsp;Â·&nbsp; {totalElements} total tickets
                 </span>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   <button onClick={() => goToPage(ticketPage - 1)} disabled={ticketPage === 0}
@@ -2229,8 +2442,8 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
                   ><ChevronLeft size={14} /> Prev</button>
 
                   {pageNums().map((pg, i) =>
-                    pg === "…" ? (
-                      <span key={`ellipsis-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>…</span>
+                    pg === "..." ? (
+                      <span key={`ellipsis-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>...</span>
                     ) : (
                       <button key={pg} onClick={() => goToPage(pg as number)}
                         style={{
@@ -2260,9 +2473,9 @@ const TicketsSection: React.FC<TicketsSectionProps> = ({ consultants, currentAdm
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // DYNAMIC SETTINGS PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 type SettingsTab = "profile" | "notifications" | "security" | "logout";
 
@@ -2289,7 +2502,7 @@ interface NotificationPrefs {
 const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adminId, onLogout }) => {
   const [activeTab, setActiveTab] = React.useState<SettingsTab | null>(null);
 
-  // ── Profile state ──────────────────────────────────────────────────────────
+  // â"€â"€ Profile state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [profile, setProfile] = React.useState<AdminProfile>({
     name: localStorage.getItem("fin_user_name") || "",
     email: localStorage.getItem("fin_user_email") || "",
@@ -2303,7 +2516,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
   const [avatarPreview, setAvatarPreview] = React.useState<string>(profile.avatarUrl);
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Load latest profile from backend on mount — GET /api/onboarding/{adminId}
+  // Load latest profile from backend on mount - GET /api/onboarding/{adminId}
   React.useEffect(() => {
     if (!adminId) return;
     const token = localStorage.getItem("fin_token") || "";
@@ -2317,7 +2530,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
           name: data.name || profile.name,
           email: data.email || profile.email,
           phone: data.phoneNumber || profile.phone,
-          orgName: profile.orgName, // not in onboarding response — keep local
+          orgName: profile.orgName, // not in onboarding response - keep local
           designation: profile.designation,
           avatarUrl: data.profileImageUrl || profile.avatarUrl,
         };
@@ -2333,7 +2546,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminId]);
 
-  // ── Notification prefs ─────────────────────────────────────────────────────
+  // â"€â"€ Notification prefs â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const loadNotifPrefs = (): NotificationPrefs => {
     try {
       const raw = localStorage.getItem("fin_notif_prefs");
@@ -2354,22 +2567,23 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
   const [notifSaving, setNotifSaving] = React.useState(false);
   const [notifMsg, setNotifMsg] = React.useState<{ text: string; ok: boolean } | null>(null);
 
-  // ── Security state ─────────────────────────────────────────────────────────
+  // â"€â"€ Security state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [secForm, setSecForm] = React.useState({ newPass: "", confirm: "" });
   const [secSaving, setSecSaving] = React.useState(false);
   const [secMsg, setSecMsg] = React.useState<{ text: string; ok: boolean } | null>(null);
   const [showPasswords, setShowPasswords] = React.useState({ newPass: false, confirm: false });
 
-  // ── Logout confirm ─────────────────────────────────────────────────────────
+  // â"€â"€ Logout confirm â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [logoutConfirm, setLogoutConfirm] = React.useState(false);
 
-  // ── Auto-dismiss messages ──────────────────────────────────────────────────
+  // â"€â"€ Auto-dismiss messages â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const showMsg = (setter: React.Dispatch<React.SetStateAction<{ text: string; ok: boolean } | null>>, text: string, ok: boolean) => {
     setter({ text, ok });
     setTimeout(() => setter(null), 3500);
   };
+  const canSaveProfile = profile.name.trim().length > 0 && /\S+@\S+\.\S+/.test(profile.email.trim()) && !profileSaving;
 
-  // ── Profile handlers ───────────────────────────────────────────────────────
+  // â"€â"€ Profile handlers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2391,15 +2605,16 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
       const token = localStorage.getItem("fin_token") || "";
 
       // Build multipart/form-data request as required by:
-      // PUT /api/onboarding/{id}  — consumes multipart/form-data
+      // PUT /api/onboarding/{id}  - consumes multipart/form-data
       // "data" part: UpdateUserRegistrationRequest JSON
       // "file" part: optional profile image file
-      const onboardingPayload = {
+      const onboardingPayload: Record<string, any> = {
         name: profile.name.trim(),
         email: profile.email.trim(),
         phoneNumber: profile.phone.trim(),
-        location: profile.orgName.trim(), // map orgName → location field
       };
+      // Keep organization/designation as local profile metadata for now.
+      if (profile.orgName.trim()) onboardingPayload.location = profile.orgName.trim();
 
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(onboardingPayload)], { type: "application/json" }));
@@ -2415,7 +2630,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
         const res = await fetch(`${BASE_URL}/onboarding/${adminId}`, {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}` },
-          // Do NOT set Content-Type — browser sets it automatically with multipart boundary
+          // Do NOT set Content-Type - browser sets it automatically with multipart boundary
           body: fd,
         });
         if (res.ok) {
@@ -2431,7 +2646,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
           showMsg(setProfileMsg, "Not authorised to update this profile.", false);
           return;
         }
-      } catch { /* network error — fall through to localStorage */ }
+      } catch { /* network error - fall through to localStorage */ }
 
       // Also try PUT /api/users/{id} to update the core login identifier (email)
       try {
@@ -2452,7 +2667,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
       if (avatarPreview) localStorage.setItem("fin_avatar_url", avatarPreview);
 
       showMsg(setProfileMsg,
-        backendSaved ? "Profile saved successfully!" : "Saved locally — backend sync failed.",
+        backendSaved ? "Profile saved successfully!" : "Saved locally - backend sync failed.",
         backendSaved
       );
     } catch (e: any) {
@@ -2462,7 +2677,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     }
   };
 
-  // ── Notification prefs handler ─────────────────────────────────────────────
+  // â"€â"€ Notification prefs handler â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleSaveNotifPrefs = async () => {
     setNotifSaving(true);
     try {
@@ -2479,7 +2694,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     }
   };
 
-  // ── Security handler ────────────────────────────────────────────────────────
+  // â"€â"€ Security handler â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleChangePassword = async () => {
     if (secForm.newPass.length < 8) { showMsg(setSecMsg, "New password must be at least 8 characters.", false); return; }
     if (secForm.newPass !== secForm.confirm) { showMsg(setSecMsg, "Passwords do not match.", false); return; }
@@ -2514,7 +2729,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
     }
   };
 
-  // ── Password strength ───────────────────────────────────────────────────────
+  // â"€â"€ Password strength â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const getPasswordStrength = (p: string): { label: string; color: string; pct: number } => {
     if (!p) return { label: "", color: "#E2E8F0", pct: 0 };
     let score = 0;
@@ -2530,7 +2745,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
   };
   const strength = getPasswordStrength(secForm.newPass);
 
-  // ── Shared styles ───────────────────────────────────────────────────────────
+  // â"€â"€ Shared styles â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const inputStyle: React.CSSProperties = {
     width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0",
     borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box",
@@ -2564,7 +2779,6 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
 
   const TABS: { id: SettingsTab; label: string; icon: string; desc: string }[] = [
     { id: "profile", icon: "profile", label: "General Profile", desc: "Update your name, email, organisation details and avatar" },
-    { id: "notifications", icon: "notifications", label: "Notifications", desc: "Control which alerts you receive via email and in-app" },
     { id: "security", icon: "security", label: "Security", desc: "Change your password and manage account security" },
     { id: "logout", icon: "logout", label: "Logout", desc: "Sign out of your admin account" },
   ];
@@ -2579,7 +2793,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
       <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 6px rgba(0,0,0,0.05)" }}>
         {TABS.map((tab, idx) => (
           <div key={tab.id}>
-            {/* ── Row button ── */}
+            {/* â"€â"€ Row button â"€â"€ */}
             <button
               onClick={() => setActiveTab(activeTab === tab.id ? null : tab.id)}
               style={sectionBtnStyle(activeTab === tab.id)}
@@ -2610,7 +2824,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
               }}><ArrowRight size={16} /></span>
             </button>
 
-            {/* ══════════════ PROFILE PANEL ══════════════ */}
+            {/* â*â*â*â*â*â*â*â*â*â*â*â*â*â* PROFILE PANEL â*â*â*â*â*â*â*â*â*â*â*â*â*â* */}
             {activeTab === "profile" && tab.id === "profile" && (
               <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
                 {/* Avatar */}
@@ -2641,7 +2855,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                   <input ref={avatarInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleAvatarChange} />
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 15, color: "#0F172A" }}>{profile.name || "Admin"}</div>
-                    <div style={{ fontSize: 12, color: "#64748B" }}>{profile.designation} · {profile.orgName}</div>
+                    <div style={{ fontSize: 12, color: "#64748B" }}>{profile.designation} Â· {profile.orgName}</div>
                     <button onClick={() => avatarInputRef.current?.click()} style={{ marginTop: 6, fontSize: 11, color: "#0F766E", fontWeight: 700, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
                       Change photo
                     </button>
@@ -2652,7 +2866,7 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 20px" }}>
                   <div>
                     <label style={labelStyle}>Full Name *</label>
-                    <input value={profile.name} onChange={e => setProfile({ ...profile, name: e.target.value })} placeholder="Admin name" style={inputStyle} />
+                    <input value={profile.name} onChange={e => { const val = e.target.value; if (val.length === 1 && /[^a-zA-Z]/.test(val)) return; setProfile({ ...profile, name: val }); }} placeholder="Admin name" style={inputStyle} />
                   </div>
                   <div>
                     <label style={labelStyle}>Email Address *</label>
@@ -2664,11 +2878,14 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                   </div>
                   <div>
                     <label style={labelStyle}>Designation</label>
-                    <input value={profile.designation} onChange={e => setProfile({ ...profile, designation: e.target.value })} placeholder="Admin, Manager…" style={inputStyle} />
+                    <input value={profile.designation} onChange={e => setProfile({ ...profile, designation: e.target.value })} placeholder="Admin, Manager..." style={inputStyle} />
                   </div>
                   <div style={{ gridColumn: "1 / -1" }}>
                     <label style={labelStyle}>Organisation Name</label>
                     <input value={profile.orgName} onChange={e => setProfile({ ...profile, orgName: e.target.value })} placeholder="Your company name" style={inputStyle} />
+                  </div>
+                  <div style={{ gridColumn: "1 / -1", marginTop: -4, fontSize: 11, color: "#94A3B8" }}>
+                    Designation and Organisation are local-only preferences right now and are not saved in backend profile APIs.
                   </div>
                 </div>
 
@@ -2682,63 +2899,23 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                   <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                     Cancel
                   </button>
-                  <button onClick={handleSaveProfile} disabled={profileSaving} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: profileSaving ? "#99F6E4" : "#0F766E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    {profileSaving ? "Saving…" : "Save Profile"}
+                  <button onClick={handleSaveProfile} disabled={!canSaveProfile} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: canSaveProfile ? (profileSaving ? "#99F6E4" : "#0F766E") : "#E2E8F0", color: canSaveProfile ? "#fff" : "#94A3B8", fontSize: 13, fontWeight: 700, cursor: canSaveProfile ? "pointer" : "not-allowed" }}>
+                    {profileSaving ? "Saving..." : "Save Profile"}
                   </button>
                 </div>
               </div>
             )}
 
-            {/* ══════════════ NOTIFICATIONS PANEL ══════════════ */}
-            {activeTab === "notifications" && tab.id === "notifications" && (
-              <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-                  {/* Email Notifications */}
-                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#ECFEFF", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg></div>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>Email Notifications</div>
-                    </div>
-                    <Toggle checked={notifPrefs.emailOnNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnNewTicket: v })} label="New ticket submitted" sub="Get emailed when a user raises a ticket" />
-                    <Toggle checked={notifPrefs.emailOnStatusChange} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnStatusChange: v })} label="Ticket status changes" sub="Notify when a ticket moves to RESOLVED or CLOSED" />
-                    <Toggle checked={notifPrefs.emailOnEscalation} onChange={v => setNotifPrefs({ ...notifPrefs, emailOnEscalation: v })} label="Escalations" sub="Immediate alert on ticket escalation" />
-                    <Toggle checked={notifPrefs.dailySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, dailySummaryEmail: v })} label="Daily summary email" sub="Digest of open tickets every morning" />
-                    <Toggle checked={notifPrefs.weeklySummaryEmail} onChange={v => setNotifPrefs({ ...notifPrefs, weeklySummaryEmail: v })} label="Weekly report email" sub="Full analytics sent every Monday" />
-                  </div>
 
-                  {/* In-App Notifications */}
-                  <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, padding: "16px 18px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: 9, background: "#F5F3FF", display: "flex", alignItems: "center", justifyContent: "center" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg></div>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>In-App Notifications</div>
-                    </div>
-                    <Toggle checked={notifPrefs.inAppNewTicket} onChange={v => setNotifPrefs({ ...notifPrefs, inAppNewTicket: v })} label="New tickets bell alert" sub="Shows in the top notification bell" />
-                    <Toggle checked={notifPrefs.inAppSlaBreaches} onChange={v => setNotifPrefs({ ...notifPrefs, inAppSlaBreaches: v })} label="SLA breach warnings" sub="Red alert when a ticket crosses SLA window" />
-                    <Toggle checked={notifPrefs.inAppAssignments} onChange={v => setNotifPrefs({ ...notifPrefs, inAppAssignments: v })} label="Consultant assignments" sub="Confirmation toast on successful assign" />
-                  </div>
-                </div>
-
-                {notifMsg && (
-                  <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 9, background: notifMsg.ok ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${notifMsg.ok ? "#86EFAC" : "#FECACA"}`, color: notifMsg.ok ? "#166534" : "#B91C1C", fontSize: 13, fontWeight: 600 }}>
-                    {notifMsg.ok ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>} {notifMsg.text}
-                  </div>
-                )}
-
-                <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
-                  <button onClick={() => setActiveTab(null)} style={{ padding: "10px 20px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-                  <button onClick={handleSaveNotifPrefs} disabled={notifSaving} style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: notifSaving ? "#A78BFA" : "#7C3AED", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    {notifSaving ? "Saving…" : "Save Preferences"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ══════════════ SECURITY PANEL ══════════════ */}
+            {/* â*â*â*â*â*â*â*â*â*â*â*â*â*â* SECURITY PANEL â*â*â*â*â*â*â*â*â*â*â*â*â*â* */}
             {activeTab === "security" && tab.id === "security" && (
               <div style={{ padding: "24px 28px", borderBottom: "1px solid #F1F5F9", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
                 <div style={{ maxWidth: 480 }}>
                   <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 10, padding: "10px 14px", marginBottom: 20, fontSize: 12, color: "#115E59", fontWeight: 600 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg> Set a new password for your admin account. Make sure it meets all the requirements below.</span>
+                  </div>
+                  <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 11, color: "#64748B", lineHeight: 1.5 }}>
+                    Same-password checks are enforced by the backend on this Change Password API. Forgot Password uses a separate backend reset flow.
                   </div>
 
                   {/* New Password */}
@@ -2819,14 +2996,14 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
                       onClick={handleChangePassword}
                       disabled={secSaving || !secForm.newPass || secForm.newPass.length < 8 || secForm.newPass !== secForm.confirm}
                       style={{ padding: "10px 24px", borderRadius: 10, border: "none", background: (secSaving || !secForm.newPass || secForm.newPass.length < 8 || secForm.newPass !== secForm.confirm) ? "#E2E8F0" : "#0F172A", color: (secSaving || !secForm.newPass || secForm.newPass.length < 8 || secForm.newPass !== secForm.confirm) ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                      {secSaving ? "Updating…" : "Update Password"}
+                      {secSaving ? "Updating..." : "Update Password"}
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* ══════════════ LOGOUT PANEL ══════════════ */}
+            {/* â*â*â*â*â*â*â*â*â*â*â*â*â*â* LOGOUT PANEL â*â*â*â*â*â*â*â*â*â*â*â*â*â* */}
             {activeTab === "logout" && tab.id === "logout" && (
               <div style={{ padding: "24px 28px", background: "#FAFBFF", animation: "fadeInDown 0.18s ease" }}>
                 {!logoutConfirm ? (
@@ -2872,9 +3049,9 @@ const SettingsPage: React.FC<{ adminId: number; onLogout: () => void }> = ({ adm
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // SUPPORT CONFIG PANEL
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const sc_styles: Record<string, React.CSSProperties> = {
   panelWrap: { padding: "0 0 40px" },
   panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 },
@@ -2987,7 +3164,7 @@ const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssi
                     {breached && <span style={{ ...sc_styles.badge, background: "#FEF2F2", color: "#DC2626", display: "inline-flex", alignItems: "center", gap: 3 }}><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>SLA</span>}
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", marginBottom: 2 }}>{t.title || t.category}</div>
-                  <div style={{ fontSize: 11, color: "#94A3B8", display: "flex", alignItems: "center", gap: 4 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> {t.userName || "Client"} · {t.category}</div>
+                  <div style={{ fontSize: 11, color: "#94A3B8", display: "flex", alignItems: "center", gap: 4 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> {resolveTicketClientName(t)} Â· {t.category}</div>
                 </div>
                 <div style={{ flexShrink: 0 }}>
                   {t.agentName
@@ -3026,27 +3203,29 @@ const AssignmentPanel: React.FC<{ tickets: Ticket[]; agents: AgentInfo[]; onAssi
 
 interface CannedResponse { id: number; title: string; category: string; body: string; }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CANNED RESPONSES  ← THE 3 FIXED API CALLS ARE HERE
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// CANNED RESPONSES  â† THE 3 FIXED API CALLS ARE HERE
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const CannedResponses: React.FC<{}> = () => {
   const [responses, setResponses] = useState<CannedResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<Omit<CannedResponse, "id">>({ title: "", category: "General", body: "" });
+  const [form, setForm] = useState<Omit<CannedResponse, "id">>({ title: "", category: "", body: "" });
+  const [formErrors, setFormErrors] = useState<{ title?: string; category?: string; body?: string }>({});
   const [search, setSearch] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2000); };
 
   const openNewModal = () => {
     if (showModal) return; // prevent duplicate modals on rapid clicks
-    setForm({ title: "", category: "General", body: "" });
+    setForm({ title: "", category: "", body: "" });
+    setFormErrors({});
     setShowModal(true);
   };
-  const closeModal = () => { if (saving) return; setShowModal(false); };
+  const closeModal = () => { if (saving) return; setShowModal(false); setFormErrors({}); };
 
-  // ── FIX 1: Load canned responses from the correct backend path ──────────────
+  // â"€â"€ FIX 1: Load canned responses from the correct backend path â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   useEffect(() => {
     setLoading(true);
     apiFetch("/admin/config/canned-responses")
@@ -3062,26 +3241,50 @@ const CannedResponses: React.FC<{}> = () => {
   }, []);
 
   const filtered = responses.filter(r => r.title.toLowerCase().includes(search.toLowerCase()) || r.body.toLowerCase().includes(search.toLowerCase()));
+  const canCreateResponse = (() => {
+    const title = form.title.trim();
+    const body = form.body.trim();
+    if (!title || !form.category || !body) return false;
+    if (title.length < 3 || title.length > 80) return false;
+    if (!/^[A-Za-z]/.test(title) || !/[A-Za-z]/.test(title)) return false;
+    if (body.length < 10 || body.length > 1000) return false;
+    if (!/[A-Za-z]/.test(body)) return false;
+    return !saving;
+  })();
 
-  // ── FIX 2: Save (create) via the correct backend path ─────────────────────
+  // â"€â"€ FIX 2: Save (create) via the correct backend path â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const save = async () => {
-    if (!form.title.trim() || !form.body.trim()) return;
+    const title = form.title.trim();
+    const body = form.body.trim();
+    const newErrors: { title?: string; category?: string; body?: string } = {};
+    if (!title) newErrors.title = "Title is required";
+    else if (title.length < 3) newErrors.title = "Title must be at least 3 characters";
+    else if (title.length > 80) newErrors.title = "Title cannot exceed 80 characters";
+    else if (!/^[A-Za-z]/.test(title)) newErrors.title = "Title must start with a letter (no numbers/symbols first)";
+    else if (!/[A-Za-z]/.test(title)) newErrors.title = "Title must include letters, not only numbers";
+    if (!form.category) newErrors.category = "Category is required";
+    if (!body) newErrors.body = "Body text is required";
+    else if (body.length < 10) newErrors.body = "Body text must be at least 10 characters";
+    else if (body.length > 1000) newErrors.body = "Body text cannot exceed 1000 characters";
+    else if (!/[A-Za-z]/.test(body)) newErrors.body = "Body text must include meaningful content";
+    if (Object.keys(newErrors).length > 0) { setFormErrors(newErrors); return; }
     if (saving) return;
     setSaving(true);
+    setFormErrors({});
     try {
       const created = await apiFetch("/admin/config/canned-responses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: form.title, content: form.body, category: form.category }),
+        body: JSON.stringify({ title, content: body, category: form.category }),
       });
-      setResponses(p => [...p, { ...form, id: created?.id ?? Date.now() }]);
+      setResponses(p => [...p, { ...form, title, body, id: created?.id ?? Date.now() }]);
       closeModal();
       showToast("Response created");
     } catch (e: any) { showToast(e?.message || "Save failed"); }
     finally { setSaving(false); }
   };
 
-  // ── FIX 3: Delete via the correct backend path ─────────────────────────────
+  // â"€â"€ FIX 3: Delete via the correct backend path â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const deleteResponse = async (id: number) => {
     try {
       await apiFetch("/admin/config/canned-responses/" + id, { method: "DELETE" }).catch(() => null);
@@ -3092,7 +3295,7 @@ const CannedResponses: React.FC<{}> = () => {
 
   return (
     <div style={sc_styles.panelWrap}>
-      {/* ── Modal Popup ── */}
+      {/* â"€â"€ Modal Popup â"€â"€ */}
       {showModal && (
         <div style={{ position: "fixed", inset: 0, zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={closeModal} style={{ position: "absolute", inset: 0, background: "rgba(15,23,42,0.45)", backdropFilter: "blur(4px)" }} />
@@ -3118,21 +3321,45 @@ const CannedResponses: React.FC<{}> = () => {
             </div>
             {/* Modal body */}
             <div style={{ padding: "24px" }}>
-              <label style={sc_styles.label}>Title</label>
-              <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Billing Refund" style={{ ...sc_styles.input, marginBottom: 14 }} />
-              <label style={sc_styles.label}>Category</label>
-              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} style={{ ...sc_styles.select, marginBottom: 14 }}>
+              <label style={sc_styles.label}>Title <span style={{ color: "#DC2626" }}>*</span></label>
+              <input
+                value={form.title}
+                onChange={e => {
+                  const raw = e.target.value || "";
+                  const sanitized = raw.replace(/^[^A-Za-z]*/, "");
+                  setForm({ ...form, title: sanitized });
+                  if (formErrors.title) setFormErrors(p => ({ ...p, title: undefined }));
+                }}
+                placeholder="e.g. Billing Refund"
+                style={{ ...sc_styles.input, marginBottom: formErrors.title ? 2 : 14, borderColor: formErrors.title ? "#FCA5A5" : undefined, background: formErrors.title ? "#FFF7F7" : undefined }}
+              />
+              {formErrors.title && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginBottom: 10 }}>{formErrors.title}</div>}
+              <label style={sc_styles.label}>Category <span style={{ color: "#DC2626" }}>*</span></label>
+              <select
+                value={form.category}
+                onChange={e => { setForm({ ...form, category: e.target.value }); if (formErrors.category) setFormErrors(p => ({ ...p, category: undefined })); }}
+                style={{ ...sc_styles.select, marginBottom: formErrors.category ? 2 : 14, borderColor: formErrors.category ? "#FCA5A5" : undefined, background: formErrors.category ? "#FFF7F7" : undefined }}
+              >
+                <option value="" disabled>Select a category</option>
                 {["General", "Billing", "Technical", "Escalation", "Advisory", "Compliance"].map(c => <option key={c} value={c}>{c}</option>)}
               </select>
-              <label style={sc_styles.label}>Body</label>
-              <textarea value={form.body} onChange={e => setForm({ ...form, body: e.target.value })} rows={6} placeholder="Use #{ticket_id}, #{user_name}" style={{ ...sc_styles.input, resize: "vertical" as any, marginBottom: 0 }} />
+              {formErrors.category && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginBottom: 10 }}>{formErrors.category}</div>}
+              <label style={sc_styles.label}>Body <span style={{ color: "#DC2626" }}>*</span></label>
+              <textarea
+                value={form.body}
+                onChange={e => { setForm({ ...form, body: e.target.value }); if (formErrors.body) setFormErrors(p => ({ ...p, body: undefined })); }}
+                rows={6}
+                placeholder=""
+                style={{ ...sc_styles.input, resize: "vertical" as any, marginBottom: formErrors.body ? 2 : 0, borderColor: formErrors.body ? "#FCA5A5" : undefined, background: formErrors.body ? "#FFF7F7" : undefined }}
+              />
+              {formErrors.body && <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 2 }}>{formErrors.body}</div>}
             </div>
             {/* Modal footer */}
             <div style={{ padding: "16px 24px", borderTop: "1px solid #F1F5F9", display: "flex", gap: 10 }}>
               <button onClick={closeModal} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                 Cancel
               </button>
-              <button onClick={save} disabled={saving} style={{ ...sc_styles.primaryBtn, flex: 2, padding: "10px", borderRadius: 10, justifyContent: "center", display: "flex", alignItems: "center", gap: 6, opacity: saving ? 0.75 : 1, cursor: saving ? "default" : "pointer" }}>
+              <button onClick={save} disabled={!canCreateResponse} style={{ ...sc_styles.primaryBtn, flex: 2, padding: "10px", borderRadius: 10, justifyContent: "center", display: "flex", alignItems: "center", gap: 6, opacity: canCreateResponse ? 1 : 0.65, cursor: canCreateResponse ? "pointer" : "not-allowed" }}>
                 {saving ? (
                   <><div style={{ width: 13, height: 13, border: "2px solid rgba(255,255,255,0.35)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Adding...</>
                 ) : (
@@ -3149,7 +3376,7 @@ const CannedResponses: React.FC<{}> = () => {
       <div style={sc_styles.panelHeader}>
         <div>
           <h3 style={sc_styles.panelTitle}>Canned Responses</h3>
-          <p style={sc_styles.panelSub}>Predefined replies · use shortcuts while typing in ticket replies</p>
+          <p style={sc_styles.panelSub}>Predefined replies Â· use shortcuts while typing in ticket replies</p>
         </div>
         <button onClick={openNewModal} style={{ ...sc_styles.primaryBtn, display: "inline-flex", alignItems: "center", gap: 6 }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
@@ -3157,7 +3384,7 @@ const CannedResponses: React.FC<{}> = () => {
         </button>
       </div>
 
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search responses…" style={{ ...sc_styles.input, marginBottom: 16 }} />
+      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search responses..." style={{ ...sc_styles.input, marginBottom: 16 }} />
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {loading ? (
@@ -3209,8 +3436,10 @@ const CategoriesConfig: React.FC<{}> = () => {
 
   useEffect(() => {
     setLoading(true);
-    getTicketCategories()
-      .then(arr => setCats(arr.map((c: any) => ({ id: Number(c.id), name: String(c.name || "").trim(), localOnly: Boolean(c.localOnly) }))))
+    // Single source of truth: /admin/config/categories via getActiveTicketCategories()
+    // Already returns normalised { id, name } objects - just add the localOnly flag.
+    getActiveTicketCategories()
+      .then(items => setCats(items.map(c => ({ ...c, localOnly: false }))))
       .catch(() => showToast("Failed to load categories"))
       .finally(() => setLoading(false));
   }, []);
@@ -3292,7 +3521,18 @@ const CategoriesConfig: React.FC<{}> = () => {
           <label style={sc_styles.label}>Category name</label>
           <input value={newCat.name} onChange={e => setNewCat({ name: formatNameLikeInput(e.target.value) })} placeholder="Category name" style={sc_styles.input} />
         </div>
-        <button onClick={addCat} disabled={adding} style={{ ...sc_styles.primaryBtn, alignSelf: "flex-end", display: "inline-flex", alignItems: "center", gap: 6, opacity: adding ? 0.75 : 1, cursor: adding ? "default" : "pointer" }}>
+        <button
+          onClick={addCat}
+          disabled={adding || !formatNameLikeValue(newCat.name)}
+          style={{
+            ...sc_styles.primaryBtn,
+            alignSelf: "flex-end",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            opacity: (adding || !formatNameLikeValue(newCat.name)) ? 0.65 : 1,
+            cursor: (adding || !formatNameLikeValue(newCat.name)) ? "not-allowed" : "pointer",
+          }}>
           {adding
             ? <><div style={{ width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Adding...</>
             : "+ Add"}
@@ -3311,8 +3551,8 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
   const escalated = tickets.filter(t => t.status === "ESCALATED" || t.isEscalated).length;
   const resTimes = tickets.map(cfgCalcResolution).filter((x): x is number => x !== null);
   const respTimes = tickets.map(cfgCalcResponse).filter((x): x is number => x !== null);
-  const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "—";
-  const avgResp = respTimes.length ? Math.round(respTimes.reduce((a, b) => a + b, 0) / respTimes.length) : "—";
+  const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "-";
+  const avgResp = respTimes.length ? Math.round(respTimes.reduce((a, b) => a + b, 0) / respTimes.length) : "-";
   const catCounts: Record<string, number> = {};
   tickets.forEach(t => { catCounts[t.category] = (catCounts[t.category] || 0) + 1; });
   const catMax = Math.max(...Object.values(catCounts), 1);
@@ -3332,8 +3572,8 @@ const ReportsAnalytics: React.FC<{ tickets: Ticket[] }> = ({ tickets }) => {
     { label: "Resolved", value: resolved, color: "#16A34A", icon: "resolved", sub: `${total ? Math.round(resolved / total * 100) : 0}% rate` },
     { label: "SLA Breaches", value: breached, color: "#DC2626", icon: "breach" },
     { label: "Escalated", value: escalated, color: "#D97706", icon: "escalate" },
-    { label: "Avg First Response", value: avgResp === "—" ? "—" : `${avgResp}m`, color: "#7C3AED", icon: "response" },
-    { label: "Avg Resolution", value: avgRes === "—" ? "—" : `${avgRes}h`, color: "#059669", icon: "clock" },
+    { label: "Avg First Response", value: avgResp === "-" ? "-" : `${avgResp}m`, color: "#7C3AED", icon: "response" },
+    { label: "Avg Resolution", value: avgRes === "-" ? "-" : `${avgRes}h`, color: "#059669", icon: "clock" },
   ];
   return (
     <div style={sc_styles.panelWrap}>
@@ -3535,9 +3775,9 @@ const BusinessSettings: React.FC<{}> = () => {
 };
 
 type ConfigTab = "canned" | "categories" | "autoresponder";
-// ─────────────────────────────────────────────────────────────────────────────
-// TERMS & CONDITIONS EDITOR — Admin can edit T&C, versioned table, prev. data stored
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// TERMS & CONDITIONS EDITOR - Admin can edit T&C, versioned table, prev. data stored
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 interface TermsVersion {
   id: number;
@@ -3548,321 +3788,413 @@ interface TermsVersion {
   isActive: boolean;
 }
 
-const TermsConditionsEditor: React.FC = () => {
-  const [versions, setVersions] = useState<TermsVersion[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState("");
-  const [editVersion, setEditVersion] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
-  const [previewMode, setPreviewMode] = useState(false);
+const DEFAULT_PRIVACY_EDITOR_CONTENT = `### 1. Information We Collect
+We collect information that you provide directly, including account details, profile preferences, and booking information.
 
-  const showToast = (msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  };
+### 2. How We Use Information
+Your information is used to deliver consultations, process bookings, improve platform quality, and support customer service.
 
-  // Default T&C sections if API not available
-  const DEFAULT_TERMS = [
-    { title: "1. Acceptance of Terms", body: "By accessing and using Meet The Masters, you accept and agree to be bound by these Terms & Conditions." },
-    { title: "2. Use of Services", body: "Our platform provides access to certified financial consultants for lawful purposes only." },
-    { title: "3. Confidentiality", body: "All consultation sessions and related information are strictly confidential." },
-    { title: "4. Booking & Payments", body: "Bookings are confirmed upon successful payment. Cancellations must be made at least 24 hours prior." },
-    { title: "5. Disclaimer", body: "Financial advice provided is for informational purposes only and does not guarantee specific outcomes." },
-    { title: "6. Privacy Policy", body: "We collect and store your personal data securely in accordance with applicable data protection laws." },
-    { title: "7. Governing Law", body: "These Terms are governed by the laws of India, jurisdiction: Hyderabad, Telangana." },
-  ].map(s => `### ${s.title}\n${s.body}`).join("\n\n");
+### 3. Sharing of Information
+We do not sell personal data. Information is shared only with required service providers and consultants to enable platform services.
 
-  useEffect(() => {
-    setLoading(true);
-    // Load localStorage history first so we always have version history
-    const localData = localStorage.getItem("fin_terms_versions");
-    let localVers: TermsVersion[] = [];
-    if (localData) {
-      try { localVers = JSON.parse(localData); } catch { }
-    }
+### 4. Data Security
+We use reasonable administrative and technical safeguards to protect your personal data from unauthorized access.
 
-    apiFetch("/static-content/TERMS_AND_CONDITIONS")
-      .then((data: any) => {
-        if (data && (data.content || data.text)) {
-          const ver: TermsVersion = {
-            id: data.contentId || 1,
-            version: data.version || "1.0",
-            content: data.content || data.text || "",
-            updatedAt: data.lastUpdatedDate || data.updatedAt || new Date().toISOString(),
-            updatedBy: data.lastUpdatedBy || "Admin",
-            isActive: true,
-          };
-          if (localVers.length > 0) {
-            // Use localStorage active flag — don't let backend override "Set as Active" choice
-            const activeId = localVers.find(v => v.isActive)?.id;
-            const merged = localVers.map(v => ({ ...v, isActive: v.id === (activeId ?? ver.id) }));
-            const alreadyExists = merged.some(v => v.id === ver.id);
-            if (!alreadyExists) {
-              // Add backend version, mark active only if no other is active
-              merged.push({ ...ver, isActive: !activeId });
-            } else {
-              // Update content but keep isActive from localStorage
-              const idx = merged.findIndex(v => v.id === ver.id);
-              merged[idx] = { ...ver, isActive: merged[idx].isActive };
+### 5. Data Retention
+We retain data only as long as needed for legal, business, and service obligations.
+
+### 6. Your Rights
+You may request access, correction, or deletion of your personal data subject to applicable laws.
+
+### 7. Policy Updates
+We may update this Privacy Policy periodically and publish the latest version on the platform.`;
+
+const TermsConditionsEditor: React.FC<{
+  contentType?: "TERMS_AND_CONDITIONS" | "PRIVACY_POLICY";
+  title?: string;
+  description?: string;
+  storageKey?: string;
+  defaultContent?: string;
+}> = ({
+  contentType = "TERMS_AND_CONDITIONS",
+  title = "Terms & Conditions",
+  description = "Edit and version-manage your Terms & Conditions - previous versions are preserved",
+  storageKey = "fin_terms_versions",
+  defaultContent,
+}) => {
+    const [versions, setVersions] = useState<TermsVersion[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [editing, setEditing] = useState(false);
+    const [editContent, setEditContent] = useState("");
+    const [editVersion, setEditVersion] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+    const [selectedVersionId, setSelectedVersionId] = useState<number | null>(null);
+    const [previewMode, setPreviewMode] = useState(false);
+
+    const contentTitle = title.trim() || "Legal Content";
+    const effectiveDefaultContent =
+      defaultContent ??
+      (contentType === "PRIVACY_POLICY" ? DEFAULT_PRIVACY_EDITOR_CONTENT : "");
+
+    const showToast = (msg: string, ok = true) => {
+      setToast({ msg, ok });
+      setTimeout(() => setToast(null), 3000);
+    };
+
+    useEffect(() => {
+      setLoading(true);
+      const localData = localStorage.getItem(storageKey);
+      let localVers: TermsVersion[] = [];
+      if (localData) {
+        try {
+          localVers = JSON.parse(localData);
+        } catch {
+          localVers = [];
+        }
+      }
+
+      apiFetch(`/static-content/${contentType}`)
+        .then((data: any) => {
+          if (data && (data.content || data.text)) {
+            const ver: TermsVersion = {
+              id: data.contentId || 1,
+              version: data.version || "1.0",
+              content: data.content || data.text || "",
+              updatedAt: data.lastUpdatedDate || data.updatedAt || new Date().toISOString(),
+              updatedBy: data.lastUpdatedBy || "Admin",
+              isActive: true,
+            };
+
+            if (localVers.length > 0) {
+              const activeId = localVers.find((v) => v.isActive)?.id;
+              const merged = localVers.map((v) => ({ ...v, isActive: v.id === (activeId ?? ver.id) }));
+              const alreadyExists = merged.some((v) => v.id === ver.id);
+
+              if (!alreadyExists) {
+                merged.push({ ...ver, isActive: !activeId });
+              } else {
+                const idx = merged.findIndex((v) => v.id === ver.id);
+                merged[idx] = { ...ver, isActive: merged[idx].isActive };
+              }
+
+              setVersions(merged.sort((a, b) => a.id - b.id));
+              return;
             }
-            setVersions(merged.sort((a, b) => a.id - b.id));
+
+            setVersions([ver]);
+          } else {
+            throw new Error("empty");
+          }
+        })
+        .catch(() => {
+          if (localVers.length > 0) {
+            setVersions(localVers);
             return;
           }
-          setVersions([ver]);
-        } else {
-          throw new Error("empty");
-        }
-      })
-      .catch(() => {
-        if (localVers.length > 0) { setVersions(localVers); return; }
-        const defaultVer: TermsVersion = {
-          id: 1, version: "1.0", content: DEFAULT_TERMS,
-          updatedAt: new Date().toISOString(), updatedBy: "Admin", isActive: true,
-        };
-        setVersions([defaultVer]);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+          if (!effectiveDefaultContent.trim()) {
+            setVersions([]);
+            return;
+          }
+          const defaultVer: TermsVersion = {
+            id: 1,
+            version: "1.0",
+            content: effectiveDefaultContent,
+            updatedAt: new Date().toISOString(),
+            updatedBy: "Admin",
+            isActive: true,
+          };
+          setVersions([defaultVer]);
+        })
+        .finally(() => setLoading(false));
+    }, [contentType, effectiveDefaultContent, storageKey]);
 
-  const activeVersion = versions.find(v => v.isActive) || versions[versions.length - 1] || null;
-  const selectedVersion = selectedVersionId != null ? versions.find(v => v.id === selectedVersionId) : activeVersion;
+    const activeVersion = versions.find((v) => v.isActive) || versions[versions.length - 1] || null;
+    const selectedVersion = selectedVersionId != null ? versions.find((v) => v.id === selectedVersionId) : activeVersion;
 
-  const handleStartEdit = () => {
-    setEditContent(activeVersion?.content || DEFAULT_TERMS);
-    // Auto-increment version
-    const currentVer = parseFloat(activeVersion?.version || "1.0");
-    setEditVersion((Math.round((currentVer + 0.1) * 10) / 10).toFixed(1));
-    setEditing(true);
-    setPreviewMode(false);
-  };
-
-  const handleSave = async () => {
-    if (!editContent.trim()) { showToast("Content cannot be empty.", false); return; }
-    setSaving(true);
-    const newVer: TermsVersion = {
-      id: Date.now(),
-      version: editVersion || "1.0",
-      content: editContent,
-      updatedAt: new Date().toISOString(),
-      updatedBy: "Admin",
-      isActive: true,
+    const handleStartEdit = () => {
+      setEditContent(activeVersion?.content ?? effectiveDefaultContent);
+      if (activeVersion) {
+        const currentVer = parseFloat(activeVersion.version || "1.0");
+        setEditVersion((Math.round((currentVer + 0.1) * 10) / 10).toFixed(1));
+      } else {
+        setEditVersion("1.0");
+      }
+      setEditing(true);
+      setPreviewMode(false);
     };
-    try {
-      // POST /api/static-content — StaticContentController upsert
-      await apiFetch("/static-content", {
-        method: "POST",
-        body: JSON.stringify({
-          contentType: "TERMS_AND_CONDITIONS",
-          content: editContent,
-          lastUpdatedBy: "Admin",
-        }),
-      });
-    } catch {
-      // Silently ignore if endpoint doesn't exist; store locally
-    }
-    // Deactivate old versions, store previous data
-    const updated = versions.map(v => ({ ...v, isActive: false }));
-    updated.push(newVer);
-    setVersions(updated);
-    // Store in localStorage as fallback/history
-    localStorage.setItem("fin_terms_versions", JSON.stringify(updated));
-    setEditing(false);
-    setSelectedVersionId(newVer.id);
-    showToast(`Terms & Conditions v${editVersion} saved and published.`);
-    setSaving(false);
-  };
 
-  const handleSetActive = (id: number) => {
-    const updated = versions.map(v => ({ ...v, isActive: v.id === id }));
-    setVersions(updated);
-    localStorage.setItem("fin_terms_versions", JSON.stringify(updated));
-    showToast("Active version updated.");
-    // NOTE: The provided backend OpenAPI spec does not define
-    //   PUT /api/admin/terms-and-conditions/{id}/activate
-    // We keep the active version locally; publishing happens via POST /api/static-content.
-    try {
-      const active = updated.find(v => v.isActive);
-      if (active?.content) {
-        apiFetch("/static-content", {
+    const handleSave = async () => {
+      if (!editContent.trim()) {
+        showToast("Content cannot be empty.", false);
+        return;
+      }
+
+      setSaving(true);
+      const nextVersion = editVersion || "1.0";
+      const newVer: TermsVersion = {
+        id: Date.now(),
+        version: nextVersion,
+        content: editContent,
+        updatedAt: new Date().toISOString(),
+        updatedBy: "Admin",
+        isActive: true,
+      };
+
+      try {
+        await apiFetch("/static-content", {
           method: "POST",
           body: JSON.stringify({
-            contentType: "TERMS_AND_CONDITIONS",
-            content: active.content,
+            contentType,
+            content: editContent,
             lastUpdatedBy: "Admin",
           }),
-        }).catch(() => { });
+        });
+      } catch {
+        // Keep local history even if backend static-content endpoint is unavailable.
       }
-    } catch { }
-  };
 
-  const fmtDate = (iso: string) => {
-    try { return fmtIST(iso, IST_OPTS_DATETIME); }
-    catch { return iso; }
-  };
+      const updated = versions.map((v) => ({ ...v, isActive: false }));
+      updated.push(newVer);
+      setVersions(updated);
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      setEditing(false);
+      setSelectedVersionId(newVer.id);
+      showToast(`${contentTitle} v${nextVersion} saved and published.`);
+      setSaving(false);
+    };
 
-  return (
-    <div style={sc_styles.panelWrap}>
-      <div style={sc_styles.panelHeader}>
-        <div>
-          <h3 style={sc_styles.panelTitle}>Terms &amp; Conditions</h3>
-          <p style={sc_styles.panelSub}>Edit and version-manage your Terms &amp; Conditions — previous versions are preserved</p>
-        </div>
-        {!editing && (
-          <button onClick={handleStartEdit} style={sc_styles.primaryBtn}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg> Edit &amp; Publish New Version</span></button>
-        )}
-      </div>
+    const handleSetActive = (id: number) => {
+      const updated = versions.map((v) => ({ ...v, isActive: v.id === id }));
+      setVersions(updated);
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      showToast("Active version updated.");
 
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 20, alignItems: "start" }}>
+      try {
+        const active = updated.find((v) => v.isActive);
+        if (active?.content) {
+          apiFetch("/static-content", {
+            method: "POST",
+            body: JSON.stringify({
+              contentType,
+              content: active.content,
+              lastUpdatedBy: "Admin",
+            }),
+          }).catch(() => null);
+        }
+      } catch {
+        // no-op
+      }
+    };
 
-        {/* Version history table */}
-        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Version History
+    const fmtDate = (iso: string) => {
+      try {
+        return fmtIST(iso, IST_OPTS_DATETIME);
+      } catch {
+        return iso;
+      }
+    };
+
+    return (
+      <div style={sc_styles.panelWrap}>
+        <div style={sc_styles.panelHeader}>
+          <div>
+            <h3 style={sc_styles.panelTitle}>{title}</h3>
+            <p style={sc_styles.panelSub}>{description}</p>
           </div>
-          {loading ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-              <img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {[...versions].reverse().map((v, i) => (
-                <div key={v.id}
-                  onClick={() => setSelectedVersionId(v.id)}
-                  style={{
-                    padding: "12px 16px",
-                    borderBottom: i < versions.length - 1 ? "1px solid #F1F5F9" : "none",
-                    cursor: "pointer",
-                    background: selectedVersion?.id === v.id ? "#ECFEFF" : "transparent",
-                    borderLeft: `3px solid ${v.isActive ? "#16A34A" : selectedVersion?.id === v.id ? "#0F766E" : "transparent"}`,
-                    transition: "all 0.12s",
-                  }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>v{v.version}</span>
-                    {v.isActive && (
-                      <span style={{ fontSize: 9, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 6px", borderRadius: 10, border: "1px solid #86EFAC" }}>LIVE</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 10, color: "#94A3B8" }}>{fmtDate(v.updatedAt)}</div>
-                  <div style={{ fontSize: 10, color: "#64748B", marginTop: 1 }}>by {v.updatedBy}</div>
-                  {!v.isActive && (
-                    <button onClick={e => { e.stopPropagation(); handleSetActive(v.id); }}
-                      style={{ marginTop: 6, fontSize: 10, color: "#0F766E", fontWeight: 700, background: "none", border: "1px solid #A5F3FC", borderRadius: 6, padding: "2px 7px", cursor: "pointer" }}>
-                      Set as Active
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+          {!editing && (
+            <button onClick={handleStartEdit} style={sc_styles.primaryBtn}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                </svg>
+                Edit &amp; Publish New Version
+              </span>
+            </button>
           )}
         </div>
 
-        {/* Content panel */}
-        <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
-          {editing ? (
-            <div>
-              <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div>
-                    <label style={sc_styles.label}>Version Number</label>
-                    <input value={editVersion} onChange={e => setEditVersion(e.target.value)}
-                      style={{ ...sc_styles.input, width: 90, padding: "5px 10px", fontFamily: "monospace" }} />
-                  </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end", paddingBottom: 2 }}>
-                    <button onClick={() => setPreviewMode(false)}
-                      style={{ ...sc_styles.filterPill, ...(previewMode ? {} : sc_styles.filterPillActive) }}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg> Edit</span></button>
-                    <button onClick={() => setPreviewMode(true)}
-                      style={{ ...sc_styles.filterPill, ...(previewMode ? sc_styles.filterPillActive : {}) }}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg> Preview</span></button>
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setEditing(false)} style={sc_styles.ghostBtn}>Cancel</button>
-                  <button onClick={handleSave} disabled={saving}
-                    style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
-                    {saving ? "Saving…" : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg> Save &amp; Publish</span>}
-                  </button>
-                </div>
+        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 20, alignItems: "start" }}>
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Version History
+            </div>
+            {loading ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+                <img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
               </div>
-              {previewMode ? (
-                <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
-                  {editContent.split("\n\n").map((block, i) => {
-                    if (block.startsWith("### ")) {
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {[...versions].reverse().map((v, i) => (
+                  <div
+                    key={v.id}
+                    onClick={() => setSelectedVersionId(v.id)}
+                    style={{
+                      padding: "12px 16px",
+                      borderBottom: i < versions.length - 1 ? "1px solid #F1F5F9" : "none",
+                      cursor: "pointer",
+                      background: selectedVersion?.id === v.id ? "#ECFEFF" : "transparent",
+                      borderLeft: `3px solid ${v.isActive ? "#16A34A" : selectedVersion?.id === v.id ? "#0F766E" : "transparent"}`,
+                      transition: "all 0.12s",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>v{v.version}</span>
+                      {v.isActive && (
+                        <span style={{ fontSize: 9, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 6px", borderRadius: 10, border: "1px solid #86EFAC" }}>
+                          LIVE
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#94A3B8" }}>{fmtDate(v.updatedAt)}</div>
+                    <div style={{ fontSize: 10, color: "#64748B", marginTop: 1 }}>by {v.updatedBy}</div>
+                    {!v.isActive && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSetActive(v.id);
+                        }}
+                        style={{ marginTop: 6, fontSize: 10, color: "#0F766E", fontWeight: 700, background: "none", border: "1px solid #A5F3FC", borderRadius: 6, padding: "2px 7px", cursor: "pointer" }}
+                      >
+                        Set as Active
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 14, overflow: "hidden" }}>
+            {editing ? (
+              <div>
+                <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div>
+                      <label style={sc_styles.label}>Version Number</label>
+                      <input
+                        value={editVersion}
+                        onChange={(e) => setEditVersion(e.target.value)}
+                        style={{ ...sc_styles.input, width: 90, padding: "5px 10px", fontFamily: "monospace" }}
+                      />
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "flex-end", paddingBottom: 2 }}>
+                      <button onClick={() => setPreviewMode(false)} style={{ ...sc_styles.filterPill, ...(previewMode ? {} : sc_styles.filterPillActive) }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
+                          Edit
+                        </span>
+                      </button>
+                      <button onClick={() => setPreviewMode(true)} style={{ ...sc_styles.filterPill, ...(previewMode ? sc_styles.filterPillActive : {}) }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                          Preview
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setEditing(false)} style={sc_styles.ghostBtn}>Cancel</button>
+                    <button onClick={handleSave} disabled={saving} style={{ ...sc_styles.primaryBtn, opacity: saving ? 0.7 : 1 }}>
+                      {saving ? (
+                        "Saving..."
+                      ) : (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                            <polyline points="17 21 17 13 7 13 7 21" />
+                            <polyline points="7 3 7 8 15 8" />
+                          </svg>
+                          Save &amp; Publish
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                {previewMode ? (
+                  <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
+                    {editContent.split("\n\n").map((block, i) => {
+                      const lines = block.split("\n");
+                      const heading = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
+                      const body = heading ? lines.slice(1).join("\n") : block;
                       return (
                         <div key={i} style={{ marginBottom: 18 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{block.replace("### ", "")}</div>
+                          {heading && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{heading}</div>}
+                          <div style={{ color: "#374151" }}>{body}</div>
                         </div>
                       );
-                    }
+                    })}
+                  </div>
+                ) : (
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    style={{ width: "100%", padding: "20px 24px", border: "none", fontSize: 13, fontFamily: "monospace", lineHeight: 1.7, resize: "none", outline: "none", minHeight: 480, boxSizing: "border-box", color: "#1E293B" }}
+                    placeholder={`### 1. Section Title\nWrite content here...\n\n### 2. Another Section\nMore content...`}
+                  />
+                )}
+                <div style={{ padding: "10px 18px", background: "#F8FAFC", borderTop: "1px solid #F1F5F9", fontSize: 11, color: "#94A3B8" }}>
+                  Use <code>### Section Title</code> for headings. Each section should be separated by a blank line. Previous versions are preserved automatically.
+                </div>
+              </div>
+            ) : selectedVersion ? (
+              <div>
+                <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#0F172A" }}>Version {selectedVersion.version}</span>
+                    {selectedVersion.isActive && (
+                      <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 8px", borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#16A34A", display: "inline-block" }} />
+                        LIVE
+                      </span>
+                    )}
+                    <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
+                      Last updated {fmtDate(selectedVersion.updatedAt)} by {selectedVersion.updatedBy}
+                    </div>
+                  </div>
+                  <button onClick={handleStartEdit} style={sc_styles.primaryBtn}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                      Edit
+                    </span>
+                  </button>
+                </div>
+                <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
+                  {selectedVersion.content.split("\n\n").map((block, i) => {
                     const lines = block.split("\n");
-                    const title = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
-                    const body = title ? lines.slice(1).join("\n") : block;
+                    const heading = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
+                    const body = heading ? lines.slice(1).join(" ") : block;
                     return (
                       <div key={i} style={{ marginBottom: 18 }}>
-                        {title && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{title}</div>}
-                        <div style={{ color: "#374151" }}>{body}</div>
+                        {heading && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{heading}</div>}
+                        <div>{body}</div>
                       </div>
                     );
                   })}
                 </div>
-              ) : (
-                <textarea
-                  value={editContent}
-                  onChange={e => setEditContent(e.target.value)}
-                  style={{ width: "100%", padding: "20px 24px", border: "none", fontSize: 13, fontFamily: "monospace", lineHeight: 1.7, resize: "none", outline: "none", minHeight: 480, boxSizing: "border-box", color: "#1E293B" }}
-                  placeholder={`### 1. Acceptance of Terms\nYour terms content here...\n\n### 2. Use of Services\nMore content...`}
-                />
-              )}
-              <div style={{ padding: "10px 18px", background: "#F8FAFC", borderTop: "1px solid #F1F5F9", fontSize: 11, color: "#94A3B8" }}>
-                Use <code>### Section Title</code> for headings. Each section separated by blank line. Previous versions are preserved automatically.
               </div>
-            </div>
-          ) : selectedVersion ? (
-            <div>
-              <div style={{ padding: "14px 18px", borderBottom: "1px solid #F1F5F9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "#0F172A" }}>Version {selectedVersion.version}</span>
-                  {selectedVersion.isActive && (
-                    <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", padding: "2px 8px", borderRadius: 10, display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#16A34A", display: "inline-block" }} />
-                      LIVE
-                    </span>
-                  )}
-                  <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
-                    Last updated {fmtDate(selectedVersion.updatedAt)} by {selectedVersion.updatedBy}
-                  </div>
-                </div>
-                <button onClick={handleStartEdit} style={sc_styles.primaryBtn}><span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg> Edit</span></button>
-              </div>
-              <div style={{ padding: "20px 24px", fontSize: 13, color: "#374151", lineHeight: 1.8, minHeight: 420 }}>
-                {selectedVersion.content.split("\n\n").map((block, i) => {
-                  const lines = block.split("\n");
-                  const title = lines[0]?.startsWith("### ") ? lines[0].replace("### ", "") : null;
-                  const body = title ? lines.slice(1).join(" ") : block;
-                  return (
-                    <div key={i} style={{ marginBottom: 18 }}>
-                      {title && <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 6 }}>{title}</div>}
-                      <div>{body}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div style={sc_styles.emptyState}>No terms available. Click "Edit &amp; Publish" to create one.</div>
-          )}
+            ) : (
+              <div style={sc_styles.emptyState}>No content available. Click "Edit &amp; Publish" to create one.</div>
+            )}
+          </div>
         </div>
+
+        {toast && <MiniToast msg={toast.msg} ok={toast.ok} />}
       </div>
-
-      {toast && <MiniToast msg={toast.msg} ok={toast.ok} />}
-    </div>
-  );
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ADD MEMBER PANEL — Admin adds members with encrypted password & first-login flag
-// ─────────────────────────────────────────────────────────────────────────────
+    );
+  };
+// ADD MEMBER PANEL - Admin adds members with encrypted password & first-login flag
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const AddMemberPanel: React.FC = () => {
   const [form, setForm] = useState({
     name: "",
@@ -3891,14 +4223,14 @@ const AddMemberPanel: React.FC = () => {
           if (!memberRoles.has(role)) return [];
           const id = Number(user?.id || 0);
           if (!id) return [];
-          return [{
+          return {
             id,
-            name: String(user?.name || user?.fullName || user?.firstName || user?.username || prettifyEmailLocalPart(String(user?.email || ""))).trim(),
+            name: String(user?.name || user?.fullName || user?.firstName || user?.username || "").trim(),
             email: String(user?.email || "").trim().toLowerCase(),
             role: role || "MEMBER",
             addedAt: String(user?.createdAt || user?.createdDate || user?.updatedAt || ""),
             mobileNumber: String(user?.phoneNumber || user?.mobileNumber || "").replace(/\D/g, "").slice(0, 10),
-          }];
+          };
         })
         .sort((a, b) => {
           const bDate = Date.parse(b.addedAt || "");
@@ -3907,7 +4239,30 @@ const AddMemberPanel: React.FC = () => {
           return b.id - a.id;
         })
         .slice(0, 10);
-      setAddedMembers(mapped);
+
+      // Async pass to fetch missing names from onboarding/member profiles
+      const enriched = await Promise.all(mapped.map(async (m) => {
+        if (m.name && !m.name.includes("@")) return m;
+        let resolvedName = m.name;
+        try {
+          // Try onboarding first
+          const ob = await apiFetch(`/onboarding/${m.id}`);
+          if (ob && ob.name) resolvedName = String(ob.name).trim();
+        } catch {
+          try {
+            // Secondary check
+            const mem = await apiFetch(`/members/${m.id}`);
+            if (mem && mem.name) resolvedName = String(mem.name).trim();
+          } catch { /* ignore */ }
+        }
+        return {
+          ...m,
+          name: resolvedName || prettifyEmailLocalPart(m.email)
+        };
+      }));
+
+      setAddedMembers(enriched);
+
     } catch {
       setAddedMembers([]);
     } finally {
@@ -3950,7 +4305,7 @@ const AddMemberPanel: React.FC = () => {
       // Backend endpoint: POST /api/onboarding/admin/member  (multipart/form-data)
       // Requires: data (JSON part with MemberRegistrationRequest) + optional file
       // Backend auto-generates password from email prefix, sends welcome email with credentials
-      // No manual password needed — backend handles bcrypt encryption via createCoreUser()
+      // No manual password needed - backend handles bcrypt encryption via createCoreUser()
       const memberData = {
         name: formatNameLikeValue(form.name),
         email: form.email.trim().toLowerCase(),
@@ -3961,14 +4316,14 @@ const AddMemberPanel: React.FC = () => {
 
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(memberData)], { type: "application/json" }));
-      // No file upload in this form — file is optional per @RequestPart(required=false)
+      // No file upload in this form - file is optional per @RequestPart(required=false)
 
       const res = await fetch(`${BASE_INNER}/onboarding/admin/member`, {
         method: "POST",
         headers: {
           Accept: "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          // NOTE: Do NOT set Content-Type manually — browser sets it with boundary for FormData
+          // NOTE: Do NOT set Content-Type manually - browser sets it with boundary for FormData
         },
         body: fd,
       });
@@ -4025,7 +4380,7 @@ const AddMemberPanel: React.FC = () => {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 18px" }}>
             <div>
               <label style={labelStyle}>Full Name *</label>
-              <input value={form.name} onChange={e => { setForm(f => ({ ...f, name: formatNameLikeInput(e.target.value) })); setErrors(x => ({ ...x, name: "" })); }} placeholder="Member's full name" style={inputStyle} />
+              <input value={form.name} onChange={e => { const val = e.target.value; if (val.length === 1 && /[^a-zA-Z]/.test(val)) return; setForm(f => ({ ...f, name: formatNameLikeInput(val) })); setErrors(x => ({ ...x, name: "" })); }} placeholder="Member's full name" style={inputStyle} />
               {errors.name && <div style={errorStyle}>{errors.name}</div>}
             </div>
             <div>
@@ -4062,7 +4417,7 @@ const AddMemberPanel: React.FC = () => {
               style={sc_styles.ghostBtn}>Reset</button>
             <button onClick={handleAddMember} disabled={saving}
               style={{ ...sc_styles.primaryBtn, flex: 1, opacity: saving ? 0.7 : 1 }}>
-              {saving ? "Adding…" : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> Add Member</span>}
+              {saving ? "Adding..." : <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> Add Member</span>}
             </button>
           </div>
         </div>
@@ -4089,14 +4444,11 @@ const AddMemberPanel: React.FC = () => {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
-                        <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</div>
+                        {m.email && <div style={{ fontSize: 11, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.email}</div>}
                       </div>
                       <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC", flexShrink: 0 }}>
                         MEMBER
                       </span>
-                    </div>
-                    <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 5, marginLeft: 44 }}>
-                      Added {fmtIST(m.addedAt, IST_OPTS_DATE)}
                     </div>
                   </div>
                 );
@@ -4119,12 +4471,12 @@ const SUPPORT_CONFIG_TABS: { id: ConfigTab; label: string; icon: string }[] = [
 ];
 
 const AutoResponderPanel: React.FC = () => {
-  // ── Responder 1 (New Ticket) ──────────────────────────────────────────────
+  // â"€â"€ Responder 1 (New Ticket) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [ar1Enabled, setAr1Enabled] = useState(false);
   const [ar1Message, setAr1Message] = useState("Thank you for reaching out! We will review your ticket shortly.");
   const [ar1Saving, setAr1Saving] = useState(false);
 
-  // ── Responder 2 (Resolved Ticket) ─────────────────────────────────────────
+  // â"€â"€ Responder 2 (Resolved Ticket) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [ar2Enabled, setAr2Enabled] = useState(false);
   const [ar2Message, setAr2Message] = useState("Your ticket has been resolved. Please let us know if you need further assistance.");
   const [ar2Saving, setAr2Saving] = useState(false);
@@ -4144,7 +4496,7 @@ const AutoResponderPanel: React.FC = () => {
         setAr2Enabled(d2.enabled ?? false);
         if (d2.message) setAr2Message(d2.message);
       } catch {
-        // backend may not have this endpoint yet — use localStorage fallback
+        // backend may not have this endpoint yet - use localStorage fallback
         try {
           const stored = localStorage.getItem("ar2_config");
           if (stored) { const p = JSON.parse(stored); setAr2Enabled(p.enabled ?? false); if (p.message) setAr2Message(p.message); }
@@ -4184,7 +4536,7 @@ const AutoResponderPanel: React.FC = () => {
     </label>
   );
 
-  const ResponderCard = ({
+  const ResponderCard = useCallback(({
     title, subtitle, tag, tagColor, enabled, onToggle, message, onMessageChange, saving, onSave,
   }: {
     title: string; subtitle: string; tag: string; tagColor: string;
@@ -4216,10 +4568,10 @@ const AutoResponderPanel: React.FC = () => {
       </div>
       <button onClick={onSave} disabled={saving}
         style={{ alignSelf: "flex-start", padding: "10px 24px", background: saving ? "#E2E8F0" : "#0F766E", color: saving ? "#94A3B8" : "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 13, cursor: saving ? "default" : "pointer", transition: "all 0.15s" }}>
-        {saving ? "Saving…" : "Save"}
+        {saving ? "Saving..." : "Save"}
       </button>
     </div>
-  );
+  ), []);
 
   return (
     <div>
@@ -4280,9 +4632,9 @@ const SupportConfigPanel: React.FC<SupportConfigProps> = ({ tickets, advisors, o
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN BOOKINGS PANEL — Full list with delete capability (PRD §7.4)
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ADMIN BOOKINGS PANEL - Full list with delete capability (PRD Â§7.4)
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const AdminBookingsPanel: React.FC<{
   bookings: any[];
   advisors: Advisor[];
@@ -4367,7 +4719,7 @@ const AdminBookingsPanel: React.FC<{
               <button onClick={() => handleDelete(confirmDeleteId)}
                 disabled={deletingId === confirmDeleteId}
                 style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: deletingId === confirmDeleteId ? 0.7 : 1 }}>
-                {deletingId === confirmDeleteId ? "Deleting…" : "Yes, Delete"}
+                {deletingId === confirmDeleteId ? "Deleting..." : "Yes, Delete"}
               </button>
             </div>
           </div>
@@ -4408,15 +4760,15 @@ const AdminBookingsPanel: React.FC<{
               b.consultantName || b.consultant?.name ||
               b.advisorName || b.advisor?.name ||
               advisorMap[b.consultantId] ||
-              (b.consultantId ? "Consultant" : "—");
+              (b.consultantId ? "Consultant" : "-");
             const userName =
               b.userName || b.user?.name || b.user?.fullName ||
               b.user?.username || b.clientName || b.bookedByName ||
               b.raisedByName ||
               (b.user?.email ? b.user.email.split("@")[0] : null) ||
-              (b.userId ? "Client" : "—");
-            const slotDate = b.slotDate || b.bookingDate || b.date || "—";
-            const timeRange = b.timeRange || b.slotTime || "—";
+              (b.userId ? "Client" : "-");
+            const slotDate = b.slotDate || b.bookingDate || b.date || "-";
+            const timeRange = b.timeRange || b.slotTime || "-";
             const amount = Number(b.amount || b.charges || b.fee || 0);
             return (
               <div key={b.id}
@@ -4433,7 +4785,7 @@ const AdminBookingsPanel: React.FC<{
                   <div style={{ fontSize: 11, color: "#94A3B8" }}>{timeRange}</div>
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
-                  {amount > 0 ? formatIndianCurrency(amount) : "—"}
+                  {amount > 0 ? formatIndianCurrency(amount) : "-"}
                 </div>
                 <div>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
@@ -4460,14 +4812,14 @@ const AdminBookingsPanel: React.FC<{
 };
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // INNER ADMIN PAGE
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-// COMMISSION CONFIG PANEL — uses getFeeConfig/updateFeeConfig from api.ts
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// COMMISSION CONFIG PANEL - uses getFeeConfig/updateFeeConfig from api.ts
 // Backend: GET/POST /api/admin/settings/additional-charges
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const CommissionConfigPanel: React.FC = () => {
   const [feeConfig, setFeeConfig] = React.useState<FeeConfig>({ feeType: "FLAT", feeValue: "0" });
   const [loading, setLoading] = React.useState(true);
@@ -4512,7 +4864,7 @@ const CommissionConfigPanel: React.FC = () => {
       <div style={{ marginBottom: 28 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Commission Configuration</h2>
         <p style={{ margin: "6px 0 0", fontSize: 13, color: "#64748B" }}>
-          Set the platform commission added on top of each consultant's base fee. The backend (BookingService) adds this automatically when a booking is created.
+          Set the platform commission added on top of each consultant's base fee. This is applied automatically when a booking is created.
         </p>
       </div>
       {loading ? (
@@ -4596,7 +4948,7 @@ const CommissionConfigPanel: React.FC = () => {
           </div>
           <button onClick={handleSave} disabled={saving}
             style={{ padding: "12px 28px", borderRadius: 10, border: "none", background: saving ? "#99F6E4" : "var(--color-primary-gradient)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: saving ? "default" : "pointer", fontFamily: "inherit" }}>
-            {saving ? "Saving…" : "Save Commission Settings"}
+            {saving ? "Saving..." : "Save Commission Settings"}
           </button>
         </div>
       )}
@@ -4604,9 +4956,9 @@ const CommissionConfigPanel: React.FC = () => {
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BOOKINGS SECTION WRAPPER — header with inline Refresh button on the left
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// BOOKINGS SECTION WRAPPER - header with inline Refresh button on the left
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const BookingsSectionWrapper: React.FC<{ allBookings: any[] }> = ({ allBookings }) => {
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [refreshing, setRefreshing] = React.useState(false);
@@ -4631,7 +4983,7 @@ const BookingsSectionWrapper: React.FC<{ allBookings: any[] }> = ({ allBookings 
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A", letterSpacing: "-0.4px" }}>Bookings</h2>
-              {/* Refresh button — inline beside the title */}
+              {/* Refresh button - inline beside the title */}
               <button
                 onClick={handleRefresh}
                 disabled={refreshing}
@@ -4655,7 +5007,7 @@ const BookingsSectionWrapper: React.FC<{ allBookings: any[] }> = ({ allBookings 
                   <path d="M1 20v-6h6" />
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
                 </svg>
-                {refreshing ? "Refreshing…" : "Refresh"}
+                {refreshing ? "Refreshing..." : "Refresh"}
               </button>
             </div>
             <p style={{ margin: "3px 0 0", fontSize: 13, color: "#64748B" }}>
@@ -4669,18 +5021,18 @@ const BookingsSectionWrapper: React.FC<{ allBookings: any[] }> = ({ allBookings 
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // SKILLS & QUESTIONS MANAGEMENT PANEL
 // Skills tab: full CRUD for skill categories (linked to consultant tags & onboarding)
 // Questions tab: post-booking questions shown to clients (NOT linked to skills)
 //   Question types: radio | multiselect | text | mobile (with 10-digit IN validation)
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const QuestionsManagementPanel: React.FC = () => {
   type QType = "radio" | "multiselect" | "text" | "mobile";
   interface QItem { id?: number; text: string; type: QType; options?: string[]; placeholder?: string; updatedAt?: string; }
   interface SkillItem { id: number; name: string; skillName?: string; description?: string; isActive?: boolean; }
 
-  // ── State ──
+  // â"€â"€ State â"€â"€
   const [panelTab, setPanelTab] = React.useState<"skills" | "questions">("skills");
   const [skills, setSkills] = React.useState<SkillItem[]>([]);
   const [questions, setQuestions] = React.useState<QItem[]>([]);
@@ -4709,7 +5061,7 @@ const QuestionsManagementPanel: React.FC = () => {
 
   const parseOptions = (raw: string): string[] => raw.split("\n").map(s => s.trim()).filter(Boolean);
 
-  // ── Load ──
+  // â"€â"€ Load â"€â"€
   const load = async () => {
     setLoading(true);
     try {
@@ -4735,7 +5087,7 @@ const QuestionsManagementPanel: React.FC = () => {
 
   React.useEffect(() => { load(); }, []);
 
-  // ── Skill CRUD ──
+  // â"€â"€ Skill CRUD â"€â"€
   const openNewSkill = () => { setSkillForm({ name: "", description: "" }); setEditingSkill(null); setShowSkillForm(true); };
   const openEditSkill = (s: SkillItem) => { setSkillForm({ name: s.name, description: s.description || "" }); setEditingSkill(s); setShowSkillForm(true); };
 
@@ -4757,7 +5109,7 @@ const QuestionsManagementPanel: React.FC = () => {
       await load(); setShowSkillForm(false);
     } catch (e: any) {
       const msg = String(e?.message || "");
-      showToast(msg.includes("500") || msg.includes("Internal Server") ? "Server error — check /api/skills endpoint." : e?.message || "Failed to save skill.");
+      showToast(msg.includes("500") || msg.includes("Internal Server") ? "Server error - check /api/skills endpoint." : e?.message || "Failed to save skill.");
     } finally { setSavingSkill(false); }
   };
 
@@ -4767,7 +5119,7 @@ const QuestionsManagementPanel: React.FC = () => {
     catch (e: any) { showToast(e?.message || "Delete failed."); } finally { setDeletingSkill(null); }
   };
 
-  // ── Question CRUD ──
+  // â"€â"€ Question CRUD â"€â"€
   const openNewQ = () => { setQForm({ text: "", type: "radio", optionsRaw: "", placeholder: "" }); setEditingQ(null); setShowQForm(true); };
   const renderQuestionTypeIcon = (type: QType, color: string, size = 14) => {
     if (type === "radio") {
@@ -4831,6 +5183,19 @@ const QuestionsManagementPanel: React.FC = () => {
     text: { label: "Free text", iconKey: "text", color: "#0F766E", bg: "#F0FDFA", border: "#99F6E4" },
     mobile: { label: "Mobile number", iconKey: "mobile", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D" },
   };
+
+  const normalizedSkillName = formatNameLikeValue(skillForm.name);
+  const canSaveSkillForm =
+    !savingSkill &&
+    !!normalizedSkillName &&
+    !skills.some((skill) => skill.id !== editingSkill?.id && canonicalTextKey(skill.name) === canonicalTextKey(normalizedSkillName));
+
+  const questionOptions = parseOptions(qForm.optionsRaw);
+  const questionNeedsOptions = qForm.type === "radio" || qForm.type === "multiselect";
+  const canSaveQuestionForm =
+    !savingQ &&
+    qForm.text.trim().length > 0 &&
+    (!questionNeedsOptions || (questionOptions.length >= 2 && new Set(questionOptions.map(canonicalTextKey)).size === questionOptions.length));
 
   const inp: React.CSSProperties = { width: "100%", padding: "9px 12px", border: "1.5px solid #E2E8F0", borderRadius: 9, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
   const lbl: React.CSSProperties = { display: "block", fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 5 };
@@ -4896,14 +5261,13 @@ const QuestionsManagementPanel: React.FC = () => {
         <div style={{ textAlign: "center", padding: 60 }}><img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", display: "block", margin: "0 auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} /></div>
       ) : panelTab === "skills" ? (
 
-        // ══════════════════════════════════════════
+        // â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
         // SKILLS TAB
-        // ══════════════════════════════════════════
+        // â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
         <div>
           {/* Info banner */}
           <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#115E59" }}>
-            <strong>Skills</strong> are categories shown to users during onboarding (e.g. "Tax Planning", "Investment").
-            Consultants are matched to clients based on their skill tags.
+            <strong>Skills</strong> are categories shown to users during onboarding (e.g. "Tax Planning", "Investment"). Consultants are matched to clients based on their skill tags.
           </div>
 
           {showSkillForm && (
@@ -4915,7 +5279,23 @@ const QuestionsManagementPanel: React.FC = () => {
               </div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setShowSkillForm(false)} style={{ padding: "9px 20px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleSaveSkill} disabled={savingSkill} style={{ padding: "9px 22px", borderRadius: 9, border: "none", background: savingSkill ? "#99F6E4" : "#0F766E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{savingSkill ? "Saving…" : editingSkill ? "Update" : "Create Skill"}</button>
+                <button
+                  onClick={handleSaveSkill}
+                  disabled={!canSaveSkillForm}
+                  style={{
+                    padding: "9px 22px",
+                    borderRadius: 9,
+                    border: "none",
+                    background: canSaveSkillForm ? (savingSkill ? "#99F6E4" : "#0F766E") : "#E2E8F0",
+                    color: canSaveSkillForm ? "#fff" : "#94A3B8",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: canSaveSkillForm ? "pointer" : "not-allowed",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {savingSkill ? "Saving..." : editingSkill ? "Update" : "Create Skill"}
+                </button>
               </div>
             </div>
           )}
@@ -4941,7 +5321,7 @@ const QuestionsManagementPanel: React.FC = () => {
                     <button onClick={() => openEditSkill(skill)} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #A5F3FC", background: "#ECFEFF", color: "#0F766E", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Edit</button>
                     <button onClick={() => setDeleteSkillTarget(skill)} disabled={deletingSkill === skill.id}
                       style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: deletingSkill === skill.id ? 0.6 : 1 }}>
-                      {deletingSkill === skill.id ? "…" : "Delete"}
+                      {deletingSkill === skill.id ? "..." : "Delete"}
                     </button>
                   </div>
                 </div>
@@ -4952,13 +5332,13 @@ const QuestionsManagementPanel: React.FC = () => {
 
       ) : (
 
-        // ══════════════════════════════════════════
-        // QUESTIONS TAB — no skill linkage
-        // ══════════════════════════════════════════
+        // â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
+        // QUESTIONS TAB - no skill linkage
+        // â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*â*
         <div>
           {/* Info banner */}
           <div style={{ background: "#ECFEFF", border: "1px solid #A5F3FC", borderRadius: 12, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#115E59" }}>
-            <strong>Post-booking questions</strong> are shown to clients right after booking. Answers are visible to the consultant before the session.
+            <strong>Post-booking questions</strong> are shown to clients right after booking. Answers are visible to consultants before the session.
           </div>
 
           {/* Question form */}
@@ -4976,7 +5356,7 @@ const QuestionsManagementPanel: React.FC = () => {
                   style={inp} />
               </div>
 
-              {/* Answer type — 4 types including mobile */}
+              {/* Answer type - 4 types including mobile */}
               <div style={{ marginBottom: 14 }}>
                 <label style={lbl}>Answer Type *</label>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -4996,12 +5376,12 @@ const QuestionsManagementPanel: React.FC = () => {
                 {qForm.type === "mobile" && (
                   <div style={{ marginTop: 8, padding: "8px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", display: "flex", alignItems: "center", gap: 6 }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                    Clients must enter a valid 10-digit Indian mobile number (starts with 6–9). Validated before submission.
+                    Clients must enter a valid 10-digit Indian mobile number (starts with 6-9). Validated before submission.
                   </div>
                 )}
               </div>
 
-              {/* Options — radio / multiselect only */}
+              {/* Options - radio / multiselect only */}
               {(qForm.type === "radio" || qForm.type === "multiselect") && (
                 <div style={{ marginBottom: 14 }}>
                   <label style={lbl}>Options * <span style={{ fontWeight: 400, textTransform: "none", color: "#94A3B8" }}>(one per line, min. 2)</span></label>
@@ -5018,7 +5398,7 @@ const QuestionsManagementPanel: React.FC = () => {
                 </div>
               )}
 
-              {/* Placeholder — text / mobile */}
+              {/* Placeholder - text / mobile */}
               {(qForm.type === "text" || qForm.type === "mobile") && (
                 <div style={{ marginBottom: 14 }}>
                   <label style={lbl}>Placeholder Text <span style={{ fontWeight: 400, textTransform: "none", color: "#94A3B8" }}>(optional)</span></label>
@@ -5033,9 +5413,9 @@ const QuestionsManagementPanel: React.FC = () => {
                   style={{ padding: "9px 20px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                   Cancel
                 </button>
-                <button onClick={handleSaveQ} disabled={savingQ}
-                  style={{ padding: "9px 22px", borderRadius: 9, border: "none", background: savingQ ? "#99F6E4" : "#0F766E", color: "#fff", fontSize: 13, fontWeight: 700, cursor: savingQ ? "default" : "pointer", fontFamily: "inherit" }}>
-                  {savingQ ? "Saving…" : editingQ ? "Update Question" : "Add Question"}
+                <button onClick={handleSaveQ} disabled={!canSaveQuestionForm}
+                  style={{ padding: "9px 22px", borderRadius: 9, border: "none", background: canSaveQuestionForm ? (savingQ ? "#99F6E4" : "#0F766E") : "#E2E8F0", color: canSaveQuestionForm ? "#fff" : "#94A3B8", fontSize: 13, fontWeight: 700, cursor: canSaveQuestionForm ? "pointer" : "not-allowed", fontFamily: "inherit" }}>
+                  {savingQ ? "Saving..." : editingQ ? "Update Question" : "Add Question"}
                 </button>
               </div>
             </div>
@@ -5109,7 +5489,7 @@ const QuestionsManagementPanel: React.FC = () => {
                         {q.id && (
                           <button onClick={() => setDeleteQuestionTarget(q)} disabled={deletingQ === q.id}
                             style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: deletingQ === q.id ? 0.6 : 1 }}>
-                            {deletingQ === q.id ? "…" : "Delete"}
+                            {deletingQ === q.id ? "..." : "Delete"}
                           </button>
                         )}
                       </div>
@@ -5125,10 +5505,10 @@ const QuestionsManagementPanel: React.FC = () => {
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OFFER APPROVAL PANEL — uses approveOffer/rejectOffer from api.ts
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// OFFER APPROVAL PANEL - uses approveOffer/rejectOffer from api.ts
 // Backend: GET /api/offers/consultant-offers, PUT /api/offers/:id/approve|reject
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const OfferApprovalPanel: React.FC = () => {
   const [offers, setOffers] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -5141,7 +5521,7 @@ const OfferApprovalPanel: React.FC = () => {
   const load = async () => {
     setLoading(true);
     try {
-      // GET /api/offers/admin — all offers; filter by consultantId for consultant-submitted ones
+      // GET /api/offers/admin - all offers; filter by consultantId for consultant-submitted ones
       const data = await getConsultantSubmittedOffers();
       setOffers(data);
     }
@@ -5259,194 +5639,6 @@ interface AdminMasterSlot {
   timeRange: string;
   duration: number;
 }
-
-const durationMinutesToHours = (value: any, fallback = 1) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  if (parsed <= 12) return Math.max(1, Math.min(3, Math.round(parsed)));
-  return Math.max(1, Math.min(3, Math.round(parsed / 60)));
-};
-
-const durationHoursToMinutes = (value: any, fallback = 1) =>
-  durationMinutesToHours(value, fallback) * 60;
-
-const formatHourRangeLabel = (startHour24: number, durationHours = 1) => {
-  const formatHour = (hour24: number) => {
-    const normalizedHour = ((hour24 % 24) + 24) % 24;
-    const period = normalizedHour >= 12 ? "PM" : "AM";
-    const hour12 = normalizedHour % 12 || 12;
-    return `${hour12}:00 ${period}`;
-  };
-
-  return `${formatHour(startHour24)} - ${formatHour(startHour24 + Math.max(1, durationHours))}`;
-};
-
-const parseStartHourFromRange = (timeRange: string) => {
-  const match = String(timeRange || "").trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\s*[-–]\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!match) return null;
-
-  const [, startHourText, startMinuteText, startPeriod] = match;
-  if (startMinuteText !== "00") return null;
-
-  let startHour = Number(startHourText) % 12;
-  if (startPeriod.toUpperCase() === "PM") startHour += 12;
-  return startHour;
-};
-
-const HourRangeClockPicker: React.FC<{
-  isOpen: boolean;
-  title: string;
-  initialHour: number | null;
-  initialDuration?: number;
-  onClose: () => void;
-  onSave: (startHour24: number, durationHours: number) => void;
-}> = ({ isOpen, title, initialHour, initialDuration = 1, onClose, onSave }) => {
-  const [selectedHour, setSelectedHour] = React.useState(12);
-  const [period, setPeriod] = React.useState<"AM" | "PM">("PM");
-  const [durationHours, setDurationHours] = React.useState(initialDuration);
-
-  React.useEffect(() => {
-    if (!isOpen) return;
-    const baseHour = initialHour ?? 12;
-    setSelectedHour(baseHour % 12 || 12);
-    setPeriod(baseHour >= 12 ? "PM" : "AM");
-    setDurationHours(initialDuration);
-  }, [initialHour, initialDuration, isOpen]);
-
-  if (!isOpen) return null;
-
-  const handleSave = () => {
-    let startHour24 = selectedHour % 12;
-    if (period === "PM") startHour24 += 12;
-    onSave(startHour24, durationHours);
-  };
-
-  const start24 = (selectedHour % 12) + (period === "PM" ? 12 : 0);
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "radial-gradient(circle at top, rgba(59,130,246,0.16), rgba(15,23,42,0.68))",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 3000,
-        backdropFilter: "blur(10px)",
-        padding: 20,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: 344, maxWidth: "100%", background: "linear-gradient(180deg, #FFFFFF 0%, #F0FDFA 100%)", borderRadius: 24, overflow: "hidden", boxShadow: "0 30px 80px rgba(15,23,42,0.34)", border: "1px solid rgba(255,255,255,0.6)" }}
-      >
-        <div style={{ position: "relative", background: "linear-gradient(145deg,#0F3CC9 0%,#0F766E 58%,#2DD4BF 100%)", padding: "18px 20px 16px", color: "#fff" }}>
-          <div style={{ position: "absolute", top: -70, right: -40, width: 150, height: 150, borderRadius: "50%", background: "rgba(255,255,255,0.10)" }} />
-          <div style={{ position: "absolute", bottom: -60, left: -30, width: 110, height: 110, borderRadius: "50%", background: "rgba(255,255,255,0.08)" }} />
-          <div style={{ position: "relative", zIndex: 1 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 999, background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.18)", fontSize: 11, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#FDE68A", boxShadow: "0 0 16px rgba(253,230,138,0.9)" }} />
-              {title}
-            </div>
-
-            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 14, alignItems: "start" }}>
-              <div>
-                <div style={{ fontSize: 34, lineHeight: 1.05, fontWeight: 900, letterSpacing: "-0.04em" }}>
-                  {formatHourRangeLabel(start24, durationHours)}
-                </div>
-                <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.88)", maxWidth: 210 }}>
-                  Pick the starting hour. End time is added automatically.
-                </div>
-                <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-                  {[1, 2, 3].map((hrs) => (
-                    <button
-                      key={hrs}
-                      type="button"
-                      onClick={() => setDurationHours(hrs)}
-                      style={{
-                        padding: "5px 14px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(255,255,255,0.35)",
-                        background: durationHours === hrs ? "#fff" : "rgba(255,255,255,0.12)",
-                        color: durationHours === hrs ? "#0D9488" : "#fff",
-                        fontSize: 11,
-                        fontWeight: 800,
-                        cursor: "pointer",
-                        boxShadow: durationHours === hrs ? "0 6px 14px rgba(15,23,42,0.15)" : "none",
-                      }}
-                    >
-                      {hrs} hr
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 2 }}>
-                <button type="button" onClick={() => setPeriod("AM")} style={{ minWidth: 48, padding: "8px 10px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.28)", background: period === "AM" ? "#fff" : "rgba(255,255,255,0.08)", color: period === "AM" ? "#0D9488" : "#fff", fontSize: 11, fontWeight: 900, cursor: "pointer", boxShadow: period === "AM" ? "0 10px 22px rgba(15,23,42,0.18)" : "none" }}>AM</button>
-                <button type="button" onClick={() => setPeriod("PM")} style={{ minWidth: 48, padding: "8px 10px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.28)", background: period === "PM" ? "#fff" : "rgba(255,255,255,0.08)", color: period === "PM" ? "#0D9488" : "#fff", fontSize: 11, fontWeight: 900, cursor: "pointer", boxShadow: period === "PM" ? "0 10px 22px rgba(15,23,42,0.18)" : "none" }}>PM</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ padding: "18px 18px 4px", display: "flex", justifyContent: "center" }}>
-          <div style={{ position: "relative", width: 220, height: 220, borderRadius: "50%", background: "radial-gradient(circle at center, #FFFFFF 0%, #F6FAFF 68%, #EDF4FF 100%)", border: "1px solid #D7E6FF", boxShadow: "inset 0 12px 30px rgba(255,255,255,0.95), 0 18px 40px rgba(15,118,110,0.10)" }}>
-            <div style={{ position: "absolute", inset: 15, borderRadius: "50%", border: "1px dashed rgba(148,163,184,0.25)" }} />
-            <div style={{ position: "absolute", top: "50%", left: "50%", width: 12, height: 12, borderRadius: "50%", background: "#0F766E", border: "3px solid #CFFAFE", transform: "translate(-50%, -50%)", zIndex: 3, boxShadow: "0 0 0 6px rgba(15,118,110,0.08)" }} />
-            {([12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] as const).map((hour, index) => {
-              const angle = index * 30 * (Math.PI / 180);
-              const radius = 83;
-              const x = 110 + radius * Math.sin(angle);
-              const y = 110 - radius * Math.cos(angle);
-              const isActive = selectedHour === hour;
-              return (
-                <React.Fragment key={hour}>
-                  {isActive && (
-                    <>
-                      <div style={{ position: "absolute", top: "50%", left: "50%", width: 3, height: radius, background: "linear-gradient(180deg, #2DD4BF 0%, #0F766E 100%)", borderRadius: 999, transformOrigin: "bottom center", transform: `translate(-50%,-100%) rotate(${index * 30}deg)`, zIndex: 1, boxShadow: "0 0 14px rgba(15,118,110,0.18)" }} />
-                      <div style={{ position: "absolute", left: x, top: y, transform: "translate(-50%, -50%)", width: 44, height: 44, borderRadius: "50%", background: "rgba(15,118,110,0.12)", zIndex: 1 }} />
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedHour(hour)}
-                    style={{
-                      position: "absolute",
-                      left: x,
-                      top: y,
-                      transform: "translate(-50%, -50%)",
-                      width: 36,
-                      height: 36,
-                      borderRadius: "50%",
-                      border: isActive ? "none" : "1px solid transparent",
-                      background: isActive ? "linear-gradient(145deg,#0F766E,#0D9488)" : "transparent",
-                      color: isActive ? "#fff" : "#334155",
-                      fontSize: 16,
-                      fontWeight: isActive ? 800 : 700,
-                      cursor: "pointer",
-                      zIndex: 3,
-                      boxShadow: isActive ? "0 12px 28px rgba(15,118,110,0.30)" : "none",
-                    }}
-                  >
-                    {hour}
-                  </button>
-                </React.Fragment>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ padding: "10px 18px 18px" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <button type="button" onClick={onClose} style={{ padding: "10px 14px", borderRadius: 12, border: "1px solid #CBD5E1", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Cancel</button>
-            <button type="button" onClick={handleSave} style={{ padding: "10px 16px", borderRadius: 12, border: "none", background: "linear-gradient(145deg,#0F766E,#0D9488)", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer", boxShadow: "0 12px 24px rgba(15,118,110,0.26)" }}>Use This Slot</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const AdminMasterTimeSlotsPanel: React.FC = () => {
   const [slots, setSlots] = React.useState<AdminMasterSlot[]>([]);
@@ -5673,13 +5865,13 @@ const AdminMasterTimeSlotsPanel: React.FC = () => {
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN OFFERS PANEL — Full CRUD with working Active/Inactive toggle
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ADMIN OFFERS PANEL - Full CRUD with working Active/Inactive toggle
 // Replace everything from:
 //   const AdminOffersPanel: React.FC = () => {
 // up to (but NOT including):
-//   // ─── INNER ADMIN PAGE
-// ─────────────────────────────────────────────────────────────────────────────
+//   // â"€â"€â"€ INNER ADMIN PAGE
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 interface AdminOffer {
   id?: number;
@@ -5729,35 +5921,87 @@ const AdminOffersPanel: React.FC = () => {
   // Convert datetime-local input value to backend LocalDateTime format
   const toLocalDateTime = (dt: string) =>
     dt ? (dt.length === 16 ? dt + ':00' : dt.substring(0, 19)) : '';
+  const todayDateTimeMin = React.useMemo(() => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T00:00`;
+  }, []);
 
   const parseDiscountForForm = (discount: string) => {
     const raw = String(discount || '').trim();
     if (!raw) return { discountLabel: '', discountValue: '', discountType: '%' };
-    if (raw.includes('%')) {
+    if (/^\d+(\.\d+)?%$/.test(raw.replace(/\s+/g, ''))) {
       return {
         discountLabel: raw,
         discountValue: raw.replace('%', '').trim(),
         discountType: '%',
       };
     }
+    if (/^\d+(\.\d+)?$/.test(raw)) {
+      return {
+        discountLabel: raw,
+        discountValue: raw,
+        discountType: '₹',
+      };
+    }
     return {
       discountLabel: raw,
-      discountValue: raw,
-      discountType: '₹',
+      discountValue: '',
+      discountType: '%',
     };
   };
 
   const buildDiscountString = (offer: Pick<AdminOffer, 'discount' | 'discountValue' | 'discountType'>) => {
+    const manualLabel = String(offer.discount || '').trim();
     const explicitValue = String(offer.discountValue ?? '').trim();
-    if (explicitValue) {
-      return (offer.discountType || '%') === '%'
-        ? `${explicitValue}%`
-        : explicitValue;
-    }
-    return String(offer.discount || '').trim();
+    const generatedValue = explicitValue
+      ? ((offer.discountType || '%') === '%' ? `${explicitValue}%` : explicitValue)
+      : '';
+    return manualLabel || generatedValue;
   };
 
-  // Normalize backend offer — handles both isActive and active field names
+  const buildGeneratedDiscountValue = (discountValue: string | number | undefined, discountType: string | undefined) => {
+    const explicitValue = String(discountValue ?? '').trim();
+    if (!explicitValue) return '';
+    return (discountType || '%') === '%' ? `${explicitValue}%` : explicitValue;
+  };
+
+  const handleDiscountTypeChange = (nextType: string) => {
+    setForm((current) => {
+      const currentGenerated = buildGeneratedDiscountValue(current.discountValue, current.discountType || '%');
+      const nextGenerated = buildGeneratedDiscountValue(current.discountValue, nextType);
+      const shouldSyncLabel = !String(current.discount || '').trim()
+        || String(current.discount || '').trim() === currentGenerated;
+
+      return {
+        ...current,
+        discountType: nextType,
+        discount: shouldSyncLabel ? nextGenerated : current.discount,
+      } as any;
+    });
+  };
+
+  const handleDiscountValueChange = (rawValue: string) => {
+    setForm((current) => {
+      const nextValue = (current.discountType || '%') === '₹'
+        ? sanitizeWholeNumberInput(rawValue, MAX_OFFER_AMOUNT)
+        : sanitizeDecimalInput(rawValue, MAX_PERCENTAGE_VALUE, 2);
+      const currentGenerated = buildGeneratedDiscountValue(current.discountValue, current.discountType || '%');
+      const nextGenerated = buildGeneratedDiscountValue(nextValue, current.discountType || '%');
+      const shouldSyncLabel = !String(current.discount || '').trim()
+        || String(current.discount || '').trim() === currentGenerated;
+
+      return {
+        ...current,
+        discountValue: nextValue,
+        discount: shouldSyncLabel ? nextGenerated : current.discount,
+      } as any;
+    });
+  };
+
+  // Normalize backend offer - handles both isActive and active field names
   const normalizeOffer = (o: any): AdminOffer => ({
     ...o,
     isActive: o.isActive !== undefined ? o.isActive : o.active !== undefined ? o.active : false,
@@ -5855,18 +6099,42 @@ const AdminOffersPanel: React.FC = () => {
   };
 
   const handleSave = async () => {
-    if (!form.title.trim()) { showToast('Title is required.'); return; }
+    const title = form.title.trim();
+    if (!title) { showToast('Title is required.'); return; }
+    if (!/^[A-Za-z\s]+$/.test(title)) {
+      showToast('Title can contain letters and spaces only.');
+      return;
+    }
+
     const discountStr = buildDiscountString(form);
-    if (!discountStr) { showToast('Discount is required. Use values like 20% or 500.'); return; }
+    if (!discountStr) { showToast('Discount Label is required.'); return; }
+    if (discountStr.length > 80) { showToast('Discount Label cannot exceed 80 characters.'); return; }
+
     if (!form.validFrom || !form.validTo) { showToast('Valid From and Valid To dates are required.'); return; }
-    if (new Date(form.validTo) <= new Date(form.validFrom)) { showToast('Valid To must be after Valid From.'); return; }
+
+    const validFromDate = new Date(form.validFrom);
+    const validToDate = new Date(form.validTo);
+    if (Number.isNaN(validFromDate.getTime()) || Number.isNaN(validToDate.getTime())) {
+      showToast('Please enter valid Valid From and Valid To dates.');
+      return;
+    }
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const validFromDay = new Date(validFromDate);
+    validFromDay.setHours(0, 0, 0, 0);
+    const validToDay = new Date(validToDate);
+    validToDay.setHours(0, 0, 0, 0);
+    if (validFromDay < todayStart) { showToast('Valid From cannot be in the past.'); return; }
+    if (validToDay < todayStart) { showToast('Valid Until cannot be in the past.'); return; }
+    if (validToDate <= validFromDate) { showToast('Valid To must be after Valid From.'); return; }
+
     const discountValue = Number((form as any).discountValue || 0);
     if ((form as any).discountType === '%' && discountValue > MAX_PERCENTAGE_VALUE) { showToast(`Offer percentage cannot exceed ${MAX_PERCENTAGE_VALUE}%.`); return; }
     if ((form as any).discountType === '₹' && discountValue > MAX_OFFER_AMOUNT) { showToast(`Offer amount cannot exceed ${formatIndianCurrency(MAX_OFFER_AMOUNT)}.`); return; }
     setSaving(true);
     try {
       const payload: Record<string, any> = {
-        title: form.title.trim(),
+        title,
         description: form.description || '',
         discount: discountStr,
         validFrom: toLocalDateTime(form.validFrom),
@@ -5932,6 +6200,25 @@ const AdminOffersPanel: React.FC = () => {
     PENDING: { bg: '#FFFBEB', color: '#D97706', border: '#FCD34D' },
     REJECTED: { bg: '#FEF2F2', color: '#DC2626', border: '#FECACA' },
   };
+
+  const canSaveOfferForm = React.useMemo(() => {
+    if (saving) return false;
+    const title = form.title.trim();
+    const discountLabel = buildDiscountString(form).trim();
+    if (!title || !discountLabel || !form.validFrom || !form.validTo) return false;
+    const from = new Date(form.validFrom);
+    const to = new Date(form.validTo);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return false;
+    if (to <= from) return false;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const fromDay = new Date(from);
+    fromDay.setHours(0, 0, 0, 0);
+    const toDay = new Date(to);
+    toDay.setHours(0, 0, 0, 0);
+    if (fromDay < todayStart || toDay < todayStart) return false;
+    return true;
+  }, [form, saving]);
 
   return (
     <div>
@@ -6001,7 +6288,12 @@ const AdminOffersPanel: React.FC = () => {
               <label style={lbl}>Title *</label>
               <input
                 value={form.title}
-                onChange={e => setForm(f => ({ ...f, title: formatNameLikeInput(e.target.value) }))}
+                onChange={e => {
+                  const val = e.target.value;
+                  // Block numbers and special characters as the very first character
+                  if (val.length === 1 && /[^a-zA-Z]/.test(val)) return;
+                  setForm(f => ({ ...f, title: formatTitleLikeInput(val) }));
+                }}
                 placeholder="e.g. Summer Special Discount"
                 style={inp}
               />
@@ -6014,7 +6306,7 @@ const AdminOffersPanel: React.FC = () => {
                 value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: capitalizeFirstCharacter(e.target.value) }))}
                 rows={2}
-                placeholder="Describe what this offer includes…"
+                placeholder="Describe what this offer includes..."
                 style={{ ...inp, resize: 'none' as any }}
               />
             </div>
@@ -6023,7 +6315,7 @@ const AdminOffersPanel: React.FC = () => {
             <div>
               <label style={lbl}>
                 Discount Label
-                <span style={{ fontWeight: 400, color: '#94A3B8' }}> (auto-built from value/type below)</span>
+                <span style={{ fontWeight: 400, color: '#94A3B8' }}> (shown to customers)</span>
               </label>
               <input
                 type="text"
@@ -6043,7 +6335,7 @@ const AdminOffersPanel: React.FC = () => {
               <div style={{ display: 'flex', gap: 8 }}>
                 <select
                   value={(form as any).discountType || '%'}
-                  onChange={e => setForm(f => ({ ...f, discountType: e.target.value } as any))}
+                  onChange={e => handleDiscountTypeChange(e.target.value)}
                   style={{ ...inp, width: 72, flexShrink: 0 }}
                 >
                   <option value="%">%</option>
@@ -6053,19 +6345,17 @@ const AdminOffersPanel: React.FC = () => {
                   type="text"
                   inputMode="numeric"
                   value={(form as any).discountValue ?? ''}
-                  onChange={e => setForm(f => ({
-                    ...f,
-                    discountValue: (form as any).discountType === '₹'
-                      ? sanitizeWholeNumberInput(e.target.value, MAX_OFFER_AMOUNT)
-                      : sanitizeDecimalInput(e.target.value, MAX_PERCENTAGE_VALUE, 2),
-                  } as any))}
+                  onChange={e => handleDiscountValueChange(e.target.value)}
                   placeholder={(form as any).discountType === '₹' ? `e.g. 250 (max ${formatIndianNumber(MAX_OFFER_AMOUNT)})` : `e.g. 20 (max ${MAX_PERCENTAGE_VALUE})`}
                   style={{ ...inp, flex: 1 }}
                 />
               </div>
+              <div style={{ marginTop: 4, fontSize: 11, color: '#64748B' }}>
+                Optional helper for the actual discount applied. Leave it blank if the label itself should be sent as-is.
+              </div>
             </div>
 
-            {/* Active Toggle — full width, prominent */}
+            {/* Active Toggle - full width, prominent */}
             <div style={{ gridColumn: '1/-1' }}>
               <label style={lbl}>Visibility</label>
               <div
@@ -6096,7 +6386,7 @@ const AdminOffersPanel: React.FC = () => {
                     fontSize: 14, fontWeight: 700,
                     color: form.isActive ? '#166534' : '#374151',
                   }}>
-                    {form.isActive ? 'Active — visible to customers' : 'Inactive — hidden from customers'}
+                    {form.isActive ? 'Active - visible to customers' : 'Inactive - hidden from customers'}
                   </div>
                   <div style={{ fontSize: 12, color: form.isActive ? '#16A34A' : '#94A3B8', marginTop: 2 }}>
                     {form.isActive
@@ -6113,6 +6403,7 @@ const AdminOffersPanel: React.FC = () => {
               <input
                 type="datetime-local"
                 value={toDatetimeLocal(form.validFrom)}
+                min={todayDateTimeMin}
                 onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))}
                 style={inp}
               />
@@ -6124,6 +6415,7 @@ const AdminOffersPanel: React.FC = () => {
               <input
                 type="datetime-local"
                 value={toDatetimeLocal(form.validTo)}
+                min={toDatetimeLocal(form.validFrom) || todayDateTimeMin}
                 onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))}
                 style={inp}
               />
@@ -6133,14 +6425,14 @@ const AdminOffersPanel: React.FC = () => {
             <div>
               <label style={lbl}>
                 Consultant{' '}
-                <span style={{ fontWeight: 400 }}>(optional — leave blank for all)</span>
+                <span style={{ fontWeight: 400 }}>(optional - leave blank for all)</span>
               </label>
               <select
                 value={form.consultantId ?? ''}
                 onChange={e => setForm(f => ({ ...f, consultantId: e.target.value ? Number(e.target.value) : null }))}
                 style={inp}
               >
-                <option value="">Global — visible to ALL consultants</option>
+                <option value="">Global and visible to ALL consultants</option>
                 {consultants.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
@@ -6162,14 +6454,14 @@ const AdminOffersPanel: React.FC = () => {
             </button>
             <button
               onClick={handleSave}
-              disabled={saving}
+              disabled={!canSaveOfferForm}
               style={{
                 padding: '10px 24px', borderRadius: 9, border: 'none',
-                background: saving ? '#99F6E4' : 'var(--color-primary-gradient)',
-                color: '#fff', fontSize: 13, fontWeight: 700, cursor: saving ? 'default' : 'pointer',
+                background: canSaveOfferForm ? (saving ? '#99F6E4' : 'var(--color-primary-gradient)') : '#E2E8F0',
+                color: canSaveOfferForm ? '#fff' : '#94A3B8', fontSize: 13, fontWeight: 700, cursor: canSaveOfferForm ? 'pointer' : 'not-allowed',
               }}
             >
-              {saving ? 'Saving…' : editing ? 'Update Offer' : 'Create Offer'}
+              {saving ? 'Saving...' : editing ? 'Update Offer' : 'Create Offer'}
             </button>
           </div>
         </div>
@@ -6289,18 +6581,18 @@ const AdminOffersPanel: React.FC = () => {
                       {offer.discount}
                     </span>
                   ) : (
-                    <span style={{ color: '#CBD5E1', fontSize: 13 }}>—</span>
+                    <span style={{ color: '#CBD5E1', fontSize: 13 }}>-</span>
                   )}
                 </div>
 
                 {/* Valid From */}
                 <div style={{ fontSize: 11, color: '#64748B', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {offer.validFrom ? offer.validFrom.replace('T', ' ').substring(0, 16) : '—'}
+                  {offer.validFrom ? offer.validFrom.replace('T', ' ').substring(0, 16) : '-'}
                 </div>
 
                 {/* Valid To */}
                 <div style={{ fontSize: 11, color: '#64748B', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {offer.validTo ? offer.validTo.replace('T', ' ').substring(0, 16) : '—'}
+                  {offer.validTo ? offer.validTo.replace('T', ' ').substring(0, 16) : '-'}
                 </div>
 
                 {/* Status + Active toggle */}
@@ -6315,7 +6607,7 @@ const AdminOffersPanel: React.FC = () => {
                   <button
                     onClick={() => !isExpired && handleToggleActive(offer)}
                     disabled={isToggling || isExpired}
-                    title={isExpired ? 'Offer has expired — update Valid To to reactivate' : isActive ? 'Click to deactivate' : 'Click to activate'}
+                    title={isExpired ? 'Offer has expired - update Valid To to reactivate' : isActive ? 'Click to deactivate' : 'Click to activate'}
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5,
                       padding: '3px 10px', borderRadius: 20,
@@ -6332,7 +6624,7 @@ const AdminOffersPanel: React.FC = () => {
                     ) : (
                       <div style={{ width: 7, height: 7, borderRadius: '50%', background: isExpired ? '#C2410C' : isActive ? '#16A34A' : '#CBD5E1', flexShrink: 0 }} />
                     )}
-                    {isToggling ? 'Saving…' : isExpired ? 'Expired' : isActive ? 'Active' : 'Inactive'}
+                    {isToggling ? 'Saving...' : isExpired ? 'Expired' : isActive ? 'Active' : 'Inactive'}
                   </button>
                 </div>
 
@@ -6371,7 +6663,7 @@ const AdminOffersPanel: React.FC = () => {
                       <path d="M10 11v6M14 11v6" />
                       <path d="M9 6V4h6v2" />
                     </svg>
-                    {deleting === offer.id ? '…' : 'Delete'}
+                    {deleting === offer.id ? '...' : 'Delete'}
                   </button>
                 </div>
               </div>
@@ -6385,12 +6677,12 @@ const AdminOffersPanel: React.FC = () => {
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ANALYTICS DASHBOARD — inline, professional SVG tab icons, consultant performance
-// ─────────────────────────────────────────────────────────────────────────────
-// AnalyticsDashboard — fully integrated with real backend data
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// ANALYTICS DASHBOARD - inline, professional SVG tab icons, consultant performance
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// AnalyticsDashboard - fully integrated with real backend data
 // Tabs: Volume | Agent Performance | Customer Satisfaction | Response Times | SLA Breach | Bookings & Revenue
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 type AnalyticsTabId = "volume" | "agents" | "satisfaction" | "sla" | "revenue";
 
 const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; bookings: any[]; mode?: string }> = ({ tickets, consultants, bookings }) => {
@@ -6417,7 +6709,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   const doFetch = React.useCallback(async () => {
     setFetching(true);
     try {
-      // ── Fetch ALL tickets across all pages ──────────────────────────────────
+      // â"€â"€ Fetch ALL tickets across all pages â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       const fetchAllTickets = async (): Promise<any[]> => {
         try {
           // First try paginated endpoint to get ALL tickets (not just first page)
@@ -6425,7 +6717,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
           if (firstPage.totalPages <= 1) {
             return firstPage.content.length > 0 ? firstPage.content : (await getAllTickets());
           }
-          // Multiple pages — fetch them all in parallel
+          // Multiple pages - fetch them all in parallel
           const pagePromises = Array.from({ length: firstPage.totalPages - 1 }, (_, i) =>
             getTicketsPage(i + 1, 200).then(p => p.content).catch(() => [] as any[])
           );
@@ -6438,7 +6730,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         }
       };
 
-      // ── Fetch ALL bookings across all pages ─────────────────────────────────
+      // â"€â"€ Fetch ALL bookings across all pages â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       const fetchAllBookings = async (): Promise<any[]> => {
         try {
           const firstPage = await getBookingsPage(0, 200);
@@ -6503,7 +6795,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
 
   React.useEffect(() => { doFetch(); }, []);
 
-  // ── Helpers ──
+  // â"€â"€ Helpers â"€â"€
   const now = new Date();
   const daysAgo = (n: number) => { const d = new Date(now); d.setDate(d.getDate() - n); d.setHours(0, 0, 0, 0); return d; };
   const toUTCDate = (iso: string): Date => {
@@ -6516,7 +6808,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   const inRange = (t: any) => { try { return toUTCDate(t.createdAt) >= rangeStart; } catch { return true; } };
   const filteredTickets = localTickets.filter(inRange);
 
-  // ── Ticket Volume ──
+  // â"€â"€ Ticket Volume â"€â"€
   const total = filteredTickets.length;
   const totalAll = localTickets.length; // ALL tickets regardless of range
   const resolved = filteredTickets.filter(t => t.status === "RESOLVED" || t.status === "CLOSED").length;
@@ -6540,8 +6832,8 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   });
   const chartMax = Math.max(...Object.values(dayMap).map(v => v.created), 1);
 
-  // ── Agent Performance ──
-  // Build a consultantId → name lookup from the consultants prop so that tickets
+  // â"€â"€ Agent Performance â"€â"€
+  // Build a consultantId â†' name lookup from the consultants prop so that tickets
   // which have consultantId but lack agentName/consultantName still show up
   const consultantIdToName: Record<number, string> = {};
   consultants.forEach((c: any) => {
@@ -6571,7 +6863,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   });
   const agents = Object.values(agentMap).sort((a, b) => b.assigned - a.assigned);
 
-  // ── Customer Satisfaction — merge ticket feedback + public reviews ──
+  // â"€â"€ Customer Satisfaction - merge ticket feedback + public reviews â"€â"€
   // Use ALL tickets (not range-filtered) for most accurate satisfaction metrics
   const ticketRatings = localTickets
     .filter(t => t.feedbackRating && t.feedbackRating > 0)
@@ -6586,12 +6878,12 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   const allRatings = [...ticketRatings, ...reviewRatings];
   const avgRating = allRatings.length > 0
     ? (allRatings.reduce((s, r) => s + r.rating, 0) / allRatings.length).toFixed(1)
-    : "—";
+    : "-";
   const ratingDist: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   allRatings.forEach(r => { const star = Math.round(r.rating); if (star >= 1 && star <= 5) ratingDist[star]++; });
   const ratingMax = Math.max(...Object.values(ratingDist), 1);
 
-  // ── SLA ──
+  // â"€â"€ SLA â"€â"€
   // Use ALL localTickets for SLA tracking (not range-filtered) for complete picture
   // Mirror getSlaInfo logic: breached = isSlaBreached flag OR deadline has passed
   const SLA_HOURS_MAP: Record<string, number> = { LOW: 72, MEDIUM: 24, HIGH: 8, URGENT: 4 };
@@ -6617,7 +6909,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
     if (t.isSlaBreached || isTicketSlaBreached(t)) slaByCategory[cat].breached++;
   });
 
-  // ── Bookings & Revenue ──
+  // â"€â"€ Bookings & Revenue â"€â"€
   const totalBookings = localBookings.length;
   const completedBookings = localBookings.filter((b: any) =>
     ["COMPLETED"].includes((b.status || b.BookingStatus || b.bookingStatus || "").toUpperCase())
@@ -6650,7 +6942,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   });
   const topConsultants = Object.values(bookingsByConsultant).sort((a, b) => b.count - a.count).slice(0, 10);
 
-  // ── Response Times ──
+  // â"€â"€ Response Times â"€â"€
   const resTimes = filteredTickets.map(t => {
     try { if (t.resolvedAt && t.createdAt) return (toUTCDate(t.resolvedAt).getTime() - toUTCDate(t.createdAt).getTime()) / 3600000; }
     catch { } return null;
@@ -6661,9 +6953,9 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
     catch { } return null;
   }).filter((x): x is number => x !== null && x > 0);
 
-  const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "—";
-  const avgResp = respTimes.length ? (respTimes.reduce((a, b) => a + b, 0) / respTimes.length).toFixed(1) : "—";
-  const medRes = resTimes.length ? [...resTimes].sort((a, b) => a - b)[Math.floor(resTimes.length / 2)].toFixed(1) : "—";
+  const avgRes = resTimes.length ? (resTimes.reduce((a, b) => a + b, 0) / resTimes.length).toFixed(1) : "-";
+  const avgResp = respTimes.length ? (respTimes.reduce((a, b) => a + b, 0) / respTimes.length).toFixed(1) : "-";
+  const medRes = resTimes.length ? [...resTimes].sort((a, b) => a - b)[Math.floor(resTimes.length / 2)].toFixed(1) : "-";
 
   const byPriority: Record<string, number[]> = {};
   filteredTickets.forEach(t => {
@@ -6673,7 +6965,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
     }
   });
 
-  // ── UI helpers ──
+  // â"€â"€ UI helpers â"€â"€
   const PRIORITY_COLORS: Record<string, string> = { CRITICAL: "#7C3AED", URGENT: "#DC2626", HIGH: "#EA580C", MEDIUM: "#D97706", LOW: "#16A34A" };
 
   const statCard = (label: string, value: string | number, sub?: string, color = "#0F766E", icon?: React.ReactNode) => (
@@ -6761,17 +7053,17 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         ))}
       </div>
 
-      {/* ─── TICKET VOLUME ─── */}
+      {/* â"€â"€â"€ TICKET VOLUME â"€â"€â"€ */}
       {activeTab === "volume" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, alignItems: "stretch", marginBottom: 24 }}>
             {statCard("Total Tickets", totalAll, `${total} in ${rangeDays}d range`, "#0F766E")}
             {statCard("Resolved / Closed", resolvedAll, `${resRateAll}% overall rate`, "#16A34A")}
             {statCard("Open / Active", openAll, `${open} in range`, "#D97706")}
-            {statCard("Resolution Rate", `${resRateAll}%`, `all-time · ${resRate}% in range`, "#7C3AED")}
+            {statCard("Resolution Rate", `${resRateAll}%`, `all-time Â· ${resRate}% in range`, "#7C3AED")}
           </div>
           <div style={{ background: "#fff", border: "1px solid #F1F5F9", borderRadius: 16, padding: "20px 24px" }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 3 }}>Ticket Volume — Last 14 Days (IST)</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 3 }}>Ticket Volume - Last 14 Days (IST)</div>
             <div style={{ fontSize: 12, color: "#94A3B8", marginBottom: 18 }}>Created vs resolved tickets per day</div>
             {total === 0 ? emptyState("No tickets in this range", "Tickets created in the selected date range will appear here.") : (
               <>
@@ -6801,7 +7093,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         </div>
       )}
 
-      {/* ─── AGENT PERFORMANCE ─── */}
+      {/* â"€â"€â"€ AGENT PERFORMANCE â"€â"€â"€ */}
       {activeTab === "agents" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, alignItems: "stretch", marginBottom: 20 }}>
@@ -6841,7 +7133,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
                     <div style={{ textAlign: "center", fontSize: 16, fontWeight: 800, color: "#0F766E" }}>{a.assigned}</div>
                     <div style={{ textAlign: "center", fontSize: 16, fontWeight: 800, color: "#16A34A" }}>{a.resolved}</div>
                     <div style={{ textAlign: "center", fontSize: 12, color: avgT ? "#374151" : "#94A3B8", fontWeight: avgT ? 600 : 400 }}>
-                      {avgT ? `${avgT}h` : "—"}
+                      {avgT ? `${avgT}h` : "-"}
                     </div>
                     <div style={{ textAlign: "center" }}>
                       <span style={{ fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: rate >= 70 ? "#DCFCE7" : rate >= 40 ? "#FFFBEB" : "#FEF2F2", color: rateColor }}>
@@ -6855,11 +7147,11 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         </div>
       )}
 
-      {/* ─── CUSTOMER SATISFACTION ─── */}
+      {/* â"€â"€â"€ CUSTOMER SATISFACTION â"€â"€â"€ */}
       {activeTab === "satisfaction" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, alignItems: "stretch", marginBottom: 24 }}>
-            {statCard("Avg Rating", avgRating === "—" ? "—" : `${avgRating} / 5`, `from ${allRatings.length} reviews`, "#F59E0B")}
+            {statCard("Avg Rating", avgRating === "-" ? "-" : `${avgRating} / 5`, `from ${allRatings.length} reviews`, "#F59E0B")}
             {statCard("Total Reviews", allRatings.length, `${allRatings.length} total reviews collected`, "#7C3AED")}
             {statCard("5-Star Reviews", ratingDist[5], `${allRatings.length > 0 ? Math.round(ratingDist[5] / allRatings.length * 100) : 0}% of total`, "#16A34A")}
           </div>
@@ -6886,8 +7178,8 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         </div>
       )}
 
-      {/* ─── RESPONSE TIMES ─── */}
-      {/* ─── SLA BREACH ─── */}
+      {/* â"€â"€â"€ RESPONSE TIMES â"€â"€â"€ */}
+      {/* â"€â"€â"€ SLA BREACH â"€â"€â"€ */}
       {activeTab === "sla" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, alignItems: "stretch", marginBottom: 24 }}>
@@ -6916,7 +7208,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, marginBottom: 5 }}>
                       <span style={{ fontWeight: 700, color: "#374151" }}>{cat}</span>
                       <span style={{ fontWeight: 600, color: rate > 0 ? barColor : "#64748B" }}>
-                        {data.breached}/{data.total} breached · {rate}%
+                        {data.breached}/{data.total} breached Â· {rate}%
                       </span>
                     </div>
                     {miniBar(data.breached, data.total, barColor)}
@@ -6927,7 +7219,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
         </div>
       )}
 
-      {/* ─── BOOKINGS & REVENUE ─── */}
+      {/* â"€â"€â"€ BOOKINGS & REVENUE â"€â"€â"€ */}
       {activeTab === "revenue" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, alignItems: "stretch", marginBottom: 24 }}>
@@ -6966,9 +7258,9 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   );
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONTACT SUBMISSIONS PANEL — shows messages submitted via homepage Contact Us
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// CONTACT SUBMISSIONS PANEL - shows messages submitted via homepage Contact Us
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 interface ContactSubmission {
   id: number;
   name: string;
@@ -7075,6 +7367,20 @@ const ContactSubmissionsPanel: React.FC = () => {
         headers: { Accept: "application/json", Authorization: `Bearer ${getAdminToken()}` },
       });
     } catch { /* silent */ }
+  };
+
+  const markUnread = (id: number) => {
+    const updated = submissions.map(s => s.id === id ? { ...s, read: false, isRead: false } : s);
+    setSubmissions(updated);
+    if (selected?.id === id) setSelected(prev => prev ? { ...prev, read: false, isRead: false } : prev);
+    try {
+      const raw = localStorage.getItem("fin_contact_submissions");
+      const arr = raw ? JSON.parse(raw) : [];
+      localStorage.setItem("fin_contact_submissions", JSON.stringify(
+        arr.map((s: any) => s.id === id ? { ...s, read: false } : s)
+      ));
+    } catch { }
+    showToast("Marked as unread.");
   };
 
   const handleSelect = (sub: ContactSubmission) => {
@@ -7266,10 +7572,19 @@ const ContactSubmissionsPanel: React.FC = () => {
                       </div>
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
                         <div style={{ fontSize: 10, color: "#94A3B8" }}>{fmtDate(sub.submittedAt)}</div>
-                        <button onClick={e => { e.stopPropagation(); setDeleteTarget(sub); }}
-                          style={{ marginTop: 6, padding: "3px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-                          Delete
-                        </button>
+                        <div style={{ marginTop: 6, display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          {sub.read && (
+                            <button
+                              onClick={e => { e.stopPropagation(); markUnread(sub.id); }}
+                              style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid #A5F3FC", background: "#ECFEFF", color: "#0F766E", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                              Mark Unread
+                            </button>
+                          )}
+                          <button onClick={e => { e.stopPropagation(); setDeleteTarget(sub); }}
+                            style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -7310,6 +7625,374 @@ const ContactSubmissionsPanel: React.FC = () => {
                 <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
                   <a href={`mailto:${selected.email}?subject=Re: Your message to Meet The Masters`}
                     style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: "var(--color-primary-gradient)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
+                    Reply via Email
+                  </a>
+                  <button onClick={() => selected.read ? markUnread(selected.id) : markRead(selected.id)}
+                    style={{ padding: "10px 14px", borderRadius: 10, border: "1.5px solid #A5F3FC", background: "#ECFEFF", color: "#0F766E", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    {selected.read ? "Mark Unread" : "Mark Read"}
+                  </button>
+                  <button onClick={() => setDeleteTarget(selected)}
+                    style={{ padding: "10px 16px", borderRadius: 10, border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// EMAIL â†' TICKET INBOX PANEL - shows inbound emails processed into tickets
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+interface EmailToTicketMessage {
+  id: number;
+  from: string;
+  subject: string;
+  body: string;
+  receivedAt: string;
+  read: boolean;
+  hidden?: boolean;
+  ticketId?: number | null;
+  ticketNumber?: string | null;
+  syncedToBackend?: boolean;
+}
+
+const EmailToTicketInboxPanel: React.FC = () => {
+  const LS_KEY = "fin_email_to_ticket_messages";
+
+  const [messages, setMessages] = React.useState<EmailToTicketMessage[]>([]);
+  const [selected, setSelected] = React.useState<EmailToTicketMessage | null>(null);
+  const [filter, setFilter] = React.useState<"all" | "unread" | "read">("all");
+  const [search, setSearch] = React.useState("");
+  const [toast, setToast] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [page, setPage] = React.useState(0);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [deleteTarget, setDeleteTarget] = React.useState<EmailToTicketMessage | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = React.useState(false);
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+  const cleanEmailBody = (text: string) => {
+    if (!text) return "";
+    let cleaned = text;
+    // Remove appended HTML version often added by email clients/parsers at the end
+    cleaned = cleaned.replace(/<div\b[^>]*>[\s\S]*<\/div>\s*$/i, '');
+    // Strip any remaining basic HTML tags just in case
+    cleaned = cleaned.replace(/<[^>]+>/g, '');
+    return cleaned.trim();
+  };
+
+  const normalise = (r: any): EmailToTicketMessage => ({
+    id: r.id ?? r.localId ?? Date.now(),
+    from: r.from ?? r.fromEmail ?? r.sender ?? r.senderEmail ?? r.email ?? "--",
+    subject: r.subject ?? r.title ?? "(no subject)",
+    body: cleanEmailBody(r.body ?? r.message ?? r.text ?? ""),
+    read: r.isRead ?? r.read ?? false,
+    hidden: r.hidden ?? false,
+    receivedAt: r.receivedAt ?? r.createdAt ?? r.submittedAt ?? new Date().toISOString(),
+    ticketId: r.ticketId ?? r.createdTicketId ?? r.ticket?.id ?? null,
+    ticketNumber: r.ticketNumber ?? r.ticket?.ticketNumber ?? null,
+    syncedToBackend: r.syncedToBackend ?? true,
+  });
+
+  const isLikelyEmailTicket = (t: any): boolean => {
+    const d = String(t?.description ?? "");
+    // Many email-to-ticket converters include email header lines in the ticket description.
+    return (
+      /^from:/im.test(d) ||
+      /^subject:/im.test(d) ||
+      /^sent:/im.test(d) ||
+      /^date:/im.test(d) ||
+      /message-id:/im.test(d) ||
+      /original message/i.test(d)
+    );
+  };
+
+  const extractHeader = (text: string, key: string): string | null => {
+    const re = new RegExp(`^${key}\\s*:\\s*(.+)$`, "im");
+    const m = text.match(re);
+    return m?.[1]?.trim() || null;
+  };
+
+  const toMessageFromTicket = (t: any): EmailToTicketMessage => {
+    const desc = String(t?.description ?? "");
+    const from = extractHeader(desc, "From") || t?.user?.email || t?.email || "--";
+    const subject = extractHeader(desc, "Subject") || t?.title || t?.category || "(no subject)";
+    return {
+      id: Number(t?.id ?? Date.now()),
+      from: String(from),
+      subject: String(subject),
+      body: cleanEmailBody(desc),
+      receivedAt: String(t?.createdAt ?? new Date().toISOString()),
+      read: false,
+      hidden: false,
+      ticketId: Number(t?.id ?? 0) || null,
+      ticketNumber: t?.ticketNumber != null ? String(t.ticketNumber) : null,
+      syncedToBackend: true,
+    };
+  };
+
+  const fmtDate = (iso?: string) => {
+    try { return new Date(iso || "").toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }); } catch { return ""; }
+  };
+
+  const persistLocal = (arr: EmailToTicketMessage[]) => {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(arr));
+    } catch { /* ignore */ }
+  };
+
+  const load = React.useCallback(async (pg = 0) => {
+    setLoading(true);
+    try {
+      // Backend does not expose a raw "email inbox messages" API in Swagger.
+      // Instead, approximate an inbox by showing the tickets that look like they were created from email content.
+      const data = await getTicketsPage(pg, 50);
+      const ticketArr = Array.isArray(data?.content) ? data.content : extractArray(data);
+      const derived = ticketArr
+        .filter(isLikelyEmailTicket)
+        .map(toMessageFromTicket);
+      setTotalPages(Number(data?.totalPages ?? 1));
+
+      // Merge read/hidden state from localStorage (single source of truth for inbox UX)
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        const local: any[] = raw ? JSON.parse(raw) : [];
+        const localMap = new Map<number, EmailToTicketMessage>(local.map((m: any) => [Number(m.id), normalise(m)]));
+        const merged = derived.map((m) => {
+          const prev = localMap.get(Number(m.id));
+          return prev ? { ...m, read: !!prev.read, hidden: !!prev.hidden } : m;
+        });
+        merged.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+        setMessages(merged);
+        persistLocal(merged);
+      } catch {
+        setMessages(derived);
+        persistLocal(derived);
+      }
+      setLoading(false);
+      return;
+    } catch { /* backend unreachable -- fall through */ }
+
+    // Fallback: localStorage only
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      const arr: EmailToTicketMessage[] = raw ? JSON.parse(raw).map(normalise) : [];
+      arr.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+      setMessages(arr);
+    } catch { setMessages([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { load(0); }, [load]);
+
+  const markRead = async (id: number) => {
+    setMessages(prev => {
+      const updated = prev.map(m => m.id === id ? { ...m, read: true } : m);
+      persistLocal(updated);
+      return updated;
+    });
+    if (selected?.id === id) setSelected(prev => prev ? { ...prev, read: true } : prev);
+  };
+
+  const handleSelect = (m: EmailToTicketMessage) => {
+    setSelected(m);
+    if (!m.read) markRead(m.id).catch(() => null);
+  };
+
+  const handleMarkAllRead = async () => {
+    const updated = messages.map(m => ({ ...m, read: true }));
+    setMessages(updated);
+    if (selected) setSelected({ ...selected, read: true });
+    persistLocal(updated);
+    showToast("Marked all as read");
+  };
+
+  const handleDeleteOne = async (id: number) => {
+    const updated = messages.map(m => m.id === id ? { ...m, hidden: true } : m);
+    setMessages(updated);
+    if (selected?.id === id) setSelected(null);
+    persistLocal(updated);
+    showToast("Removed from inbox");
+  };
+
+  const handleDeleteAll = async () => {
+    const updated = messages.map(m => ({ ...m, hidden: true }));
+    setMessages(updated);
+    setSelected(null);
+    persistLocal(updated);
+    showToast("Cleared");
+  };
+
+  const visibleMessages = messages.filter(m => !m.hidden);
+  const unreadCount = visibleMessages.filter(m => !m.read).length;
+  const filtered = visibleMessages.filter(m => {
+    if (filter === "unread" && m.read) return false;
+    if (filter === "read" && !m.read) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (m.from || "").toLowerCase().includes(q) ||
+      (m.subject || "").toLowerCase().includes(q) ||
+      (m.body || "").toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div>
+      {deleteTarget && (
+        <ConfirmDialog
+          open={true}
+          title="Delete Email"
+          message="This will remove the email from the admin inbox view. This action cannot be undone."
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          danger={true}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => { const id = deleteTarget.id; setDeleteTarget(null); handleDeleteOne(id); }}
+        />
+      )}
+      {showClearConfirm && (
+        <ConfirmDialog
+          open={true}
+          title="Clear Email Inbox"
+          message="This will clear all email-to-ticket messages from this admin view."
+          confirmLabel="Clear All"
+          cancelLabel="Cancel"
+          danger={true}
+          onClose={() => setShowClearConfirm(false)}
+          onConfirm={() => { setShowClearConfirm(false); handleDeleteAll(); }}
+        />
+      )}
+
+      {toast && <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#0F172A", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>{toast}</div>}
+
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A" }}>Email Inbox</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748B" }}>
+            Inbox view for support emails linked to <strong style={{ color: "#0F766E" }}>{SUPPORT_EMAIL}</strong>
+            {unreadCount > 0 && <span style={{ marginLeft: 10, background: "#DC2626", color: "#fff", borderRadius: 20, fontSize: 11, fontWeight: 700, padding: "2px 8px" }}>{unreadCount} unread</span>}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => load(page)} disabled={loading}
+            style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#0F766E", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+            {loading ? "Loading..." : "Refresh"}
+          </button>
+          {unreadCount > 0 && <button onClick={handleMarkAllRead} style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #A5F3FC", background: "#ECFEFF", color: "#0F766E", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Mark All Read</button>}
+          {messages.length > 0 && <button onClick={() => setShowClearConfirm(true)} style={{ padding: "8px 14px", borderRadius: 9, border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Clear All</button>}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["all", "unread", "read"] as const).map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${filter === f ? "#0F766E" : "#E2E8F0"}`, background: filter === f ? "#0F766E" : "#fff", color: filter === f ? "#fff" : "#64748B", fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }}>
+              {f} ({f === "all" ? messages.length : f === "unread" ? unreadCount : messages.length - unreadCount})
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 200, position: "relative" }}>
+          <svg style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }} width="13" height="13" fill="none" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="#94A3B8" strokeWidth="2" /><path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" /></svg>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by from, subject, content..."
+            style={{ width: "100%", paddingLeft: 30, paddingRight: 12, paddingTop: 8, paddingBottom: 8, border: "1.5px solid #E2E8F0", borderRadius: 9, fontSize: 13, outline: "none", boxSizing: "border-box" as const }} />
+        </div>
+      </div>
+
+      {loading && messages.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "#94A3B8" }}>
+          <img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", display: "block", margin: "0 auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
+        </div>
+      ) : messages.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "80px 20px", background: "#F8FAFC", borderRadius: 16, color: "#94A3B8" }}>
+          <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" strokeLinecap="round" style={{ marginBottom: 14 }}>
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" />
+          </svg>
+          <div style={{ fontWeight: 600, fontSize: 15, color: "#64748B", marginBottom: 6 }}>No emails yet</div>
+          <p style={{ fontSize: 13, margin: 0 }}>
+            This view shows tickets that look like they were created from an email (based on email headers in the ticket description).
+            If you don't see anything, the backend may be converting emails without storing the original email headers/content in the ticket.
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: selected ? "1.2fr 1fr" : "1fr", gap: 16, alignItems: "start" }}>
+          {/* List */}
+          <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>Messages</div>
+              <div style={{ fontSize: 12, color: "#64748B" }}>{filtered.length} shown</div>
+            </div>
+            <div style={{ maxHeight: "68vh", overflow: "auto" }}>
+              {filtered.map(m => (
+                <button key={m.id} onClick={() => handleSelect(m)}
+                  style={{
+                    width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #F8FAFC",
+                    padding: "12px 14px", background: selected?.id === m.id ? "#ECFEFF" : (m.read ? "#fff" : "#F8FAFF"),
+                    cursor: "pointer",
+                  }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+                        {!m.read && <span style={{ width: 8, height: 8, borderRadius: 999, background: "#DC2626" }} />}
+                        <div style={{ fontSize: 13, fontWeight: 800, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.subject || "(no subject)"}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.from}</div>
+                      <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {(m.body || "").replace(/\s+/g, " ").trim().slice(0, 120)}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94A3B8", flexShrink: 0 }}>{fmtDate(m.receivedAt)}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {totalPages > 1 && (
+              <div style={{ padding: "10px 18px", borderTop: "1px solid #F1F5F9", display: "flex", gap: 8, justifyContent: "center" }}>
+                {Array.from({ length: totalPages }, (_, i) => (
+                  <button key={i} onClick={() => { setPage(i); load(i); }}
+                    style={{ width: 30, height: 30, borderRadius: 7, border: `1.5px solid ${page === i ? "#0F766E" : "#E2E8F0"}`, background: page === i ? "#0F766E" : "#fff", color: page === i ? "#fff" : "#374151", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Detail */}
+          {selected && (
+            <div style={{ background: "#fff", border: "1px solid #E2E8F0", borderRadius: 16, overflow: "hidden", position: "sticky", top: 20 }}>
+              <div style={{ background: "var(--portal-profile-gradient)", padding: "18px 22px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected.subject || "(no subject)"}</div>
+                    <div style={{ fontSize: 12, color: "#A5F3FC", marginTop: 4 }}>{selected.from}</div>
+                    <div style={{ fontSize: 11, color: "#99F6E4", marginTop: 8 }}>{fmtDate(selected.receivedAt)}</div>
+                    {(selected.ticketId || selected.ticketNumber) && (
+                      <div style={{ fontSize: 11, color: "#E0F2FE", marginTop: 8, fontWeight: 700 }}>
+                        Ticket: {selected.ticketNumber ? String(selected.ticketNumber) : `#${selected.ticketId}`}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => setSelected(null)} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 30, height: 30, borderRadius: "50%", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>x</button>
+                </div>
+              </div>
+              <div style={{ padding: "20px 22px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 10 }}>Email</div>
+                <div style={{ fontSize: 14, color: "#0F172A", lineHeight: 1.75, background: "#F8FAFC", borderRadius: 12, padding: "14px 16px", borderLeft: "3px solid #A5F3FC", whiteSpace: "pre-wrap" }}>
+                  {selected.body}
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" as const }}>
+                  <a href={`mailto:${selected.from}?subject=${encodeURIComponent(`Re: ${selected.subject || "Your message"}`)}`}
+                    style={{ flex: 1, minWidth: 160, padding: "10px", borderRadius: 10, border: "none", background: "var(--color-primary-gradient)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "center", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                     <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
                     Reply via Email
                   </a>
@@ -7432,7 +8115,7 @@ function AdminPageInner() {
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState<"online" | "offline" | "error" | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  // Delete consultant confirmation modal — shows booking warning or confirm dialog
+  // Delete consultant confirmation modal - shows booking warning or confirm dialog
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
     advisor: Advisor;
     bookingCount: number;
@@ -7453,12 +8136,21 @@ function AdminPageInner() {
 
   const currentAdminId = Number(localStorage.getItem("fin_user_id") ?? 0);
 
-  // ── Contact submissions unread count ──────────────────────────────────────
+  // â"€â"€ Contact submissions unread count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [contactUnreadCount, setContactUnreadCount] = useState(() => {
     try {
       const raw = localStorage.getItem("fin_contact_submissions");
       const arr = raw ? JSON.parse(raw) : [];
       return arr.filter((s: any) => !s.read).length;
+    } catch { return 0; }
+  });
+
+  // â"€â"€ Email-to-ticket inbox unread count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  const [emailInboxUnreadCount, setEmailInboxUnreadCount] = useState(() => {
+    try {
+      const raw = localStorage.getItem("fin_email_to_ticket_messages");
+      const arr = raw ? JSON.parse(raw) : [];
+      return arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length;
     } catch { return 0; }
   });
 
@@ -7475,15 +8167,23 @@ function AdminPageInner() {
     }
   }, [activeSection]);
 
-  // ── Logout handler ───────────────────────────────────────────────────────
+  // Refresh unread count when navigating to email-to-ticket-inbox
+  useEffect(() => {
+    if (activeSection === "email-to-ticket-inbox") {
+      setEmailInboxUnreadCount(0);
+    } else {
+      try {
+        const raw = localStorage.getItem("fin_email_to_ticket_messages");
+        const arr = raw ? JSON.parse(raw) : [];
+        setEmailInboxUnreadCount(arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length);
+      } catch { }
+    }
+  }, [activeSection]);
+
+  // â"€â"€ Logout handler â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleLogout = () => {
-    localStorage.removeItem("fin_token");
-    localStorage.removeItem("fin_role");
-    localStorage.removeItem("fin_user_id");
-    localStorage.removeItem("fin_consultant_id");
-    localStorage.removeItem("fin_user_name");
-    localStorage.removeItem("fin_user_email");
-    navigate("/login");
+    logoutUser();
+    navigate("/login", { replace: true });
   };
 
   const extractUserName = (b: any): string => {
@@ -7512,7 +8212,7 @@ function AdminPageInner() {
       if (Array.isArray(advData) && advData.length > 0) {
         setAdvisors(advData.map((a: any) => {
           const baseCharges = Number(a.charges || 0);
-          // PRD §5.3: Display price = base + ₹200 markup
+          // PRD Â§5.3: Display price = base + â‚¹200 markup
           const displayPrice = a.displayPrice ? Number(a.displayPrice) : (baseCharges > 0 ? baseCharges + 200 : 0);
           const rawAvatar =
             a.profileImageUrl ||
@@ -7581,8 +8281,8 @@ function AdminPageInner() {
           (Array.isArray(mData) ? mData : mData?.content || []).forEach((m: any) => { if (m.id && m.timeRange) masterMap[m.id] = m.timeRange; });
         } catch { }
 
-        // Fetch timeslot details — Swagger: GET /api/timeslots/{id} → {slotDate, masterTimeSlotId, timeRange}
-        // BookingResponse only has timeSlotId — timeslot is the source of date/time
+        // Fetch timeslot details - Swagger: GET /api/timeslots/{id} â†' {slotDate, masterTimeSlotId, timeRange}
+        // BookingResponse only has timeSlotId - timeslot is the source of date/time
         const bookingDetailMap: Record<number, any> = {}; // keyed by booking id for user resolution
         const timeslotMap: Record<number, any> = {}; // keyed by timeSlotId for date/time
         const uniqueSlotIds = [...new Set(bookingsArr.map((b: any) => b.timeSlotId).filter(Boolean))] as number[];
@@ -7640,7 +8340,7 @@ function AdminPageInner() {
           // Try direct parse
           const d = new Date(dateStr);
           if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
-          // Handle "25 Mar 2026" → rearrange
+          // Handle "25 Mar 2026" â†' rearrange
           const match = dateStr.match(/^(\d{1,2})\s+(\w+)\s+(\d{4})$/);
           if (match) {
             const d2 = new Date(`${match[2]} ${match[1]}, ${match[3]}`);
@@ -7659,7 +8359,7 @@ function AdminPageInner() {
           const advisorName = b.consultant?.name || b.consultantName || consultantNameMap[b.consultantId] || "Consultant";
           const uid = b.userId || b.user?.id || b.clientId;
           const resolvedUser = (uid && userNameMap[uid]) ? userNameMap[uid] : extractUserName(b);
-          const timeStr = slotDate && timeRange ? `${slotDate} • ${timeRange}` : slotDate || timeRange || "";
+          const timeStr = slotDate && timeRange ? `${slotDate} * ${timeRange}` : slotDate || timeRange || "";
           return { id: b.id, user: resolvedUser, advisor: advisorName, time: timeStr, status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(), amount: Number(b.amount || b.charges || b.fee || b.totalAmount || 0), _rawDate: slotDate };
         });
 
@@ -7669,7 +8369,7 @@ function AdminPageInner() {
           const advisorName = b.consultant?.name || b.consultantName || consultantNameMap[b.consultantId] || "Consultant";
           const uid = b.userId || b.user?.id || b.clientId;
           const resolvedUser = (uid && userNameMap[uid]) ? userNameMap[uid] : extractUserName(b);
-          const timeStr = slotDate ? `${slotDate} • Special` : "Special Booking";
+          const timeStr = slotDate ? `${slotDate} * Special` : "Special Booking";
           return { id: `sp_${b.id}`, user: resolvedUser, advisor: advisorName, time: timeStr, status: (b.status || "CONFIRMED").toUpperCase(), amount: Number(b.sessionAmount || b.amount || b.charges || b.fee || 0), _rawDate: slotDate };
         });
 
@@ -7681,7 +8381,7 @@ function AdminPageInner() {
         setTotalRevenue(prev => prev > 0 ? prev : allMapped.reduce((s: number, b: any) => s + (b.amount || 0), 0));
         setDashBookings(allMapped.slice(0, 5));
 
-        // Build rolling 14-day chart (today ± 7 days) so upcoming bookings always appear
+        // Build rolling 14-day chart (today Â± 7 days) so upcoming bookings always appear
         // This avoids the "empty chart" when all bookings are future dates
         const chartNow = new Date();
         chartNow.setHours(0, 0, 0, 0);
@@ -7701,7 +8401,7 @@ function AdminPageInner() {
         chartDays.forEach(cd => { dayCounts[cd.iso] = 0; dayRevenue[cd.iso] = 0; });
 
         allMapped.forEach((b: any) => {
-          const rawDate = b._rawDate || b.time?.split(" • ")[0]?.trim() || "";
+          const rawDate = b._rawDate || b.time?.split(" * ")[0]?.trim() || "";
           const isoDate = parseBookingDate(rawDate);
           if (!isoDate) return;
           if (dayCounts[isoDate] !== undefined) {
@@ -7746,7 +8446,7 @@ function AdminPageInner() {
       setAllTickets(tarr);
     } catch (err) { console.warn("[Admin] Tickets failed (non-fatal):", err); }
 
-    // ── Analytics API enrichment (non-fatal) ─────────────────────────────
+    // â"€â"€ Analytics API enrichment (non-fatal) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     try {
       const [adminOverview, adminCharts] = await Promise.allSettled([
         apiFetch("/analytics/admin/overview"),
@@ -7779,7 +8479,7 @@ function AdminPageInner() {
   useEffect(() => { fetchDashboardData(); }, []);
 
   const handleDeleteAdvisor = async (advisor: Advisor) => {
-    // Step 1: Show modal immediately with "checking…" state
+    // Step 1: Show modal immediately with "checking..." state
     setDeleteConfirmModal({ advisor, bookingCount: 0, hasBookings: false, checking: true });
 
     // Step 2: Check if this consultant has any bookings
@@ -7849,6 +8549,7 @@ function AdminPageInner() {
     { id: "offer-approval", label: "Offer Approvals", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "questions", label: "Questions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "terms-conditions", label: "Terms & Conditions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><polyline points="10 9 9 9 8 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "privacy-policy", label: "Privacy Policy", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2l7 3v6c0 5-3.5 9.5-7 11-3.5-1.5-7-6-7-11V5l7-3z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M9.5 12.5l2 2 3.5-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "commission", label: "Commission", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="5" x2="5" y2="19" /><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" /></svg> },
     {
       id: "subscription-plans" as AdminSectionType,
@@ -7862,18 +8563,30 @@ function AdminPageInner() {
         </svg>
       ),
     },
+    {
+      id: "email-to-ticket-inbox",
+      label: "Email Inbox",
+      badge: emailInboxUnreadCount > 0 ? emailInboxUnreadCount : undefined,
+      icon: (
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+          <polyline points="22,6 12,13 2,6" />
+          <path d="M22 10l-6 4" />
+        </svg>
+      ),
+    },
     { id: "contact-submissions", label: "Contact Messages", badge: contactUnreadCount > 0 ? contactUnreadCount : undefined, icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg> },
     { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
   ];
 
   const stats = [
-    { label: "TOTAL USERS", value: loading ? "…" : String(adminStats?.totalUsers ?? (advisors.length + (adminStats?.totalClients ?? 0))), change: `${adminStats?.totalUsers ?? advisors.length} registered`, positive: true, color: "#2563EB", bg: "#EFF6FF" },
-    { label: "ACTIVE CONSULTANTS", value: loading ? "…" : String(adminStats?.totalConsultants ?? advisors.length), change: `${adminStats?.totalConsultants ?? advisors.length} registered`, positive: true, color: "#0D9488", bg: "#ECFEFF" },
-    { label: "PLATFORM REVENUE", value: loading ? "…" : `₹${(adminStats?.platformRevenue ?? totalRevenue).toLocaleString("en-IN")}`, change: "from completed bookings", positive: true, color: "#059669", bg: "#F0FDF4" },
+    { label: "TOTAL USERS", value: loading ? "..." : String(adminStats?.totalUsers ?? (advisors.length + (adminStats?.totalClients ?? 0))), change: `${adminStats?.totalUsers ?? advisors.length} registered`, positive: true, color: "#2563EB", bg: "#EFF6FF" },
+    { label: "ACTIVE CONSULTANTS", value: loading ? "..." : String(adminStats?.totalConsultants ?? advisors.length), change: `${adminStats?.totalConsultants ?? advisors.length} registered`, positive: true, color: "#0D9488", bg: "#ECFEFF" },
+    { label: "PLATFORM REVENUE", value: loading ? "..." : `₹${(adminStats?.platformRevenue ?? totalRevenue).toLocaleString("en-IN")}`, change: "from completed bookings", positive: true, color: "#059669", bg: "#F0FDF4" },
   ];
   const hasOpenTickets = ticketCount > 0;
   const openTicketsHeading = loading
-    ? "Loading open tickets…"
+    ? "Loading open tickets..."
     : hasOpenTickets
       ? `${ticketCount} open ticket${ticketCount === 1 ? "" : "s"} need attention`
       : "No open tickets need attention";
@@ -7950,7 +8663,7 @@ function AdminPageInner() {
               <path d="m21 21-4.35-4.35" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" />
             </svg>
             <input
-              placeholder="Search dashboard sections…"
+              placeholder="Search dashboard sections..."
               style={{
                 width: "100%", boxSizing: "border-box" as const,
                 fontSize: 13, padding: "10px 36px 10px 42px",
@@ -8023,7 +8736,7 @@ function AdminPageInner() {
           <NotificationBell onTicketClick={() => setActiveSection("tickets")} />
         </div>
 
-        {/* ── All page content padded away from sidebar ── */}
+        {/* â"€â"€ All page content padded away from sidebar â"€â"€ */}
         <div style={{ padding: "28px 32px", flex: 1, minWidth: 0, boxSizing: "border-box", overflowY: "auto" }}>
 
           {backendStatus === "offline" && (
@@ -8031,11 +8744,11 @@ function AdminPageInner() {
           )}
           {backendStatus === "error" && (
             <div className="adm-alert-warning" style={{ background: "#FEF2F2", borderColor: "#FECACA", color: "#B91C1C" }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg> 403 Forbidden — check the browser console for token debug info.</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg> 403 Forbidden - check the browser console for token debug info.</span>
             </div>
           )}
 
-          {/* ════ DASHBOARD ════ */}
+          {/* â*â*â*â* DASHBOARD â*â*â*â* */}
           {activeSection === "dashboard" && (
             <>
               <div className="adm-stats-grid">
@@ -8052,15 +8765,15 @@ function AdminPageInner() {
                 ))}
               </div>
 
-              {/* ════ CHARTS ROW ════ */}
+              {/* â*â*â*â* CHARTS ROW â*â*â*â* */}
               <div style={{ display: "flex", flexDirection: "column", gap: 20, marginBottom: 0 }}>
 
-                {/* Chart 1: Weekly Bookings + Revenue — full width */}
+                {/* Chart 1: Weekly Bookings + Revenue - full width */}
                 <div id="dash-section-bookings-activity" className="adm-card" style={{ padding: "18px 20px 14px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                     <div>
-                      <h3 className="adm-card-title" style={{ margin: 0, fontSize: 14 }}>Booking Activity — 14 Days</h3>
-                      <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Sessions · Revenue (₹K)</div>
+                      <h3 className="adm-card-title" style={{ margin: 0, fontSize: 14 }}>Booking Activity - 14 Days</h3>
+                      <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Sessions - Revenue (₹K)</div>
                     </div>
                     <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748B" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -8100,12 +8813,12 @@ function AdminPageInner() {
                   </div>
                 </div>
 
-                {/* Chart 2: Consultant Performance — full width, vertical bars */}
+                {/* Chart 2: Consultant Performance - full width, vertical bars */}
                 <div id="dash-section-consultant-performance" className="adm-card" style={{ padding: "18px 20px 14px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                     <div>
                       <h3 className="adm-card-title" style={{ margin: 0, fontSize: 14 }}>Consultant Performance</h3>
-                      <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Bookings · Revenue (₹K) per consultant</div>
+                      <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>Bookings - Revenue (₹K) per consultant</div>
                     </div>
                     <div style={{ display: "flex", gap: 12, fontSize: 10, color: "#64748B" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -8226,7 +8939,7 @@ function AdminPageInner() {
                       </svg>
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: openTicketsAccent.title, lineHeight: 1.15 }}>{openTicketsHeading}</div>
+                      <div style={{ fontSize: loading ? 15 : 20, fontWeight: loading ? 600 : 800, color: openTicketsAccent.title, lineHeight: 1.35, fontStyle: loading ? "italic" : "normal", opacity: loading ? 0.75 : 1 }}>{openTicketsHeading}</div>
                       <div style={{ fontSize: 13, color: openTicketsAccent.sub, marginTop: 8 }}>{openTicketsSubtext}</div>
                     </div>
                   </div>
@@ -8264,7 +8977,7 @@ function AdminPageInner() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
                   <h3 className="adm-card-title" style={{ margin: 0 }}>Recent Bookings</h3>
                   <span style={{ background: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC", borderRadius: 20, fontSize: 12, fontWeight: 700, padding: "3px 12px" }}>
-                    {loading ? "Loading…" : `${totalBookingsCount || allBookings.length} total`}
+                    {loading ? "Loading..." : `${totalBookingsCount || allBookings.length} total`}
                   </span>
                 </div>
                 <div className="adm-table-responsive">
@@ -8306,7 +9019,7 @@ function AdminPageInner() {
             </>
           )}
 
-          {/* ════ DELETE CONSULTANT MODAL ════ */}
+          {/* â*â*â*â* DELETE CONSULTANT MODAL â*â*â*â* */}
           {deleteConfirmModal && (
             <div style={{
               position: "fixed", inset: 0, zIndex: 9999,
@@ -8369,7 +9082,7 @@ function AdminPageInner() {
                       <img src={logoImg} alt="Meet The Masters" style={{ width: 48, height: "auto", display: "block", margin: "0 auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
                     </div>
                   ) : deleteConfirmModal.hasBookings ? (
-                    /* HAS BOOKINGS — Cannot delete */
+                    /* HAS BOOKINGS - Cannot delete */
                     <>
                       <div style={{
                         background: "#FEF2F2", border: "1px solid #FECACA",
@@ -8379,7 +9092,7 @@ function AdminPageInner() {
                         <div style={{ flexShrink: 0, marginTop: 2 }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg></div>
                         <div>
                           <div style={{ fontSize: 14, fontWeight: 800, color: "#B91C1C", marginBottom: 5 }}>
-                            Cannot Delete — Active Bookings Exist
+                            Cannot Delete - Active Bookings Exist
                           </div>
                           <div style={{ fontSize: 13, color: "#7F1D1D", lineHeight: 1.6 }}>
                             <strong>{deleteConfirmModal.advisor.name}</strong> has{" "}
@@ -8415,7 +9128,7 @@ function AdminPageInner() {
                       </div>
                     </>
                   ) : (
-                    /* NO BOOKINGS — Safe to delete */
+                    /* NO BOOKINGS - Safe to delete */
                     <>
                       <div style={{
                         background: "#FFF7ED", border: "1px solid #FED7AA",
@@ -8436,7 +9149,7 @@ function AdminPageInner() {
                       </div>
 
                       <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 10, padding: "10px 14px", marginBottom: 20, fontSize: 12, color: "#166534" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> This consultant has <strong>no active bookings</strong> — safe to delete.</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg> This consultant has <strong>no active bookings</strong> - safe to delete.</span>
                       </div>
 
                       {/* Consultant details summary */}
@@ -8479,7 +9192,7 @@ function AdminPageInner() {
                             display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
                           }}>
                           {deletingId === deleteConfirmModal.advisor.id ? (
-                            <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#DC2626", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting…</>
+                            <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#DC2626", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting...</>
                           ) : (
                             <><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Yes, Delete Permanently</>
                           )}
@@ -8493,7 +9206,7 @@ function AdminPageInner() {
             </div>
           )}
 
-          {/* ════ CONSULTANTS ════ */}
+          {/* â*â*â*â* CONSULTANTS â*â*â*â* */}
           {activeSection === "advisors" && (
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, paddingBottom: 20, borderBottom: "1px solid #E2E8F0" }}>
@@ -8503,7 +9216,7 @@ function AdminPageInner() {
                   </div>
                   <div>
                     <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#0F172A", letterSpacing: "-0.4px" }}>
-                      Consultants {loading && <span style={{ fontSize: 14, fontWeight: 500, color: "#94A3B8" }}>Loading…</span>}
+                      Consultants {loading && <span style={{ fontSize: 14, fontWeight: 500, color: "#94A3B8" }}>Loading...</span>}
                     </h2>
                     <p style={{ margin: "3px 0 0", fontSize: 13, color: "#64748B" }}>{advisors.length} consultant{advisors.length !== 1 ? "s" : ""} registered</p>
                   </div>
@@ -8521,7 +9234,7 @@ function AdminPageInner() {
                     {/* Card Header */}
                     <div style={{ background: "linear-gradient(135deg, #F8FAFF 0%, #ECFEFF 100%)", padding: "22px 22px 18px", borderBottom: "1px solid #E2E8F0" }}>
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-                        {/* Avatar — photo fills full box, initial letter shown as background fallback */}
+                        {/* Avatar - photo fills full box, initial letter shown as background fallback */}
                         <div style={{ width: 68, height: 68, borderRadius: 16, overflow: "hidden", flexShrink: 0, border: "3px solid #fff", boxShadow: "0 4px 12px rgba(15,118,110,0.15)", background: "var(--portal-profile-gradient)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                           <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{a.name.charAt(0)}</span>
                           <img src={a.avatar} alt={a.name}
@@ -8536,7 +9249,7 @@ function AdminPageInner() {
                           {(a.shiftStartTime || a.shiftEndTime) && (
                             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#64748B" }}>
                               <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                              Availability: {a.shiftStartTime} – {a.shiftEndTime}
+                              Availability: {a.shiftStartTime} - {a.shiftEndTime}
                             </div>
                           )}
                         </div>
@@ -8578,7 +9291,7 @@ function AdminPageInner() {
                         onMouseEnter={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#FEF2F2"; }}
                         onMouseLeave={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#fff"; }}>
                         {deletingId === a.id ? (
-                          <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#EF4444", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting…</>
+                          <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#EF4444", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting...</>
                         ) : (
                           <><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Delete Consultant</>
                         )}
@@ -8596,12 +9309,12 @@ function AdminPageInner() {
             </div>
           )}
 
-          {/* ════ BOOKINGS ════ */}
+          {/* â*â*â*â* BOOKINGS â*â*â*â* */}
           {activeSection === "bookings" && (
             <BookingsSectionWrapper allBookings={allBookings} />
           )}
 
-          {/* ════ TICKETS ════ */}
+          {/* â*â*â*â* TICKETS â*â*â*â* */}
           {activeSection === "tickets" && (
             <TicketsSection
               consultants={advisors}
@@ -8613,12 +9326,12 @@ function AdminPageInner() {
             />
           )}
 
-          {/* ════ ANALYTICS ════ */}
+          {/* â*â*â*â* ANALYTICS â*â*â*â* */}
           {activeSection === "analytics" && (
             <AnalyticsDashboard tickets={allTickets} consultants={advisors} bookings={allBookings} mode="admin" />
           )}
 
-          {/* ════ REPORTS ════ */}
+          {/* â*â*â*â* REPORTS â*â*â*â* */}
           {activeSection === "summary" && (
             <div>
               <div style={{ marginBottom: 24 }}>
@@ -8645,32 +9358,49 @@ function AdminPageInner() {
             </div>
           )}
 
-          {/* ════ ADD MEMBER ════ */}
+          {/* â*â*â*â* ADD MEMBER â*â*â*â* */}
           {activeSection === "add-member" && (
             <div>
               <AddMemberPanel />
             </div>
           )}
 
-          {/* ════ SUPPORT CONFIG ════ */}
+          {/* â*â*â*â* SUPPORT CONFIG â*â*â*â* */}
           {activeSection === "support-config" && (
             <SupportConfigPanel tickets={allTickets} advisors={advisors} onAssign={handleSupportAssign} />
           )}
 
-          {/* ════ TIME RANGES ════ */}
+          {/* â*â*â*â* TIME RANGES â*â*â*â* */}
           {activeSection === "time-ranges" && <AdminMasterTimeSlotsPanel />}
 
-          {/* ════ OFFERS ════ */}
+          {/* â*â*â*â* OFFERS â*â*â*â* */}
           {activeSection === "offers" && <AdminOffersPanel />}
           {activeSection === "offer-approval" && <OfferApprovalPanel />}
           {activeSection === "questions" && <QuestionsManagementPanel />}
           {activeSection === "commission" && <CommissionConfigPanel />}
-          {/* ════ SUBSCRIPTION PLANS ════ */}
+          {/* â*â*â*â* SUBSCRIPTION PLANS â*â*â*â* */}
           {activeSection === "subscription-plans" && <SubscriptionPlansPanel />}
-          {activeSection === "terms-conditions" && <TermsConditionsEditor />}
+          {activeSection === "terms-conditions" && (
+            <TermsConditionsEditor
+              contentType="TERMS_AND_CONDITIONS"
+              title="Terms & Conditions"
+              description="Edit and version-manage your Terms & Conditions - previous versions are preserved"
+              storageKey="fin_terms_versions"
+            />
+          )}
+          {activeSection === "privacy-policy" && (
+            <TermsConditionsEditor
+              contentType="PRIVACY_POLICY"
+              title="Privacy Policy"
+              description="Edit and version-manage your Privacy Policy - previous versions are preserved"
+              storageKey="fin_privacy_versions"
+              defaultContent={DEFAULT_PRIVACY_EDITOR_CONTENT}
+            />
+          )}
+          {activeSection === "email-to-ticket-inbox" && <EmailToTicketInboxPanel />}
           {activeSection === "contact-submissions" && <ContactSubmissionsPanel />}
 
-          {/* ════ SETTINGS — FULLY DYNAMIC ════ */}
+          {/* â*â*â*â* SETTINGS - FULLY DYNAMIC â*â*â*â* */}
           {activeSection === "settings" && (
             <SettingsPage adminId={currentAdminId} onLogout={handleLogout} />
           )}
@@ -8682,9 +9412,9 @@ function AdminPageInner() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EXPORT — wrapped with NotificationProvider
-// ─────────────────────────────────────────────────────────────────────────────
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// EXPORT - wrapped with NotificationProvider
+// â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 export default function AdminPage() {
   return (
     <NotificationProvider>

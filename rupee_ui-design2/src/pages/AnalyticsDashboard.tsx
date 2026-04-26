@@ -1,7 +1,7 @@
 /**
  * AnalyticsDashboard.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Module 7 — Analytics & Reports
+ * Module 7 - Analytics & Reports
  *
  * Contains 5 sub-modules:
  *   1. Tickets Created/Resolved per Day/Week/Month
@@ -11,12 +11,12 @@
  *   5. SLA Breach Reports
  *
  * Props:
- *   tickets          — all tickets (fetched by parent)
- *   consultants      — all consultants/advisors
- *   feedbacks        — customer satisfaction feedbacks (optional, fetched internally if missing)
- *   mode             — "admin" | "consultant"
- *   consultantId     — required when mode="consultant"
- *   consultantName   — display name for consultant mode
+ *   tickets          - all tickets (fetched by parent)
+ *   consultants      - all consultants/advisors
+ *   feedbacks        - customer satisfaction feedbacks (optional, fetched internally if missing)
+ *   mode             - "admin" | "consultant"
+ *   consultantId     - required when mode="consultant"
+ *   consultantName   - display name for consultant mode
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -144,7 +144,7 @@ const extractArr = (data: any): any[] => {
 };
 
 const dayLabel = (d: Date) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-const weekLabel = (s: Date, e: Date) => `${dayLabel(s)}–${dayLabel(e)}`;
+const weekLabel = (s: Date, e: Date) => `${dayLabel(s)}-${dayLabel(e)}`;
 const monthLabel = (d: Date) => d.toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
 const startOfDay = (d: Date) => { const c = new Date(d); c.setHours(0, 0, 0, 0); return c; };
 
@@ -153,6 +153,54 @@ const hoursElapsed = (from?: string, to?: string): number => {
   const start = new Date(from).getTime();
   const end = to ? new Date(to).getTime() : Date.now();
   return (end - start) / 3_600_000;
+};
+
+const toFiniteNumber = (value: any): number | null => {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getTicketConsultantId = (ticket: AnalyticsTicket | Record<string, any>): number | null => {
+  const candidate = readFirstPresent(ticket, [
+    "consultantId",
+    "consultant.id",
+    "advisorId",
+    "advisor.id",
+    "agentId",
+    "assignedTo.id",
+    "consultant_id",
+  ]);
+  return toFiniteNumber(candidate);
+};
+
+const getTicketTimestamp = (ticket: AnalyticsTicket | Record<string, any>, paths: string[]): string => {
+  const value = readFirstPresent(ticket, paths);
+  return value == null ? "" : String(value);
+};
+
+const normalizeStatus = (value: any): string =>
+  String(value ?? "").trim().toUpperCase();
+
+const isTerminalTicketStatus = (value: any): boolean =>
+  ["RESOLVED", "CLOSED", "COMPLETED"].includes(normalizeStatus(value));
+
+const filterTicketsForConsultant = (
+  tickets: AnalyticsTicket[],
+  mode: "admin" | "consultant",
+  consultantId?: number
+) => {
+  if (mode !== "consultant" || consultantId == null) return tickets;
+  const expectedId = toFiniteNumber(consultantId);
+  if (expectedId == null) return tickets;
+
+  const matched = tickets.filter((ticket) => getTicketConsultantId(ticket) === expectedId);
+  if (matched.length > 0) return matched;
+
+  // Fallback: consultant analytics endpoints may already be scoped, but some
+  // payloads omit consultantId on each row. In that case, use the entire set.
+  const hasAnyConsultantId = tickets.some((ticket) => getTicketConsultantId(ticket) != null);
+  return hasAnyConsultantId ? matched : tickets;
 };
 
 const avgOrZero = (arr: number[]) =>
@@ -206,8 +254,8 @@ const readFirstNumber = (source: any, paths: string[]) => {
 const splitBookingDateTime = (value: any) => {
   const raw = String(value ?? "").trim();
   if (!raw) return { date: "", time: "" };
-  if (raw.includes(" • ")) {
-    const [date, time] = raw.split(" • ");
+  if (raw.includes(" * ")) {
+    const [date, time] = raw.split(" * ");
     return { date: date?.trim() || "", time: time?.trim() || "" };
   }
   if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
@@ -336,7 +384,7 @@ const StatCard: React.FC<{ label: string; value: React.ReactNode; color: string;
       padding: "18px 20px", display: "flex", flexDirection: "column", gap: 0,
       minHeight: 130,
     }}>
-      {/* Icon row — always same height so numbers line up across cards */}
+      {/* Icon row - always same height so numbers line up across cards */}
       <div style={{
         width: 36, height: 36, borderRadius: 10, marginBottom: 12, flexShrink: 0,
         background: icon ? `${color}18` : "transparent",
@@ -363,7 +411,7 @@ const SectionHeader: React.FC<{ icon: React.ReactNode; title: string; subtitle: 
   );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 1 — Tickets Created / Resolved per Day / Week / Month
+// MODULE 1 - Tickets Created / Resolved per Day / Week / Month
 // ─────────────────────────────────────────────────────────────────────────────
 const TicketVolumeModule: React.FC<{ tickets: AnalyticsTicket[] }> = ({ tickets }) => {
   const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
@@ -416,10 +464,17 @@ const TicketVolumeModule: React.FC<{ tickets: AnalyticsTicket[] }> = ({ tickets 
     });
   }, [tickets, period]);
 
-  const totalCreated = tickets.length;
-  const totalResolved = tickets.filter(t => ["RESOLVED", "CLOSED"].includes(t.status)).length;
-  const totalOpen = tickets.filter(t => ["NEW", "OPEN", "PENDING"].includes(t.status)).length;
-  const resolutionRate = totalCreated > 0 ? Math.round((totalResolved / totalCreated) * 100) : 0;
+  const { totalCreated, totalResolved, totalOpen, resolutionRate } = useMemo(() => {
+    let created = 0;
+    let resolved = 0;
+    chartData.forEach(d => {
+      created += d.created;
+      resolved += d.resolved;
+    });
+    const open = tickets.filter(t => ["NEW", "OPEN", "PENDING"].includes(t.status)).length;
+    const rate = created > 0 ? Math.round((resolved / created) * 100) : 0;
+    return { totalCreated: created, totalResolved: resolved, totalOpen: open, resolutionRate: rate };
+  }, [chartData, tickets]);
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: "1px solid #E2E8F0", padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
@@ -471,7 +526,7 @@ const TicketVolumeModule: React.FC<{ tickets: AnalyticsTicket[] }> = ({ tickets 
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 2 — Agent Performance Reports
+// MODULE 2 - Agent Performance Reports
 // ─────────────────────────────────────────────────────────────────────────────
 const AgentPerformanceModule: React.FC<{
   tickets: AnalyticsTicket[];
@@ -497,7 +552,7 @@ const AgentPerformanceModule: React.FC<{
     URL.revokeObjectURL(url);
   };
 
-  // FIX: consultantLookup MUST be declared before agentStats — it is referenced inside
+  // FIX: consultantLookup MUST be declared before agentStats - it is referenced inside
   // agentStats's useMemo callback. React runs useMemo hooks in declaration order, so
   // having it after caused consultantLookup to be undefined when agentStats first ran,
   // making every ticket's consultant appear as "Unassigned" and the "My Performance"
@@ -530,7 +585,7 @@ const AgentPerformanceModule: React.FC<{
     }> = {};
 
     tickets.forEach(t => {
-      // ADDED: prefer agentName, then consultantName — ensures agent name is always shown
+      // ADDED: prefer agentName, then consultantName - ensures agent name is always shown
       const directName = formatDisplayName(t.agentName || t.consultantName);
       const lookupName = t.consultantId ? consultantLookup[Number(t.consultantId)] : "";
       const key =
@@ -646,7 +701,7 @@ const AgentPerformanceModule: React.FC<{
     "Not Attended": a.notAttendedBookings,
   }));
 
-  // (consultantLookup was moved above agentStats — see comment there)
+  // (consultantLookup was moved above agentStats - see comment there)
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: "1px solid #E2E8F0", padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
@@ -707,7 +762,7 @@ const AgentPerformanceModule: React.FC<{
             </div>
           )}
 
-          {/* UPDATED: Agent table — now includes Agent Name prominently + Booking metrics */}
+          {/* UPDATED: Agent table - now includes Agent Name prominently + Booking metrics */}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -727,7 +782,7 @@ const AgentPerformanceModule: React.FC<{
                     <tr key={a.name} style={{ borderTop: "1px solid #F1F5F9", transition: "background 0.1s" }}
                       onMouseEnter={e => (e.currentTarget.style.background = "#F8FAFC")}
                       onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      {/* ADDED: Agent Name column — clearly visible, prominent */}
+                      {/* ADDED: Agent Name column - clearly visible, prominent */}
                       <td style={{ padding: "12px 14px", fontWeight: 700, color: "#0F172A" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={{ width: 30, height: 30, borderRadius: "50%", background: `${COLORS[i % COLORS.length]}20`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: COLORS[i % COLORS.length], flexShrink: 0 }}>
@@ -755,10 +810,10 @@ const AgentPerformanceModule: React.FC<{
                       <td style={{ padding: "12px 14px", fontWeight: 600, color: "#059669" }}>{a.attendedBookings || 0}</td>
                       <td style={{ padding: "12px 14px", fontWeight: 600, color: "#DC2626" }}>{a.notAttendedBookings || 0}</td>
                       <td style={{ padding: "12px 14px", color: "#475569", fontWeight: 600 }}>
-                        {a.responseTimes.length > 0 ? fmtHours(avgResp) : "—"}
+                        {a.responseTimes.length > 0 ? fmtHours(avgResp) : "-"}
                       </td>
                       <td style={{ padding: "12px 14px", color: "#475569", fontWeight: 600 }}>
-                        {a.resolutionTimes.length > 0 ? fmtHours(avgResol) : "—"}
+                        {a.resolutionTimes.length > 0 ? fmtHours(avgResol) : "-"}
                       </td>
                     </tr>
                   );
@@ -773,7 +828,7 @@ const AgentPerformanceModule: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 3 — Customer Satisfaction Ratings
+// MODULE 3 - Customer Satisfaction Ratings
 // ─────────────────────────────────────────────────────────────────────────────
 const CustomerSatisfactionModule: React.FC<{
   tickets: AnalyticsTicket[];
@@ -831,7 +886,7 @@ const CustomerSatisfactionModule: React.FC<{
 
   const avgRating = ratings.length > 0
     ? (ratings.reduce((s, r) => s + r.rating, 0) / ratings.length).toFixed(1)
-    : "—";
+    : "-";
 
   const csat = ratings.length > 0
     ? Math.round((ratings.filter(r => r.rating >= 4).length / ratings.length) * 100)
@@ -926,18 +981,19 @@ const CustomerSatisfactionModule: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 4 — Average Response & Resolution Time
+// MODULE 4 - Average Response & Resolution Time
 // ─────────────────────────────────────────────────────────────────────────────
 const ResponseTimeModule: React.FC<{
   tickets: AnalyticsTicket[];
   consultants: AnalyticsConsultant[];
   mode?: "admin" | "consultant";
   consultantId?: number;
-}> = ({ tickets, consultants, mode = "admin", consultantId }) => {
+}> = ({ tickets, mode = "admin", consultantId }) => {
 
-  const filteredTickets = mode === "consultant" && consultantId
-    ? tickets.filter(t => t.consultantId === consultantId)
-    : tickets;
+  const filteredTickets = useMemo(
+    () => filterTicketsForConsultant(tickets, mode, consultantId),
+    [tickets, mode, consultantId]
+  );
 
   // Calculate response times per ticket
   const timingData = useMemo(() => {
@@ -945,17 +1001,42 @@ const ResponseTimeModule: React.FC<{
     const resolutionTimes: number[] = [];
 
     filteredTickets.forEach(t => {
-      // Response time: from creation to first update (approximation)
-      if (t.updatedAt && t.updatedAt !== t.createdAt && t.firstResponseAt) {
-        responseTimes.push(hoursElapsed(t.createdAt, t.firstResponseAt));
-      } else if (t.updatedAt && t.updatedAt !== t.createdAt) {
-        responseTimes.push(hoursElapsed(t.createdAt, t.updatedAt));
+      const createdAt = getTicketTimestamp(t, ["createdAt", "created_at", "openedAt"]);
+      if (!createdAt) return;
+
+      const firstResponseAt = getTicketTimestamp(t, [
+        "firstResponseAt",
+        "first_response_at",
+        "firstReplyAt",
+        "responseAt",
+      ]);
+      const updatedAt = getTicketTimestamp(t, ["updatedAt", "updated_at", "lastUpdatedAt"]);
+
+      // Response time: prefer firstResponseAt, fall back to updatedAt.
+      const responseAt = firstResponseAt || updatedAt;
+      if (responseAt) {
+        const responseHours = hoursElapsed(createdAt, responseAt);
+        if (Number.isFinite(responseHours) && responseHours >= 0) {
+          responseTimes.push(responseHours);
+        }
       }
 
-      // Resolution time: from creation to resolved/closed
-      if (["RESOLVED", "CLOSED"].includes(t.status)) {
-        const rt = t.resolvedAt || t.updatedAt;
-        if (rt) resolutionTimes.push(hoursElapsed(t.createdAt, rt));
+      // Resolution time: from creation to resolved/closed timestamp.
+      const status = normalizeStatus((t as any).status);
+      const resolutionAt = getTicketTimestamp(t, [
+        "resolvedAt",
+        "closedAt",
+        "resolved_at",
+        "closed_at",
+        "completedAt",
+        "updatedAt",
+        "updated_at",
+      ]);
+      if ((isTerminalTicketStatus(status) || resolutionAt) && resolutionAt) {
+        const resolutionHours = hoursElapsed(createdAt, resolutionAt);
+        if (Number.isFinite(resolutionHours) && resolutionHours >= 0) {
+          resolutionTimes.push(resolutionHours);
+        }
       }
     });
 
@@ -967,18 +1048,34 @@ const ResponseTimeModule: React.FC<{
   const minResolution = timingData.resolutionTimes.length > 0 ? Math.min(...timingData.resolutionTimes) : 0;
   const maxResolution = timingData.resolutionTimes.length > 0 ? Math.max(...timingData.resolutionTimes) : 0;
 
-  // Trend data — resolution time by week
+  // Trend data - resolution time by week
   const trendData = useMemo(() => {
     const now = new Date();
     return Array.from({ length: 8 }, (_, i) => {
       const end = startOfDay(new Date(now)); end.setDate(end.getDate() - i * 7); end.setHours(23, 59, 59, 999);
       const start = new Date(end); start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0);
       const weekTickets = filteredTickets.filter(t => {
-        const c = new Date(t.createdAt); return c >= start && c <= end;
+        const createdAt = getTicketTimestamp(t, ["createdAt", "created_at", "openedAt"]);
+        if (!createdAt) return false;
+        const c = new Date(createdAt);
+        return Number.isFinite(c.getTime()) && c >= start && c <= end;
       });
       const times = weekTickets
-        .filter(t => ["RESOLVED", "CLOSED"].includes(t.status))
-        .map(t => hoursElapsed(t.createdAt, t.resolvedAt || t.updatedAt));
+        .filter(t => isTerminalTicketStatus((t as any).status))
+        .map(t => {
+          const createdAt = getTicketTimestamp(t, ["createdAt", "created_at", "openedAt"]);
+          const resolutionAt = getTicketTimestamp(t, [
+            "resolvedAt",
+            "closedAt",
+            "resolved_at",
+            "closed_at",
+            "completedAt",
+            "updatedAt",
+            "updated_at",
+          ]);
+          return hoursElapsed(createdAt, resolutionAt);
+        })
+        .filter(v => Number.isFinite(v) && v >= 0);
       return { label: weekLabel(start, end), avgResolution: parseFloat(avgOrZero(times).toFixed(1)), count: times.length };
     }).reverse();
   }, [filteredTickets]);
@@ -986,8 +1083,20 @@ const ResponseTimeModule: React.FC<{
   // By priority analysis
   const byPriority = useMemo(() => {
     return ["LOW", "MEDIUM", "HIGH", "CRITICAL"].map(p => {
-      const pt = filteredTickets.filter(t => t.priority === p && ["RESOLVED", "CLOSED"].includes(t.status));
-      const times = pt.map(t => hoursElapsed(t.createdAt, t.resolvedAt || t.updatedAt));
+      const pt = filteredTickets.filter(t => normalizeStatus((t as any).priority) === p && isTerminalTicketStatus((t as any).status));
+      const times = pt.map(t => {
+        const createdAt = getTicketTimestamp(t, ["createdAt", "created_at", "openedAt"]);
+        const resolutionAt = getTicketTimestamp(t, [
+          "resolvedAt",
+          "closedAt",
+          "resolved_at",
+          "closed_at",
+          "completedAt",
+          "updatedAt",
+          "updated_at",
+        ]);
+        return hoursElapsed(createdAt, resolutionAt);
+      }).filter(v => Number.isFinite(v) && v >= 0);
       return { priority: p, avg: avgOrZero(times), count: pt.length };
     }).filter(p => p.count > 0);
   }, [filteredTickets]);
@@ -997,10 +1106,10 @@ const ResponseTimeModule: React.FC<{
       <SectionHeader icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>} title="Response & Resolution Time" subtitle="How quickly tickets are handled and resolved" />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12, marginBottom: 24 }}>
-        <StatCard label="Avg Response Time" value={avgResponse > 0 ? fmtHours(avgResponse) : "—"} color="#0F766E" bg="#ECFEFF" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>} />
-        <StatCard label="Avg Resolution Time" value={avgResolution > 0 ? fmtHours(avgResolution) : "—"} color="#059669" bg="#F0FDF4" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>} />
-        <StatCard label="Fastest Resolution" value={minResolution > 0 ? fmtHours(minResolution) : "—"} color="#7C3AED" bg="#F5F3FF" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /></svg>} />
-        <StatCard label="Slowest Resolution" value={maxResolution > 0 ? fmtHours(maxResolution) : "—"} color="#D97706" bg="#FFFBEB" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>} />
+        <StatCard label="Avg Response Time" value={timingData.responseTimes.length > 0 ? fmtHours(avgResponse) : "-"} color="#0F766E" bg="#ECFEFF" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>} />
+        <StatCard label="Avg Resolution Time" value={timingData.resolutionTimes.length > 0 ? fmtHours(avgResolution) : "-"} color="#059669" bg="#F0FDF4" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>} />
+        <StatCard label="Fastest Resolution" value={timingData.resolutionTimes.length > 0 ? fmtHours(minResolution) : "-"} color="#7C3AED" bg="#F5F3FF" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7C3AED" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /></svg>} />
+        <StatCard label="Slowest Resolution" value={timingData.resolutionTimes.length > 0 ? fmtHours(maxResolution) : "-"} color="#D97706" bg="#FFFBEB" icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>} />
       </div>
 
       {/* Weekly trend line */}
@@ -1045,7 +1154,7 @@ const ResponseTimeModule: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 5 — SLA Breach Reports
+// MODULE 5 - SLA Breach Reports
 // ─────────────────────────────────────────────────────────────────────────────
 const SLABreachModule: React.FC<{
   tickets: AnalyticsTicket[];
@@ -1053,9 +1162,10 @@ const SLABreachModule: React.FC<{
   consultantId?: number;
 }> = ({ tickets, mode = "admin", consultantId }) => {
 
-  const filteredTickets = mode === "consultant" && consultantId
-    ? tickets.filter(t => t.consultantId === consultantId)
-    : tickets;
+  const filteredTickets = useMemo(
+    () => filterTicketsForConsultant(tickets, mode, consultantId),
+    [tickets, mode, consultantId]
+  );
 
   const now = Date.now();
 
@@ -1170,7 +1280,7 @@ const SLABreachModule: React.FC<{
                   return (
                     <tr key={t.id} style={{ borderTop: "1px solid #FEE2E2" }}>
                       <td style={{ padding: "8px 12px", fontWeight: 700, color: "#DC2626" }}>#{t.id}</td>
-                      <td style={{ padding: "8px 12px", color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title || t.category || "—"}</td>
+                      <td style={{ padding: "8px 12px", color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title || t.category || "-"}</td>
                       <td style={{ padding: "8px 12px" }}>
                         <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${PRIORITY_COLOR[t.priority || "LOW"]}20`, color: PRIORITY_COLOR[t.priority || "LOW"], fontWeight: 700 }}>
                           {t.priority || "LOW"}
@@ -1209,7 +1319,7 @@ const SLABreachModule: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULE 6 — Bookings & Revenue
+// MODULE 6 - Bookings & Revenue
 // ─────────────────────────────────────────────────────────────────────────────
 const BookingAnalyticsModule: React.FC<{
   bookings: any[];
@@ -1242,13 +1352,6 @@ const BookingAnalyticsModule: React.FC<{
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  const totalBookings = bookings.length;
-  const completedBookings = bookings.filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b))).length;
-  const totalRevenue = bookings
-    .filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b)))
-    .reduce((sum, b) => sum + getBookingAmount(b), 0);
-  const avgTicketSize = completedBookings > 0 ? Math.round(totalRevenue / completedBookings) : 0;
 
   const chartData = useMemo(() => {
     const dataMap: Record<string, { bookings: number; revenue: number; _isoKey: string }> = {};
@@ -1288,6 +1391,21 @@ const BookingAnalyticsModule: React.FC<{
       .map(([label, val]) => ({ label, bookings: val.bookings, revenue: val.revenue, _isoKey: val._isoKey }))
       .sort((a, b) => a._isoKey.localeCompare(b._isoKey));
   }, [bookings, period]);
+
+  const { totalBookings, completedBookings, totalRevenue, avgTicketSize } = useMemo(() => {
+    const currentChart = chartData; // already computed based on period
+    let count = 0;
+    let rev = 0;
+    currentChart.forEach(d => {
+      count += d.bookings;
+      rev += d.revenue;
+    });
+    // For completed/success count, we can derive it from the revenue-generating points or just use the proportion
+    // Actually, it's better to just use the sums from chartData as that's what the user sees
+    const completed = bookings.filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b))).length;
+    const avg = count > 0 ? Math.round(rev / count) : 0;
+    return { totalBookings: count, totalRevenue: rev, completedBookings: completed, avgTicketSize: avg };
+  }, [chartData, bookings]);
 
   return (
     <div style={{ background: "#fff", borderRadius: 20, border: "1px solid #E2E8F0", padding: 24, boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
@@ -1434,14 +1552,20 @@ const AnalyticsDashboard: React.FC<Props> = ({
     (async () => {
       setLoading(true);
 
-      // ── Tickets: only fetch if parent didn't provide ─────────────────────
-      if (!ticketsProp || ticketsProp.length === 0) {
+      // ── Tickets: always fetch from the analytics endpoint ───────────────
+      // FIX: The old code only fetched when ticketsProp was empty, which meant
+      // that the parent's paginated data (10 rows by default) was used for ALL
+      // analytics computations. We now always call the dedicated unpaginated
+      // analytics endpoint so Ticket Volume, Agent Performance, Response Times
+      // and SLA Breach are computed on the complete dataset.
+      {
         try {
           let arr: AnalyticsTicket[] = [];
           if (mode === "consultant" && consultantId) {
-            // ✅ Only valid endpoint for consultant tickets
+            // FIX: Use /analytics/tickets/consultant - returns ALL consultant tickets
+            // (not paginated) with consultantName, resolvedAt, closedAt and firstResponseAt.
             try {
-              const d = await apiFetch(`/tickets/consultant/${consultantId}`);
+              const d = await apiFetch(`/analytics/tickets/consultant`);
               arr = extractArr(d);
             } catch (e: any) {
               console.warn("Analytics: /tickets/consultant failed:", e?.message);
@@ -1468,9 +1592,10 @@ const AnalyticsDashboard: React.FC<Props> = ({
               }));
             }
           } else {
-            // ✅ Admin: GET /tickets returns all (requires ROLE_ADMIN)
+            // FIX: Use /analytics/tickets/all - returns ALL tickets (not paginated)
+            // enriched with consultantName, resolvedAt, closedAt and firstResponseAt.
             try {
-              const d = await apiFetch("/tickets");
+              const d = await apiFetch("/analytics/tickets/all");
               arr = extractArr(d);
             } catch (e: any) {
               console.warn("Analytics: /tickets failed:", e?.message);

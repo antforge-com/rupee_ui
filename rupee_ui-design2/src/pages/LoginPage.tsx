@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle, Eye, EyeOff, Lock, Mail, Settings, WifiOff, X } from "lucide-react";
 import { ChangeEvent, KeyboardEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getTermsAndConditions, loginUser, resetPassword, sendForgotPasswordOtp } from "../services/api";
+import { getPrivacyPolicy, getTermsAndConditions, loginUser, resetPassword, sendForgotPasswordOtp } from "../services/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -23,7 +23,7 @@ interface PasswordInputProps {
 }
 
 const PasswordInput: React.FC<PasswordInputProps> = ({
-  value, onChange, onKeyDown, placeholder = "••••••••",
+  value, onChange, onKeyDown, placeholder = "********",
   hasError = false, autoFocus = false, style,
 }) => {
   const [visible, setVisible] = useState(false);
@@ -53,54 +53,62 @@ const PasswordInput: React.FC<PasswordInputProps> = ({
 // ─────────────────────────────────────────────────────────────────────────────
 // Terms Modal
 // ─────────────────────────────────────────────────────────────────────────────
-const DEFAULT_TERMS_CONTENT = `1. Acceptance of Terms
-By accessing and using Meet The Masters, you agree to these Terms & Conditions.
+const DEFAULT_PRIVACY_CONTENT = `1. Information We Collect
+We collect information that you provide directly, including account details, profile preferences, and booking information.
 
-2. Use of Services
-The platform provides access to financial consultants and may only be used for lawful purposes.
+2. How We Use Information
+Your information is used to deliver consultations, process bookings, improve platform quality, and support customer service.
 
-3. Confidentiality
-Consultation details and shared information must be handled confidentially.
+3. Sharing of Information
+We do not sell personal data. Information is shared only with required service providers and consultants to enable platform services.
 
-4. Booking & Payments
-Bookings are confirmed after successful payment. Cancellation and refund rules apply as per platform policy.
+4. Data Security
+We use reasonable administrative and technical safeguards to protect your personal data from unauthorized access.
 
-5. Disclaimer
-Guidance shared on the platform is informational and does not guarantee financial outcomes.
+5. Data Retention
+We retain data only as long as needed for legal, business, and service obligations.
 
-6. Privacy
-Personal information is stored and processed according to applicable data-protection requirements.
+6. Your Rights
+You may request access, correction, or deletion of your personal data subject to applicable laws.
 
-7. Governing Law
-These terms are governed by the laws of India.`;
+7. Policy Updates
+We may update this Privacy Policy periodically and publish the latest version on the platform.`;
 
-const TermsModal: React.FC<{ content: string; loading: boolean; onClose: () => void; onAccept: () => void }> = ({ content, loading, onClose, onAccept }) => (
-  <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="modal-content animate-fade-up">
-      <div className="modal-header">
-        <div className="modal-title">Terms & Conditions</div>
-        <button onClick={onClose} className="icon-button-circle"><X size={20} /></button>
-      </div>
-      <div className="modal-body">
-        {loading ? (
-          <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
-            Loading the latest saved Terms & Conditions...
-          </div>
-        ) : (
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.7 }}>
-            {content || DEFAULT_TERMS_CONTENT}
-          </pre>
-        )}
-      </div>
-      <div className="modal-footer">
-        <button onClick={onClose} className="btn-secondary" style={{ flex: 1 }}>Close</button>
-        <button onClick={() => { onAccept(); onClose(); }} className="btn-primary" style={{ flex: 2 }}>
-          <CheckCircle size={18} /> I Agree & Accept
-        </button>
+const LegalModal: React.FC<{ title: string; content: string | null; loading: boolean; onClose: () => void; onAccept: () => void }> = ({ title, content, loading, onClose, onAccept }) => {
+  const trimmedContent = content?.trim();
+
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-content animate-fade-up">
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button onClick={onClose} className="icon-button-circle"><X size={20} /></button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+              Loading the latest saved content...
+            </div>
+          ) : trimmedContent ? (
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.7 }}>
+              {trimmedContent}
+            </pre>
+          ) : (
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+              The latest {title} content is not available right now.
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose} className="btn-secondary" style={{ flex: 1 }}>Close</button>
+          <button onClick={() => { onAccept(); onClose(); }} className="btn-primary" style={{ flex: 2 }}>
+            <CheckCircle size={18} /> I Agree & Accept
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reset Password Page
@@ -147,7 +155,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
 
   const handleResetPassword = async () => {
     if (!otp || otp.length !== 6) { setError("Please enter the 6-digit OTP."); return; }
-    if (!newPassword || newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (!newPassword || newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (newPassword !== confirmPass) { setError("Passwords do not match."); return; }
     setLoading(true); setError("");
     try {
@@ -209,7 +217,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             {error && <div className="error-banner" style={{ marginTop: 12 }}><AlertTriangle size={16} /> {error}</div>}
             <button onClick={handleSendOtp} disabled={loading || !email.trim()}
               className="btn-primary" style={{ width: "100%", marginTop: 12 }}>
-              {loading ? "Sending OTP…" : "Send Reset OTP"}
+              {loading ? "Sending OTP..." : "Send Reset OTP"}
             </button>
           </div>
         )}
@@ -230,15 +238,15 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             <div style={{ textAlign: "right", marginTop: 8, marginBottom: 12 }}>
               <button onClick={handleResendOtp} disabled={countdown > 0 || loading}
                 className="auth-link" style={{ fontSize: 12, background: 'none' }}>
-                {loading ? "Sending…" : countdown > 0 ? `Resend in ${countdown}s` : "Resend OTP"}
+                {loading ? "Sending..." : countdown > 0 ? `Resend in ${countdown}s` : "Resend OTP"}
               </button>
             </div>
             <div className="badge badge-warning" style={{ marginBottom: 16, width: '100%', justifyContent: 'flex-start', padding: '10px 14px' }}>
-              <Lock size={16} /> New password must be different
+              <Lock size={16} /> Choose a strong new password
             </div>
             <label className="label-base">NEW PASSWORD</label>
             <PasswordInput value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
-              placeholder="Min. 6 characters" style={{ marginBottom: 16 }} />
+              placeholder="Min. 8 characters" style={{ marginBottom: 16 }} />
             <label className="label-base">CONFIRM PASSWORD</label>
             <PasswordInput value={confirmPass} onChange={e => { setConfirmPass(e.target.value); setError(""); }}
               onKeyDown={e => { if (e.key === "Enter") handleResetPassword(); }}
@@ -250,9 +258,9 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             )}
             {error && <div className="error-banner" style={{ marginTop: 12 }}><AlertTriangle size={16} /> {error}</div>}
             <button onClick={handleResetPassword}
-              disabled={loading || otp.length !== 6 || !newPassword || newPassword !== confirmPass}
+              disabled={loading || otp.length !== 6 || !newPassword || newPassword.length < 8 || newPassword !== confirmPass}
               className="btn-primary" style={{ width: "100%", marginTop: 24 }}>
-              {loading ? "Verifying…" : "Verify OTP & Reset Password"}
+              {loading ? "Verifying..." : "Verify OTP & Reset Password"}
             </button>
           </div>
         )}
@@ -295,13 +303,18 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [errorType, setErrorType] = useState<ErrorType>("");
+  const [slowAuthHint, setSlowAuthHint] = useState(false);
 
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [termsShake, setTermsShake] = useState(false);
-  const [termsContent, setTermsContent] = useState(DEFAULT_TERMS_CONTENT);
+  const [termsContent, setTermsContent] = useState<string | null>(null);
   const [termsLoading, setTermsLoading] = useState(false);
   const [termsLoaded, setTermsLoaded] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [privacyContent, setPrivacyContent] = useState(DEFAULT_PRIVACY_CONTENT);
+  const [privacyLoading, setPrivacyLoading] = useState(false);
+  const [privacyLoaded, setPrivacyLoaded] = useState(false);
 
   const [showResetPage, setShowResetPage] = useState(false);
   const [resetInitialEmail, setResetInitialEmail] = useState("");
@@ -324,11 +337,14 @@ export default function LoginPage() {
           .map((record: any) => String(record?.content || record?.text || "").trim())
           .filter(Boolean)
           .join("\n\n");
-        if (content) setTermsContent(content);
+        setTermsContent(content || null);
         setTermsLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setTermsLoaded(true);
+        if (!cancelled) {
+          setTermsContent(null);
+          setTermsLoaded(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setTermsLoading(false);
@@ -339,19 +355,49 @@ export default function LoginPage() {
     };
   }, [showTermsModal, termsLoaded]);
 
+  useEffect(() => {
+    if (!showPrivacyModal || privacyLoaded) return;
+
+    let cancelled = false;
+    setPrivacyLoading(true);
+
+    getPrivacyPolicy()
+      .then((records) => {
+        if (cancelled) return;
+        const content = (Array.isArray(records) ? records : [])
+          .map((record: any) => String(record?.content || record?.text || "").trim())
+          .filter(Boolean)
+          .join("\n\n");
+        if (content) setPrivacyContent(content);
+        setPrivacyLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setPrivacyLoaded(true);
+      })
+      .finally(() => {
+        if (!cancelled) setPrivacyLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showPrivacyModal, privacyLoaded]);
+
   const classifyError = (err: any): { msg: string; type: ErrorType } => {
     const msg = (err?.message || "").toLowerCase();
     if (msg.includes("cannot connect") || msg.includes("failed to fetch") ||
       msg.includes("networkerror") || msg.includes("load failed"))
       return { msg: "Cannot reach the server. Please check your connection.", type: "network" };
+    if (msg.includes("taking too long") || msg.includes("timed out"))
+      return { msg: "Login is taking longer than expected. Please try again, or use Forgot Password if needed.", type: "auth" };
     if (msg.includes("500") || msg.includes("internal server"))
       return { msg: "Server error occurred. Please try again later.", type: "server" };
     if (msg.includes("already registered") || msg.includes("already exists") || msg.includes("conflict"))
       return { msg: "Email already registered. Please log in or reset password.", type: "registered" };
     if (msg.includes("401") || msg.includes("403") || msg.includes("unauthorized") ||
       msg.includes("invalid") || msg.includes("bad credentials") || msg.includes("incorrect"))
-      return { msg: "Incorrect email or password. If you recently changed your password, please use Forgot Password to reset it.", type: "auth" };
-    return { msg: err?.message || "Login failed. Please try Forgot Password if you recently changed your password.", type: "auth" };
+      return { msg: "Incorrect email or password. Please try again or use Forgot Password.", type: "auth" };
+    return { msg: err?.message || "Login failed. Please try again or use Forgot Password.", type: "auth" };
   };
 
   const handleLogin = async () => {
@@ -363,8 +409,10 @@ export default function LoginPage() {
     if (!termsAccepted) { shakeTerms(); return; }
 
     setLoading(true);
+    setSlowAuthHint(false);
     setApiError("");
     setErrorType("");
+    const slowHintTimer = window.setTimeout(() => setSlowAuthHint(true), 4000);
 
     try {
       // ── api.ts loginUser already:
@@ -415,16 +463,19 @@ export default function LoginPage() {
       //   might block navigate() if it runs before the router context updates
       const destination = getDestinationForRole(finalRole);
       console.log(`✅ Redirecting → ${destination}`);
+      window.clearTimeout(slowHintTimer);
       window.location.href = destination;
 
     } catch (err: any) {
+      window.clearTimeout(slowHintTimer);
+      setSlowAuthHint(false);
       const { msg, type } = classifyError(err);
       setApiError(msg);
       setErrorType(type);
       setLoading(false);
     }
     // Note: we do NOT call setLoading(false) on success because
-    // window.location.href causes a full navigation — the component unmounts.
+    // window.location.href causes a full navigation - the component unmounts.
   };
 
   const handleKeyDown = (e: KeyboardEvent) => { if (e.key === "Enter") handleLogin(); };
@@ -446,10 +497,20 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       {showTermsModal && (
-        <TermsModal
+        <LegalModal
+          title="Terms & Conditions"
           content={termsContent}
           loading={termsLoading}
           onClose={() => setShowTermsModal(false)}
+          onAccept={() => { setTermsAccepted(true); setApiError(""); setErrorType(""); }}
+        />
+      )}
+      {showPrivacyModal && (
+        <LegalModal
+          title="Privacy Policy"
+          content={privacyContent}
+          loading={privacyLoading}
+          onClose={() => setShowPrivacyModal(false)}
           onAccept={() => { setTermsAccepted(true); setApiError(""); setErrorType(""); }}
         />
       )}
@@ -482,7 +543,7 @@ export default function LoginPage() {
             value={pass}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setPass(e.target.value); setApiError(""); setErrorType(""); }}
             onKeyDown={handleKeyDown}
-            placeholder="••••••••"
+            placeholder="********"
             hasError={!!(apiError && errorType === "auth")}
           />
         </div>
@@ -520,7 +581,7 @@ export default function LoginPage() {
             I agree to the{" "}
             <span onClick={e => { e.preventDefault(); setShowTermsModal(true); }} className="auth-link">Terms & Conditions</span>
             {" "}and{" "}
-            <span onClick={e => { e.preventDefault(); setShowTermsModal(true); }} className="auth-link">Privacy Policy</span>
+            <span onClick={e => { e.preventDefault(); setShowPrivacyModal(true); }} className="auth-link">Privacy Policy</span>
           </label>
         </div>
 
@@ -554,7 +615,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <button type="button" onClick={handleLogin} disabled={loading}
+        <button type="button" onClick={handleLogin} disabled={loading || !cred.trim() || !pass.trim() || !termsAccepted}
           className="btn-primary" style={{ width: "100%", padding: '14px', fontSize: '16px' }}>
           {loading
             ? <><span className="animate-spin" style={{
@@ -564,6 +625,12 @@ export default function LoginPage() {
             }} /> Authenticating...</>
             : "Login to Account"}
         </button>
+        {loading && slowAuthHint && (
+          <div className="badge badge-warning" style={{ marginTop: 12, width: "100%", justifyContent: "flex-start", padding: "10px 14px", textTransform: "none" }}>
+            <AlertTriangle size={16} />
+            Authentication is taking longer than usual. If the password is incorrect, the server should return an error shortly.
+          </div>
+        )}
 
         <p className="auth-footer-text">
           Don't have an account?{" "}

@@ -11,26 +11,63 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { isValidEmail, startsWithCapital, startsWithLetter } from "../utils/formUtils";
+import { SUPPORT_EMAIL } from "../config/support";
 
 export default function ContactPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: "", email: "", phone: "", message: "" });
   const [sending, setSending] = useState(false);
   const [success, setSuccess] = useState(false);
-  const [error, setError] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  const handleSubmit = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.message.trim()) {
-      setError("Please fill in all required fields.");
-      return;
+  const validate = (data = form) => {
+    const newErrors: Record<string, string> = {};
+
+    if (!data.name.trim()) {
+      newErrors.name = "Full Name is required.";
+    } else if (!startsWithLetter(data.name)) {
+      newErrors.name = "Name must start with an alphabetic letter.";
+    } else if (!startsWithCapital(data.name)) {
+      newErrors.name = "Name must start with a capital letter.";
     }
+
+    if (!data.phone.trim()) {
+      newErrors.phone = "Phone number is required.";
+    }
+
+    if (!data.email.trim()) {
+      newErrors.email = "Email Address is required.";
+    } else if (!isValidEmail(data.email)) {
+      newErrors.email = "Please enter a valid email address.";
+    }
+
+    if (!data.message.trim()) {
+      newErrors.message = "Message is required.";
+    }
+
+    setErrors(newErrors);
+    return newErrors;
+  };
+  const handleSubmit = async () => {
+    // Mark all as touched
+    setTouched({ name: true, phone: true, email: true, message: true });
+    const e = validate();
+    if (Object.keys(e).length > 0) return;
+
     setSending(true);
-    setError("");
     // NOTE: The provided backend OpenAPI spec does not define POST /api/contact.
     // Keeping this as a client-side-only contact form (no network call).
     setSuccess(true);
     setForm({ name: "", email: "", phone: "", message: "" });
+    setTouched({});
     setSending(false);
+  };
+
+  const handleBlur = (field: string) => {
+    setTouched(prev => ({ ...prev, [field]: true }));
+    validate();
   };
 
   const inputStyle: React.CSSProperties = {
@@ -103,26 +140,26 @@ export default function ContactPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 32, alignItems: "start" }}>
 
-          {/* Left — Contact info */}
+          {/* Left - Contact info */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {[
               {
                 icon: <Mail size={20} color="#0F766E" strokeWidth={1.8} />,
                 label: "Email Us",
-                value: "support@meetthemasters.in",
+                value: SUPPORT_EMAIL,
                 sub: "We reply within 24 hours",
               },
               {
                 icon: <Phone size={20} color="#0F766E" strokeWidth={1.8} />,
                 label: "Call Us",
                 value: "+91 99999 99999",
-                sub: "Mon – Sat, 9 AM – 6 PM IST",
+                sub: "Mon - Sat, 9 AM - 6 PM IST",
               },
               {
                 icon: <MapPin size={20} color="#0F766E" strokeWidth={1.8} />,
                 label: "Office",
                 value: "Hyderabad, Telangana",
-                sub: "India — 500 081",
+                sub: "India - 500 081",
               },
             ].map((item, i) => (
               <div key={i} style={{
@@ -151,8 +188,8 @@ export default function ContactPage() {
             }}>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Office Hours</div>
               {[
-                { day: "Monday – Friday", time: "9:00 AM – 6:00 PM" },
-                { day: "Saturday", time: "10:00 AM – 2:00 PM" },
+                { day: "Monday - Friday", time: "9:00 AM - 6:00 PM" },
+                { day: "Saturday", time: "10:00 AM - 2:00 PM" },
                 { day: "Sunday", time: "Closed" },
               ].map((h, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "rgba(255,255,255,0.85)", marginBottom: 6 }}>
@@ -163,7 +200,7 @@ export default function ContactPage() {
             </div>
           </div>
 
-          {/* Right — Form */}
+          {/* Right - Form */}
           <div style={{
             background: "#fff", border: "1px solid #E2E8F0", borderRadius: 20,
             padding: "36px 32px", boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
@@ -210,28 +247,30 @@ export default function ContactPage() {
                       <User size={16} style={{ position: "absolute", left: 14, top: 13, color: "#94A3B8" }} strokeWidth={1.8} />
                       <input
                         value={form.name}
-                        onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setError(""); }}
+                        onChange={e => { setForm(f => ({ ...f, name: e.target.value })); if (touched.name) validate({ ...form, name: e.target.value }); }}
+                        onBlur={() => handleBlur("name")}
                         placeholder="Your full name"
                         style={inputStyle}
                         onFocus={e => (e.target.style.borderColor = "#0F766E")}
-                        onBlur={e => (e.target.style.borderColor = "#E2E8F0")}
                       />
                     </div>
+                    {touched.name && errors.name && <div style={{ color: "#EF4444", fontSize: 11, marginTop: 4, fontWeight: 600 }}>{errors.name}</div>}
                   </div>
                   <div>
-                    <label style={labelStyle}>Phone <span style={{ color: "#94A3B8", fontWeight: 400 }}>(Optional)</span></label>
+                    <label style={labelStyle}>Phone <span style={{ color: "#EF4444" }}>*</span></label>
                     <div style={{ position: "relative" }}>
                       <Phone size={16} style={{ position: "absolute", left: 14, top: 13, color: "#94A3B8" }} strokeWidth={1.8} />
                       <input
                         value={form.phone}
-                        onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
+                        onChange={e => { setForm(f => ({ ...f, phone: e.target.value })); if (touched.phone) validate({ ...form, phone: e.target.value }); }}
+                        onBlur={() => handleBlur("phone")}
                         placeholder="+91 XXXXX XXXXX"
                         type="tel"
                         style={inputStyle}
                         onFocus={e => (e.target.style.borderColor = "#0F766E")}
-                        onBlur={e => (e.target.style.borderColor = "#E2E8F0")}
                       />
                     </div>
+                    {touched.phone && errors.phone && <div style={{ color: "#EF4444", fontSize: 11, marginTop: 4, fontWeight: 600 }}>{errors.phone}</div>}
                   </div>
                 </div>
 
@@ -241,14 +280,15 @@ export default function ContactPage() {
                     <Mail size={16} style={{ position: "absolute", left: 14, top: 13, color: "#94A3B8" }} strokeWidth={1.8} />
                     <input
                       value={form.email}
-                      onChange={e => { setForm(f => ({ ...f, email: e.target.value })); setError(""); }}
+                      onChange={e => { setForm(f => ({ ...f, email: e.target.value })); if (touched.email) validate({ ...form, email: e.target.value }); }}
+                      onBlur={() => handleBlur("email")}
                       placeholder="you@example.com"
                       type="email"
                       style={inputStyle}
                       onFocus={e => (e.target.style.borderColor = "#0F766E")}
-                      onBlur={e => (e.target.style.borderColor = "#E2E8F0")}
                     />
                   </div>
+                  {touched.email && errors.email && <div style={{ color: "#EF4444", fontSize: 11, marginTop: 4, fontWeight: 600 }}>{errors.email}</div>}
                 </div>
 
                 <div style={{ marginBottom: 20 }}>
@@ -257,32 +297,23 @@ export default function ContactPage() {
                     <MessageSquare size={16} style={{ position: "absolute", left: 14, top: 13, color: "#94A3B8" }} strokeWidth={1.8} />
                     <textarea
                       value={form.message}
-                      onChange={e => { setForm(f => ({ ...f, message: e.target.value })); setError(""); }}
+                      onChange={e => { setForm(f => ({ ...f, message: e.target.value })); if (touched.message) validate({ ...form, message: e.target.value }); }}
+                      onBlur={() => handleBlur("message")}
                       placeholder="How can we help you?"
                       rows={5}
                       style={{
                         ...inputStyle,
                         paddingLeft: 44,
                         resize: "vertical",
-                        lineHeight: 1.6,
+                        lineHeight: 1.1,
                       }}
                       onFocus={e => (e.target.style.borderColor = "#0F766E")}
-                      onBlur={e => (e.target.style.borderColor = "#E2E8F0")}
                     />
                   </div>
+                  {touched.message && errors.message && <div style={{ color: "#EF4444", fontSize: 11, marginTop: 4, fontWeight: 600 }}>{errors.message}</div>}
                 </div>
 
-                {error && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    background: "#FEF2F2", border: "1px solid #FECACA",
-                    borderRadius: 9, padding: "10px 14px", marginBottom: 16,
-                    fontSize: 13, color: "#B91C1C", fontWeight: 600,
-                  }}>
-                    <AlertTriangle size={16} strokeWidth={2} />
-                    {error}
-                  </div>
-                )}
+                {/* Remove global error display */}
 
                 <button
                   onClick={handleSubmit}
@@ -299,7 +330,7 @@ export default function ContactPage() {
                   {sending ? (
                     <>
                       <span style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-                      Sending…
+                      Sending...
                     </>
                   ) : (
                     <>

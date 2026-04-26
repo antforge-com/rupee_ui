@@ -190,9 +190,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
         </button>
       </div>
 
-      <div style={{ marginBlockEnd: 20, padding: "12px 16px", borderRadius: 12, border: "1px solid #BFDBFE", background: "#EFF6FF", color: "#1D4ED8", fontSize: 13, lineHeight: 1.6 }}>
-        Existing plans are now read-only in the frontend to avoid changing subscriptions already used by members. Create a new plan instead of editing or deleting an existing one.
-      </div>
+
 
       {loading ? (
         <MeetTheMastersLoader message="Loading plans..." padding="40px" />
@@ -242,9 +240,24 @@ export const SubscriptionPlansPanel: React.FC = () => {
                     )}
                   </h3>
                 </div>
-                <span style={{ fontSize: 10, fontWeight: 800, color: "#475569", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 999, padding: "4px 10px" }}>
-                  Read only
-                </span>
+                <button
+                  onClick={() => handleOpenModal(plan)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    fontSize: 12, fontWeight: 700, color: "#0F766E",
+                    background: "#ECFEFF", border: "1.5px solid #A5F3FC",
+                    borderRadius: 8, padding: "5px 12px", cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#CFFAFE")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "#ECFEFF")}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                  Edit
+                </button>
               </div>
 
               <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBlockEnd: 16 }}>
@@ -304,7 +317,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
           >
             <div style={{ padding: "20px 24px", borderBlockEnd: "1px solid #E2E8F0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
-                Add New Plan
+                {editingPlan ? "Edit Plan" : "Add New Plan"}
               </h3>
               <button onClick={handleCloseModal} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B" }}>
                 <XCircle size={20} />
@@ -398,7 +411,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
                   {formSubmitting && (
                     <div style={{ inlineSize: 14, blockSize: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
                   )}
-                  Create Plan
+                  {editingPlan ? "Save Changes" : "Create Plan"}
                 </button>
               </div>
             </form>

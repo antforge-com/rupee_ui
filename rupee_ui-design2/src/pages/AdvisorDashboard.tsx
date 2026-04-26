@@ -5,9 +5,15 @@ import logoImg from '../assests/Meetmasterslogopng.png';
 import ConfirmDialog from "../components/ConfirmDialog";
 import ForcePasswordChangeModal from "../components/ForcePasswordChangeModal";
 import { API_BASE_URL, buildApiUrl, buildBackendAssetUrl } from "../config/api";
+import { SUPPORT_EMAIL } from "../config/support";
+import { formatHourRangeLabel as _fmtHourRange, HourRangeClockPicker as _HourRangeClock } from "../pages/timeSlotUtils";
 import {
+  emailOnSpecialBookingConfirmedConsultant,
+  emailOnSpecialBookingConfirmedUser,
+  emailOnTicketUpdated,
   extractArray,
   getAdvisorById,
+  getAllSkills,
   getBookingsByConsultant,
   getConsultantMasterSlots,
   getCurrentUser,
@@ -22,16 +28,19 @@ import {
   getUserDisplayName,
   giveSlotSpecialBooking,
   logoutUser,
+  markNotificationAsRead,
   postInternalNote,
   postTicketComment,
   recordEscalationBlock,
   removeStoredSpecialDay,
   saveStoredSpecialDay,
+  sendTicketEscalatedEmail,
   SLA_HOURS,
   updateAdvisor,
   updateSpecialBooking,
-  updateTicketStatus
+  updateTicketStatus,
 } from '../services/api';
+import { formatNameLikeInput, formatTitleLikeInput } from "../utils/formUtils";
 import AnalyticsDashboard from './AnalyticsDashboard';
 import { BookingAnswersButton } from './Bookinganswersviewer';
 import { ConsultantNotificationMonitor } from './NotificationSystem';
@@ -184,6 +193,8 @@ interface FeedbackItem {
   comments?: string;
   userId?: number;
   bookingId?: number;
+  ticketId?: number;
+  category?: string;
   createdAt?: string;
   updatedAt?: string;
   clientName?: string;
@@ -191,9 +202,9 @@ interface FeedbackItem {
   timeRange?: string;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
    DEEP FIELD EXTRACTORS
-   ═══════════════════════════════════════════════════════════════════════════ */
+   =========================================================================== */
 
 const deepFindStatus = (b: any): string => {
   if (!b || typeof b !== 'object') return '';
@@ -539,7 +550,7 @@ const parseTimeLabelToMinutes = (value: string): number | null => {
 const getSortableBookingStartMinutes = (timeLabel: string): number => {
   const raw = String(timeLabel || '').trim();
   if (!raw) return Number.MAX_SAFE_INTEGER;
-  const rangeStart = raw.split(/[-–]/)[0]?.trim() || '';
+  const rangeStart = raw.split(/[--]/)[0]?.trim() || '';
   return parseTimeLabelToMinutes(rangeStart) ?? parseTimeLabelToMinutes(raw) ?? Number.MAX_SAFE_INTEGER;
 };
 
@@ -653,7 +664,7 @@ const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
   const timeStr = deepFindTime(b);
   if (!dateStr) return false;
   try {
-    const rangeMatch = timeStr.match(/[-–]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
     let endH = -1, endM = 0;
     if (rangeMatch) {
       endH = parseInt(rangeMatch[1]);
@@ -828,8 +839,8 @@ const deepFindClientName = (b: any): string => {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatTimeRange = (timeString: string, durationMins = 60): string => {
-  if (!timeString) return '—';
-  if (/[-–]/.test(timeString) && timeString.length > 5) return timeString;
+  if (!timeString) return '-';
+  if (/[--]/.test(timeString) && timeString.length > 5) return timeString;
   if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(timeString) && !/-/.test(timeString)) {
     const match = timeString.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
     if (match) {
@@ -841,7 +852,7 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
       const start = new Date(); start.setHours(h, m, 0);
       const end = new Date(start.getTime() + durationMins * 60000);
       const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-      return `${fmt(start)} – ${fmt(end)}`;
+      return `${fmt(start)} - ${fmt(end)}`;
     }
     return timeString;
   }
@@ -850,7 +861,7 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
     const start = new Date(); start.setHours(parts[0], parts[1], 0);
     const end = new Date(start.getTime() + durationMins * 60000);
     const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    return `${fmt(start)} – ${fmt(end)}`;
+    return `${fmt(start)} - ${fmt(end)}`;
   }
   return timeString;
 };
@@ -897,7 +908,7 @@ const addHoursToTime = (time: string, hours: number): string => {
 };
 
 const getDurationHoursFromRange = (timeRange: string, fallback = 1): number => {
-  const parts = String(timeRange || '').split(/[-–]/).map(p => p.trim()).filter(Boolean);
+  const parts = String(timeRange || '').split(/[--]/).map(p => p.trim()).filter(Boolean);
   if (parts.length < 2) return fallback;
   const start = parseTimeToMinutes(parts[0]);
   const end = parseTimeToMinutes(parts[1]);
@@ -908,12 +919,12 @@ const getDurationHoursFromRange = (timeRange: string, fallback = 1): number => {
 };
 
 const parseRangeStartKey = (timeRange: string): string => {
-  const firstPart = String(timeRange || '').split(/[-–]/)[0]?.trim() || '';
+  const firstPart = String(timeRange || '').split(/[--]/)[0]?.trim() || '';
   return normaliseTimeKey(firstPart);
 };
 
 const parseRangeEndKey = (timeRange: string): string => {
-  const secondPart = String(timeRange || '').split(/[-–]/)[1]?.trim() || '';
+  const secondPart = String(timeRange || '').split(/[--]/)[1]?.trim() || '';
   return normaliseTimeKey(secondPart);
 };
 
@@ -942,6 +953,35 @@ const generateHourlySlots = (shiftStart: string, shiftEnd: string, stepMinutes =
     }
     return result;
   } catch { return []; }
+};
+
+// Returns true if slotStart (HH:MM 24h) falls within the consultant's shift window.
+// Handles overnight shifts (e.g. 11:00 → 08:00 next day) where shiftStart > shiftEnd.
+const isSlotInShift = (slotStart: string, shiftStart: string, shiftEnd: string): boolean => {
+  if (!shiftStart || !shiftEnd || !slotStart) return true;
+  const norm = (t: string) => {
+    const ampm = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i);
+    if (ampm) {
+      let hh = parseInt(ampm[1]);
+      const mm = ampm[2] || '00';
+      const ap = ampm[3].toUpperCase();
+      if (ap === 'PM' && hh !== 12) hh += 12;
+      if (ap === 'AM' && hh === 12) hh = 0;
+      return `${String(hh).padStart(2, '0')}:${mm}`;
+    }
+    const iso = t.match(/^(\d{1,2}):(\d{2})/);
+    return iso ? `${iso[1].padStart(2, '0')}:${iso[2]}` : t;
+  };
+  const s = norm(slotStart);
+  const start = norm(shiftStart);
+  const end = norm(shiftEnd);
+  if (start <= end) {
+    // Normal shift: e.g. 09:00 to 17:00
+    return s >= start && s < end;
+  } else {
+    // Overnight shift: e.g. 11:00 to 08:00 (next day)
+    return s >= start || s < end;
+  }
 };
 
 const fmt24to12 = (t: string): string => {
@@ -1097,8 +1137,21 @@ const MaterialTimePicker: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKETS TAB
+// PROFILE HOUR RANGE CLOCK PICKER - thin alias of the shared HourRangeClockPicker
+// Adds auto-set shiftEnd display note; re-uses the clock from timeSlotUtils.
 // ─────────────────────────────────────────────────────────────────────────────
+const ProfileHourRangeClockPicker: React.FC<{
+  isOpen: boolean;
+  initialHour: number | null;
+  initialDuration?: number;
+  onClose: () => void;
+  onSave: (startHour24: number, durationHours: number) => void;
+}> = (props) => (
+  <_HourRangeClock
+    {...props}
+    title="Availability Slot"
+  />
+);
 const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   const ESCALATED_KEY = `fin_escalated_tickets_${consultantId}`;
   const [tickets, setTickets] = useState<any[]>([]);
@@ -1162,7 +1215,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
           <h2 style={{ margin: '0 0 10px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
           <div style={{ background: '#ECFEFF', border: '1px solid #A5F3FC', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: '#115E59', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
             <Mail size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span><strong>Email-to-Ticket:</strong> Users can email <strong>support@meetthemasters.in</strong> — emails auto-convert to tickets assigned to you.</span>
+            <span><strong>Email-to-Ticket:</strong> Users can email <strong>{SUPPORT_EMAIL}</strong>. Emails are auto-converted into tickets assigned to your queue.</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 12 }}>
             {[
@@ -1267,7 +1320,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADVISOR TICKET DETAIL — Admin-style layout with IST timestamps
+// ADVISOR TICKET DETAIL - Admin-style layout with IST timestamps
 // ─────────────────────────────────────────────────────────────────────────────
 const AdvisorTicketDetail: React.FC<{
   ticket: any;
@@ -1341,6 +1394,12 @@ const AdvisorTicketDetail: React.FC<{
           localStorage.setItem(key, JSON.stringify([newNotif, ...prev].slice(0, 50)));
         } catch { }
       }
+      // Fire email to user - non-fatal
+      const userEmail = ticket.userEmail || ticket.user?.email || ticket.email || '';
+      const ticketNum = String(ticket.ticketNumber || ticket.id);
+      if (userEmail) {
+        emailOnTicketUpdated({ to: userEmail, ticketNumber: ticketNum, status: localStatus }).catch(() => null);
+      }
     } catch (e: any) { showToast(e.message || 'Failed.', false); }
     finally { setSending(false); }
   };
@@ -1370,6 +1429,12 @@ const AdvisorTicketDetail: React.FC<{
           localStorage.setItem(key, JSON.stringify([newNotif, ...prev].slice(0, 50)));
         } catch { }
       }
+      // Fire status-change email to user - non-fatal
+      const userEmailSt = ticket.userEmail || ticket.user?.email || ticket.email || '';
+      const ticketNumSt = String(ticket.ticketNumber || ticket.id);
+      if (userEmailSt) {
+        emailOnTicketUpdated({ to: userEmailSt, ticketNumber: ticketNumSt, status: s }).catch(() => null);
+      }
     } catch (e: any) { showToast(e.message || 'Failed.', false); }
     finally { setUpdatingSt(false); }
   };
@@ -1394,8 +1459,8 @@ const AdvisorTicketDetail: React.FC<{
       const adminNotif = {
         id: `note_ticket_${ticket.id}_${Date.now()}`,
         type: 'info',
-        title: `Internal Note — Ticket #${ticket.id}`,
-        message: `Consultant added a note on Ticket #${ticket.id} (${ticket.category || 'Support'}): "${noteContent.substring(0, 100)}${noteContent.length > 100 ? '…' : ''}"`,
+        title: `Internal Note - Ticket #${ticket.id}`,
+        message: `Consultant added a note on Ticket #${ticket.id} (${ticket.category || 'Support'}): "${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}"`,
         timestamp: new Date().toISOString(),
         read: false,
         ticketId: ticket.id,
@@ -1408,14 +1473,15 @@ const AdvisorTicketDetail: React.FC<{
     setEscalating(true);
     try {
       try {
+        const marker = `[ESCALATED_BY:${consultantId}]`;
         await postInternalNote(
           ticket.id,
-          `🚨 ESCALATED on ${new Date().toLocaleString('en-IN')}: This ticket requires supervisor attention. Consultant has escalated it for priority handling.`,
+          `🚨 ESCALATED ${marker} on ${new Date().toLocaleString('en-IN')}: This ticket requires supervisor attention. Consultant has escalated it for priority handling.`,
           consultantId
         );
         setNotes(p => [...p, {
           id: Date.now(), ticketId: ticket.id, authorId: consultantId,
-          noteText: '🚨 ESCALATED: Supervisor attention required.',
+          noteText: `🚨 ESCALATED ${marker}: Supervisor attention required.`,
           createdAt: new Date().toISOString()
         }]);
       } catch { }
@@ -1431,10 +1497,20 @@ const AdvisorTicketDetail: React.FC<{
         setLocalStatus('ESCALATED');
         onStatusChange(ticket.id, 'ESCALATED');
       } catch {
-        // Backend may not support ESCALATED — signal via __ESCALATED__ for UI only
+        // Backend may not support ESCALATED - signal via __ESCALATED__ for UI only
         onStatusChange(ticket.id, '__ESCALATED__');
       }
       showToast('Escalated. Supervisor notified.');
+      // Fire escalation email to user - non-fatal
+      const userEmailEsc = ticket.userEmail || ticket.user?.email || ticket.email || '';
+      const ticketNumEsc = String(ticket.ticketNumber || ticket.id);
+      if (userEmailEsc) {
+        sendTicketEscalatedEmail({
+          ticketId: ticket.id,
+          ticketTitle: ticket.title || ticket.category || `Ticket #${ticketNumEsc}`,
+          userEmail: userEmailEsc,
+        }).catch(() => null);
+      }
     } catch (e: any) { showToast(e.message || 'Failed.', false); }
     finally { setEscalating(false); }
   };
@@ -1501,7 +1577,7 @@ const AdvisorTicketDetail: React.FC<{
           </div>
         </div>
 
-        {/* ── CONVERSATION THREAD — Admin-style layout ── */}
+        {/* ── CONVERSATION THREAD - Admin-style layout ── */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9', background: '#F8FAFC' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
             💬 Conversation ({comments.length})
@@ -1593,10 +1669,10 @@ const AdvisorTicketDetail: React.FC<{
                   boxSizing: 'border-box' as any,
                 }}
               >
-                <option value="">⚡ Canned Responses — select to insert…</option>
+                <option value="">⚡ Canned Responses - select to insert...</option>
                 {cannedResponses.map(r => (
                   <option key={r.id} value={r.body || (r as any).content || (r as any).message || ''}>
-                    {r.category ? `[${r.category}] ` : ''}{r.title || '—'}
+                    {r.category ? `[${r.category}] ` : ''}{r.title || '-'}
                   </option>
                 ))}
               </select>
@@ -1617,7 +1693,7 @@ const AdvisorTicketDetail: React.FC<{
                 <input
                   value={cannedSearch}
                   onChange={e => setCannedSearch(e.target.value)}
-                  placeholder="Search…"
+                  placeholder="Search..."
                   style={{
                     flex: 1, padding: '3px 9px', border: '1px solid rgba(255,255,255,0.28)',
                     borderRadius: 7, fontSize: 11, outline: 'none',
@@ -1657,7 +1733,7 @@ const AdvisorTicketDetail: React.FC<{
                           {r.category}
                         </span>
                       )}
-                      {r.title || '—'}
+                      {r.title || '-'}
                     </button>
                   ))}
                 {cannedResponses.filter(r =>
@@ -1681,7 +1757,7 @@ const AdvisorTicketDetail: React.FC<{
               onChange={e => setReply(e.target.value)}
               rows={3}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder="Type reply… (Enter to send)"
+              placeholder="Type reply... (Enter to send)"
               style={{
                 flex: 1, padding: '9px 12px', border: '1.5px solid #A5F3FC',
                 borderRadius: 10, fontSize: 13, resize: 'vertical', fontFamily: 'inherit',
@@ -1724,11 +1800,11 @@ const AdvisorTicketDetail: React.FC<{
           <div style={{ display: 'flex', gap: 8 }}>
             <textarea value={noteText} onChange={e => setNoteText(e.target.value)} rows={2}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleNote(); } }}
-              placeholder="Add private note… (Enter to save)"
+              placeholder="Add private note... (Enter to save)"
               style={{ flex: 1, padding: '9px 12px', border: '1.5px solid #FDE68A', borderRadius: 10, fontSize: 13, resize: 'none', fontFamily: 'inherit', outline: 'none', background: '#fff' }} />
             <button onClick={handleNote} disabled={!noteText.trim() || postingNote}
               style={{ padding: '9px 13px', borderRadius: 10, border: 'none', background: !noteText.trim() ? '#F1F5F9' : '#D97706', color: !noteText.trim() ? '#94A3B8' : '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', alignSelf: 'flex-end' }}>
-              {postingNote ? '…' : 'Save'}
+              {postingNote ? '...' : 'Save'}
             </button>
           </div>
         </div>
@@ -1743,7 +1819,7 @@ const AdvisorTicketDetail: React.FC<{
               </div>
               <button onClick={handleEscalate} disabled={escalating}
                 style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#DC2626', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
-                {escalating ? '…' : 'Escalate'}
+                {escalating ? '...' : 'Escalate'}
               </button>
             </div>
           )}
@@ -1773,18 +1849,28 @@ const ConsultantNotificationsView: React.FC<{
     timestamp: string; read: boolean; ticketId?: number; bookingId?: number;
   }
 
+  const CLEARED_AT_KEY = `${STORAGE_KEY}_CLEARED_AT`;
+
   const [notifs, setNotifs] = useState<LocalNotif[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+    try {
+      const local = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const clearedAt = Number(localStorage.getItem(CLEARED_AT_KEY) || 0);
+      return local.filter((n: any) => new Date(n.timestamp || 0).getTime() > clearedAt);
+    }
     catch { return []; }
   });
   const [displayNotifs, setDisplayNotifs] = useState<LocalNotif[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+    try {
+      const local = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      const clearedAt = Number(localStorage.getItem(CLEARED_AT_KEY) || 0);
+      return local.filter((n: any) => new Date(n.timestamp || 0).getTime() > clearedAt);
+    }
     catch { return []; }
   });
 
   // ── Merge helper: deduplicate by id, newest first, preserve local read state ──
   const mergeNotifs = (backend: LocalNotif[], local: LocalNotif[]): LocalNotif[] => {
-    // Build a map of IDs that were locally marked as read — never let backend override these
+    // Build a map of IDs that were locally marked as read - never let backend override these
     const localReadIds = new Set(local.filter(n => n.read).map(n => String(n.id)));
     const seen = new Set<string>();
     const merged: LocalNotif[] = [];
@@ -1823,11 +1909,17 @@ const ConsultantNotificationsView: React.FC<{
         ticketId: n.ticketId || n.relatedTicketId || undefined,
         bookingId: n.bookingId || n.relatedBookingId || undefined,
       }));
-    } catch { /* backend unavailable — fall back to localStorage only */ }
+    } catch { /* backend unavailable - fall back to localStorage only */ }
+    const clearedAt = Number(localStorage.getItem(CLEARED_AT_KEY) || 0);
     const local: LocalNotif[] = (() => {
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; }
+      try {
+        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        return raw.filter((n: any) => new Date(n.timestamp || 0).getTime() > clearedAt);
+      } catch { return []; }
     })();
-    const merged = mergeNotifs(backendNotifs, local);
+    // Filter backend notifications by clearedAt before merging
+    const freshBackend = backendNotifs.filter(n => new Date(n.timestamp || 0).getTime() > clearedAt);
+    const merged = mergeNotifs(freshBackend, local);
     // Persist merged list so future polls include backend items
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch { }
     setNotifs(merged);
@@ -1860,6 +1952,11 @@ const ConsultantNotificationsView: React.FC<{
     const updated = notifs.map(n => n.id === id ? { ...n, read: true } : n);
     setNotifs(updated);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch { }
+    // If it's a backend notification (numeric ID), notify server
+    const numericId = Number(id);
+    if (!isNaN(numericId)) {
+      markNotificationAsRead(numericId).catch(() => { });
+    }
   };
 
   const handleCardClick = (n: LocalNotif) => {
@@ -1878,9 +1975,17 @@ const ConsultantNotificationsView: React.FC<{
     const updated = notifs.map(n => ({ ...n, read: true }));
     setNotifs(updated);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch { }
+    // Mark ALL unread ones as read on backend too
+    notifs.forEach(n => {
+      if (!n.read) {
+        const nid = Number(n.id);
+        if (!isNaN(nid)) markNotificationAsRead(nid).catch(() => { });
+      }
+    });
   };
 
   const clearAll = () => {
+    localStorage.setItem(CLEARED_AT_KEY, String(Date.now()));
     setNotifs([]);
     try { localStorage.removeItem(STORAGE_KEY); } catch { }
   };
@@ -1998,7 +2103,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
 
-  // AFTER — fetches both regular AND dedicated special bookings in parallel
+  // AFTER - fetches both regular AND dedicated special bookings in parallel
   useEffect(() => {
     (async () => {
       setLoading(true); setError(null);
@@ -2019,7 +2124,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
         const token = localStorage.getItem('fin_token');
         const authHeaders = { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 
-        // ✅ Actual enrichment — NOT a placeholder comment
+        // ✅ Actual enrichment - NOT a placeholder comment
         const enriched = await Promise.all(arr.map(async (b: any) => {
           let enrichedBooking = { ...b };
           if (!b.user?.name && !b.user?.fullName && !b.userName && !b.clientName && !b.client?.name && !b.client?.fullName) {
@@ -2100,7 +2205,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
   const regularBookings = bookings.filter((b: any) => !resolveSpecialBookingMeta(b));
   const specialBookingsAll = bookings.filter((b: any) => !!resolveSpecialBookingMeta(b));
 
-  // Scheduled/confirmed special bookings have a confirmed date/time — show them in the main bookings list too
+  // Scheduled/confirmed special bookings have a confirmed date/time - show them in the main bookings list too
   const scheduledSpecialBookings = specialBookingsAll.filter(
     (b: any) => isScheduledSpecialStatus(resolveSpecialBookingMeta(b)?.status)
   );
@@ -2143,7 +2248,10 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
     ...activeScheduledSpecialBookings,
   ].slice().sort(compareBookingsChronologically);
 
-  const visibleBookings = filter === 'HISTORY' ? historyBookings : activeBookingsWithScheduled;
+  // Filter out any bookings for days that have completely passed
+  const activeBookingsStrict = activeBookingsWithScheduled.filter(b => !isBookingExpired(b, now));
+
+  const visibleBookings = filter === 'HISTORY' ? historyBookings : activeBookingsStrict;
   const filtered = (filter === 'ALL'
     ? visibleBookings
     : filter === 'HISTORY'
@@ -2288,10 +2396,10 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
             const bookingForTime = chronology.date || chronology.time
               ? { ...booking, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
               : booking;
-            const date = chronology.date || '—';
+            const date = chronology.date || '-';
             const rawTime = chronology.time;
             const durationMinutes = booking.durationMinutes || Math.max(1, Number(specialMeta?.hours || 1)) * 60;
-            const timeDisplay = rawTime ? formatTimeRange(rawTime, durationMinutes) : '—';
+            const timeDisplay = rawTime ? formatTimeRange(rawTime, durationMinutes) : '-';
             const amount = deepFindAmount(booking);
             const isSpecial = !!specialMeta;
             const specialScheduled = isScheduledSpecialStatus(specialMeta?.status);
@@ -2307,7 +2415,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
                   <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px', background: 'linear-gradient(90deg,rgba(180,83,9,0.10),rgba(217,119,6,0.06))', borderRadius: 9, border: '1px solid #FCD34D' }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="#B45309" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
                     <span style={{ fontSize: 11, fontWeight: 800, color: '#7C2D12', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                      Special Booking — {status === 'COMPLETED' ? '✓ Completed' : status === 'CANCELLED' ? 'Cancelled' : specialScheduled ? '✓ Scheduled' : 'Awaiting Schedule'}
+                      Special Booking - {status === 'COMPLETED' ? '✓ Completed' : status === 'CANCELLED' ? 'Cancelled' : specialScheduled ? '✓ Scheduled' : 'Awaiting Schedule'}
                     </span>
                   </div>
                 )}
@@ -2394,7 +2502,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
               <div>
                 <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Special Bookings</div>
                 <div style={{ color: '#FDE68A', fontSize: 12, marginTop: 2 }}>
-                  {specialBookingsAll.length} request{specialBookingsAll.length !== 1 ? 's' : ''} — click to schedule slots inline
+                  {specialBookingsAll.length} request{specialBookingsAll.length !== 1 ? 's' : ''} - click to schedule slots inline
                 </div>
               </div>
             </div>
@@ -2439,7 +2547,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
             })}
             {specialBookingsAll.length > 4 && (
               <div style={{ textAlign: 'center', fontSize: 12, color: '#94A3B8', padding: '4px 0' }}>
-                +{specialBookingsAll.length - 4} more — click "View & Schedule" to see all
+                +{specialBookingsAll.length - 4} more - click "View & Schedule" to see all
               </div>
             )}
           </div>
@@ -2466,7 +2574,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
   const [form, setForm] = useState({ date: '', time: '', endTime: '' });
   const [timePicker, setTimePicker] = useState<{ open: boolean; field: 'start' | 'end'; value: string }>({ open: false, field: 'start', value: '' });
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
-  // Master time slots no longer needed — time is now picked via clock
+  // Master time slots no longer needed - time is now picked via clock
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -2620,13 +2728,13 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
   const savePublishedSpecialDay = async () => {
     if (!calendarSelectedDate) return;
     if (isDateAlreadyPublished) {
-      showToast('Already published — no changes needed.', false);
+      showToast('Already published - no changes needed.', false);
       return;
     }
     setPublishingDateBusy(calendarSelectedDate);
     try {
       await publishConsultantSpecialDayDate(consultantId, calendarSelectedDate);
-      // Always publish as free-flowing (no fixed duration — time is agreed with the user directly)
+      // Always publish as free-flowing (no fixed duration - time is agreed with the user directly)
       saveStoredSpecialDay({
         consultantId,
         specialDate: calendarSelectedDate,
@@ -2721,7 +2829,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
             throw new Error('Could not confirm the booking with the server. Please try again or contact support.');
           }
         }
-        // If already given — slot is confirmed, continue to send notification
+        // If already given - slot is confirmed, continue to send notification
       }
 
       const requestId = dedicatedSpecialId;
@@ -2754,6 +2862,34 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
         meetingLink,
         userNotes: consultantMessage,
       });
+
+      // Also fire EmailService-backed confirmation emails - non-fatal
+      const userEmailSb = booking.user?.email || booking.email || booking.userEmail || '';
+      const consultantEmailSb = booking.consultantEmail || booking.advisor?.email || '';
+      if (userEmailSb) {
+        emailOnSpecialBookingConfirmedUser({
+          to: userEmailSb,
+          bookingId: requestId,
+          date: requestedDate,
+          time: scheduledTimeRange,
+          hours: computedHours,
+          meetingMode: meta.requestedMeetingMode,
+          meetingLink,
+          consultantEmail: consultantEmailSb,
+        }).catch(() => null);
+      }
+      if (consultantEmailSb) {
+        emailOnSpecialBookingConfirmedConsultant({
+          to: consultantEmailSb,
+          bookingId: requestId,
+          date: requestedDate,
+          time: scheduledTimeRange,
+          hours: computedHours,
+          meetingMode: meta.requestedMeetingMode,
+          meetingLink,
+          clientEmail: userEmailSb,
+        }).catch(() => null);
+      }
 
       setSchedulingBookingId(null);
       setForm({ date: '', time: '', endTime: '' });
@@ -2813,7 +2949,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
               Special Booking Dates
             </div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#475569' }}>
-              Mark a date as a Special Day — users can request a booking for that date, and you confirm the time directly with them.
+              Mark a date as a Special Day - users can request a booking for that date, and you confirm the time directly with them.
             </div>
           </div>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 999, background: '#FFF7ED', border: '1px solid #FCD34D', fontSize: 12, fontWeight: 700, color: '#B45309' }}>
@@ -2952,7 +3088,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                   const isRealRange = rawTime && /AM|PM|:/i.test(rawTime);
                   return (
                     <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 14, background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: 13, color: '#334155', display: 'grid', gap: 8 }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Calendar size={14} /> <strong>Requested Date:</strong> <span>{meta.preferredDate || '—'}</span></div>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Calendar size={14} /> <strong>Requested Date:</strong> <span>{meta.preferredDate || '-'}</span></div>
                       {isRealRange && (
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Clock size={14} /> <strong>Preferred Time:</strong> <span>{rawTime}</span></div>
                       )}
@@ -2979,7 +3115,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                   <div style={{ marginTop: 16 }}>
                     {schedulingBookingId === booking.id ? (
                       <>
-                        {/* ── Date picker — constrained to published special days ── */}
+                        {/* ── Date picker - constrained to published special days ── */}
                         <div style={{ marginBottom: 14 }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 }}>
                             <Calendar size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
@@ -3069,7 +3205,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                                 }}
                               >
                                 <Clock size={15} color={form.time ? '#0F766E' : '#94A3B8'} />
-                                <span>{form.time ? to12HourLabel(form.time) : 'Start…'}</span>
+                                <span>{form.time ? to12HourLabel(form.time) : 'Start...'}</span>
                               </button>
                             </div>
                             {/* TO */}
@@ -3089,7 +3225,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                                 }}
                               >
                                 <Clock size={15} color={form.endTime ? '#0F766E' : '#94A3B8'} />
-                                <span>{form.endTime ? to12HourLabel(form.endTime) : 'End…'}</span>
+                                <span>{form.endTime ? to12HourLabel(form.endTime) : 'End...'}</span>
                               </button>
                             </div>
                           </div>
@@ -3286,7 +3422,7 @@ const MySlotsView: React.FC<{
     try {
       await publishConsultantSpecialDayDate(consultantId, dateStr);
       saveStoredSpecialDay({ consultantId, specialDate: dateStr, durationHours: 0, status: 'SPECIAL' });
-      showSlotToast('Date published as Special Day — users can now request bookings.');
+      showSlotToast('Date published as Special Day - users can now request bookings.');
       await loadSpecialDays();
     } catch (e: any) {
       showSlotToast(e?.message || 'Failed to publish special day.', false);
@@ -3348,7 +3484,7 @@ const MySlotsView: React.FC<{
       setSchedForm({ date: '', time: '', endTime: '' });
       showSlotToast('Special booking confirmed! User will be notified.');
 
-      // Fire email + reload in background — UI is already updated above
+      // Fire email + reload in background - UI is already updated above
       const userId = booking.userId || booking.user?.id || booking.clientId;
       if (userId) {
         try {
@@ -3360,7 +3496,34 @@ const MySlotsView: React.FC<{
       }
       try {
         await sendSpecialBookingScheduledEmail({ bookingId: dedicatedSpecialId, userEmail: booking.user?.email || booking.email || booking.userEmail, userName: deepFindClientName(booking), consultantName: '', meetingMode: meta.requestedMeetingMode, scheduledDate: requestedDate, scheduledTimeRange, meetingLink, userNotes: consultantMessage });
-      } catch { /* email failure is non-fatal — booking is already confirmed */ }
+      } catch { /* email failure is non-fatal - booking is already confirmed */ }
+      // Also fire EmailService-backed confirmation emails - non-fatal
+      const userEmailSb2 = booking.user?.email || booking.email || booking.userEmail || '';
+      const consultantEmailSb2 = booking.consultantEmail || booking.advisor?.email || '';
+      if (userEmailSb2) {
+        emailOnSpecialBookingConfirmedUser({
+          to: userEmailSb2,
+          bookingId: dedicatedSpecialId,
+          date: requestedDate,
+          time: scheduledTimeRange,
+          hours: computedHours,
+          meetingMode: meta.requestedMeetingMode,
+          meetingLink,
+          consultantEmail: consultantEmailSb2,
+        }).catch(() => null);
+      }
+      if (consultantEmailSb2) {
+        emailOnSpecialBookingConfirmedConsultant({
+          to: consultantEmailSb2,
+          bookingId: dedicatedSpecialId,
+          date: requestedDate,
+          time: scheduledTimeRange,
+          hours: computedHours,
+          meetingMode: meta.requestedMeetingMode,
+          meetingLink,
+          clientEmail: userEmailSb2,
+        }).catch(() => null);
+      }
       await loadSpecialDays(); // sync fresh data from backend
     } catch (e: any) {
       showSlotToast(e?.message || 'Could not schedule.', false);
@@ -3387,7 +3550,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== slotDate) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         return normTR === slotStart;
       });
       if (existing) {
@@ -3424,7 +3587,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== slotDate) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         return normTR === slotStart;
       });
       if (existing) {
@@ -3448,8 +3611,13 @@ const MySlotsView: React.FC<{
     let slotArr: any[] = [];
     try {
       try {
-        const masterData = await getConsultantMasterSlots(consultantId);
-        const parsedMasterSlots = extractArray(masterData)
+        // Try consultant-specific first; fall back to all global master slots so that
+        // time ranges the admin creates in the admin panel are always visible.
+        let rawMasterData = await getConsultantMasterSlots(consultantId).catch(() => []);
+        if (extractArray(rawMasterData).length === 0) {
+          rawMasterData = await apiFetch('/master-timeslots?page=0&size=200&sortBy=id').catch(() => []);
+        }
+        const parsedMasterSlots = extractArray(rawMasterData)
           .map((slot: any): MasterSlotOption | null => {
             const timeRange = String(slot?.timeRange || '').trim();
             const start24 = parseRangeStartKey(timeRange);
@@ -3463,6 +3631,8 @@ const MySlotsView: React.FC<{
             };
           })
           .filter((slot: MasterSlotOption | null): slot is MasterSlotOption => !!slot)
+          // Only keep slots whose start falls inside the consultant's shift window
+          .filter((slot: MasterSlotOption) => isSlotInShift(slot.start24, shiftStartTime, shiftEndTime))
           .sort((a, b) => a.start24.localeCompare(b.start24));
         setMasterSlots(parsedMasterSlots);
       } catch { setMasterSlots([]); }
@@ -3512,7 +3682,7 @@ const MySlotsView: React.FC<{
   }, [consultantId]);
 
   const fmtTime = (t: string) => {
-    if (!t) return '—';
+    if (!t) return '-';
     const parts = t.split(':').map(Number);
     const h = parts[0]; const m = isNaN(parts[1]) ? 0 : parts[1];
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
@@ -3545,7 +3715,7 @@ const MySlotsView: React.FC<{
   });
 
   // Only show slots that the admin has explicitly created as master time slots.
-  // If no master slots exist yet, show nothing — never generate slots automatically
+  // If no master slots exist yet, show nothing - never generate slots automatically
   // from shift times, as that produces random/static slots the admin didn't configure.
   const hourlySlotTimes = (
     masterSlots.length > 0
@@ -3578,10 +3748,14 @@ const MySlotsView: React.FC<{
       const meta = resolveSpecialBookingMeta(booking);
       addDate(meta?.preferredDate || meta?.scheduledDate || deepFindDate(booking));
     });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     return Array.from(dateKeys)
       .sort((a, b) => a.localeCompare(b))
       .map(dateKey => toScheduleDayItem(dateKey))
-      .filter((day): day is ScheduleDayItem => !!day);
+      .filter((day): day is ScheduleDayItem => !!day)
+      .filter(day => new Date(day.iso).getTime() >= today.getTime());
   }, [bookings, publishedSpecialDays, specialBookingRequests]);
   const maxDayOffset = Math.max(0, scheduleDays.length - SCHEDULE_VISIBLE);
   const visibleDays = scheduleDays.slice(dayOffset, dayOffset + SCHEDULE_VISIBLE);
@@ -3620,6 +3794,13 @@ const MySlotsView: React.FC<{
     return dateKey === activeDateKey;
   });
 
+  const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    // Avoid carrying a previous date's selected slots into the current date.
+    setSelectedSlots(new Set());
+  }, [activeDateKey]);
+
   let totalCount = 0, availableCount = 0, bookedCount = 0;
   if (hasShift) {
     visibleDays.forEach(d => {
@@ -3631,6 +3812,67 @@ const MySlotsView: React.FC<{
       });
     });
   }
+
+  const handleBulkStatusChange = async (targetStatus: 'AVAILABLE' | 'UNAVAILABLE') => {
+    if (selectedSlots.size === 0) return;
+    const selectedKeys = Array.from(selectedSlots);
+    const actionableKeys = selectedKeys.filter((key) => {
+      const isCurrentlyUnavailable = unavailSlotSet.has(key) || manuallyDisabledSet.has(key);
+      return targetStatus === 'AVAILABLE' ? isCurrentlyUnavailable : !isCurrentlyUnavailable;
+    });
+    if (actionableKeys.length === 0) {
+      showSlotToast(
+        targetStatus === 'AVAILABLE'
+          ? 'All selected slots are already available.'
+          : 'All selected slots are already blocked.'
+      );
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const slotsToUpdate = actionableKeys.map(key => {
+        const [date, time] = key.split('|');
+        const existing = dbSlots.find(s => {
+          if (s.slotDate !== date) return false;
+          const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
+          if (dbSlotTime && dbSlotTime === time) return true;
+          const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
+          if (normTR && normTR === time) return true;
+          return false;
+        });
+        return { key, existing, date, time };
+      });
+
+      for (const item of slotsToUpdate) {
+        if (item.existing) {
+          await apiFetch(`/timeslots/${item.existing.id}`, { method: 'PUT', body: JSON.stringify({ ...item.existing, status: targetStatus }) });
+        } else {
+          if (targetStatus === 'AVAILABLE') continue;
+          const masterSlot = masterSlotsByStart[item.time];
+          if (masterSlot?.id) {
+            await apiFetch('/timeslots', {
+              method: 'POST',
+              body: JSON.stringify({
+                consultantId,
+                slotDate: item.date,
+                masterTimeSlotId: masterSlot.id,
+                durationMinutes: masterSlot.duration || sessionDurationMinutes,
+                status: targetStatus,
+              })
+            });
+          }
+        }
+      }
+      showSlotToast(`Updated ${actionableKeys.length} slots to ${targetStatus.toLowerCase()}.`);
+      setSelectedSlots(new Set());
+      await loadData();
+    } catch (e: any) {
+      showSlotToast(e?.message || 'Failed to update some slots.', false);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleToggleSlot = async (slotStart: string) => {
     const key = `${activeDateKey}|${slotStart}`;
@@ -3646,7 +3888,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== activeDateKey) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         if (normTR && normTR === slotStart) return true;
         return false;
       });
@@ -3675,15 +3917,16 @@ const MySlotsView: React.FC<{
     } finally { setTogglingSlot(null); }
   };
 
-  const customSlots = getCustomSlotsForDate(activeDateKey);
-  const allSlotTimes = [...new Set([...hourlySlotTimes, ...customSlots])].sort();
+  const allSlotTimes = [...hourlySlotTimes];
+  const selectedKeys = Array.from(selectedSlots);
+  const selectedUnavailableCount = selectedKeys.filter((key) => unavailSlotSet.has(key) || manuallyDisabledSet.has(key)).length;
+  const selectedAvailableCount = selectedKeys.length - selectedUnavailableCount;
 
   const renderSlotButton = (slotDate: string, slotStart: string) => {
     const key = `${slotDate}|${slotStart}`;
     const isBooked = bookedSlotSet.has(key) || bookedByClientSet.has(key);
     const isUnavail = !isBooked && (unavailSlotSet.has(key) || manuallyDisabledSet.has(key));
     const isLoading = actionLoading === key || togglingSlot === key;
-    const isCustom = !hourlySlotTimes.includes(slotStart);
     const label = buildRangeLabel(slotStart);
 
     if (isBooked) {
@@ -3704,7 +3947,7 @@ const MySlotsView: React.FC<{
             <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>UNAVAILABLE</span>
           </div>
           <button onClick={() => handleMarkAvailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #86EFAC', background: '#F0FDF4', color: '#15803D', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
-            {isLoading ? '…' : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle size={11} /> Restore</span>}
+            {isLoading ? '...' : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle size={11} /> Restore</span>}
           </button>
         </div>
       );
@@ -3713,10 +3956,9 @@ const MySlotsView: React.FC<{
       <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ padding: '10px 6px', borderRadius: 100, background: '#fff', border: '1.5px solid #A5F3FC', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>{label}</span>
-          {isCustom && <span style={{ fontSize: 8, fontWeight: 800, color: '#10B981', background: '#D1FAE5', borderRadius: 4, padding: '1px 5px' }}>CUSTOM</span>}
         </div>
         <button onClick={() => handleMarkUnavailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #FBBF24', background: '#FFFBEB', color: '#92400E', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
-          {isLoading ? '…' : 'Block'}
+          {isLoading ? '...' : 'Block'}
         </button>
       </div>
     );
@@ -3774,7 +4016,7 @@ const MySlotsView: React.FC<{
 
             {/* ── Step 1: Date Selection ── */}
             <div style={{ padding: '20px 24px', borderBottom: '1px solid #F1F5F9' }}>
-              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 — Select Date</p>
+              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 - Select Date</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#A5F3FC'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#0F766E', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ArrowLeft size={16} /></button>
                 <div style={{ display: 'flex', gap: 6, flex: 1 }}>
@@ -3825,7 +4067,7 @@ const MySlotsView: React.FC<{
                     <div style={{ fontSize: 11, color: '#64748B' }}>
                       {isSelectedDateSpecial
                         ? 'Users can request a booking for this date. All regular slots are suspended.'
-                        : 'Mark this date as a Special Day — users can request bookings and you confirm the time directly.'}
+                        : 'Mark this date as a Special Day - users can request bookings and you confirm the time directly.'}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -3839,7 +4081,7 @@ const MySlotsView: React.FC<{
                           disabled={unpublishingSpecial}
                           style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid #FECACA', background: '#fff', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: unpublishingSpecial ? 0.6 : 1 }}
                         >
-                          {unpublishingSpecial ? '…' : 'Unpublish'}
+                          {unpublishingSpecial ? '...' : 'Unpublish'}
                         </button>
                       </>
                     ) : (
@@ -3849,7 +4091,7 @@ const MySlotsView: React.FC<{
                         style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: publishingSpecial ? '#E2E8F0' : 'linear-gradient(135deg,#D97706,#B45309)', color: publishingSpecial ? '#94A3B8' : '#fff', fontSize: 13, fontWeight: 700, cursor: publishingSpecial ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                       >
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
-                        {publishingSpecial ? 'Publishing…' : 'Publish as Special Day'}
+                        {publishingSpecial ? 'Publishing...' : 'Publish as Special Day'}
                       </button>
                     )}
                   </div>
@@ -3859,7 +4101,7 @@ const MySlotsView: React.FC<{
 
             {/* ── Step 2: Time Slots ── */}
             <div style={{ padding: '20px 24px' }}>
-              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 — Select Time</p>
+              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 - Select Time</p>
               {isSelectedDateSpecial ? (
                 /* ── Special day: all slots suspended, show requests panel ── */
                 <div>
@@ -3915,7 +4157,7 @@ const MySlotsView: React.FC<{
                                       </div>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                         <span style={{ fontSize: 12, background: '#fff', color: '#166534', border: '1px solid #86EFAC', borderRadius: 8, padding: '4px 12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                                          📅 {meta.scheduledDate || booking.scheduledDate || '—'}
+                                          📅 {meta.scheduledDate || booking.scheduledDate || '-'}
                                         </span>
                                         {(meta.scheduledTimeRange || booking.scheduledTimeRange || booking.scheduledTime) && (
                                           <span style={{ fontSize: 12, background: '#fff', color: '#0F766E', border: '1px solid #A5F3FC', borderRadius: 8, padding: '4px 12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -3993,27 +4235,98 @@ const MySlotsView: React.FC<{
                 <div style={{ textAlign: 'center', padding: '30px 20px', color: '#94A3B8', fontSize: 13 }}>No slots for this date.</div>
               ) : (
                 <>
-                  <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                    {[{ label: 'Available', bg: '#fff', border: '#A5F3FC' }, { label: 'Booked', bg: '#0F766E', border: '#0D9488' }, { label: 'Unavailable', bg: '#FEE2E2', border: '#FCA5A5' }].map(l => (
-                      <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
-                        <span style={{ fontSize: 11, color: '#64748B' }}>{l.label}</span>
-                      </div>
-                    ))}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      {[{ label: 'Available', bg: '#fff', border: '#A5F3FC' }, { label: 'Booked', bg: '#0F766E', border: '#0D9488' }, { label: 'Unavailable', bg: '#FEE2E2', border: '#FCA5A5' }].map(l => (
+                        <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ width: 13, height: 13, borderRadius: 3, background: l.bg, border: `1.5px solid ${l.border}` }} />
+                          <span style={{ fontSize: 11, color: '#64748B' }}>{l.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => {
+                          const allAvailable = allSlotTimes.filter(t => !bookedSlotSet.has(`${activeDateKey}|${t}`) && !bookedByClientSet.has(`${activeDateKey}|${t}`));
+                          if (selectedSlots.size === allAvailable.length) {
+                            setSelectedSlots(new Set());
+                          } else {
+                            setSelectedSlots(new Set(allAvailable.map(t => `${activeDateKey}|${t}`)));
+                          }
+                        }}
+                        style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        {selectedSlots.size > 0 ? `Deselect All (${selectedSlots.size})` : 'Select All'}
+                      </button>
+                      {selectedSlots.size > 0 && (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button
+                            onClick={() => handleBulkStatusChange('AVAILABLE')}
+                            disabled={selectedUnavailableCount === 0}
+                            style={{
+                              padding: '6px 12px',
+                              borderRadius: 8,
+                              border: 'none',
+                              background: selectedUnavailableCount === 0 ? '#E2E8F0' : '#16A34A',
+                              color: selectedUnavailableCount === 0 ? '#94A3B8' : '#fff',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: selectedUnavailableCount === 0 ? 'default' : 'pointer'
+                            }}
+                          >
+                            Make Available
+                          </button>
+                          <button
+                            onClick={() => handleBulkStatusChange('UNAVAILABLE')}
+                            disabled={selectedAvailableCount === 0}
+                            style={{
+                              padding: '6px 12px',
+                              borderRadius: 8,
+                              border: 'none',
+                              background: selectedAvailableCount === 0 ? '#E2E8F0' : '#DC2626',
+                              color: selectedAvailableCount === 0 ? '#94A3B8' : '#fff',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: selectedAvailableCount === 0 ? 'default' : 'pointer'
+                            }}
+                          >
+                            Block All
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                    {allSlotTimes.map(slotStart => renderSlotButton(activeDateKey, slotStart))}
+                    {allSlotTimes.map(slotStart => {
+                      const key = `${activeDateKey}|${slotStart}`;
+                      const isSelectable = !bookedSlotSet.has(key) && !bookedByClientSet.has(key);
+                      return (
+                        <div key={key} style={{ position: 'relative' }}>
+                          {isSelectable && (
+                            <input
+                              type="checkbox"
+                              checked={selectedSlots.has(key)}
+                              onChange={(e) => {
+                                const next = new Set(selectedSlots);
+                                if (e.target.checked) next.add(key);
+                                else next.delete(key);
+                                setSelectedSlots(next);
+                              }}
+                              style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, width: 16, height: 16, cursor: 'pointer', accentColor: '#0F766E' }}
+                            />
+                          )}
+                          {renderSlotButton(activeDateKey, slotStart)}
+                        </div>
+                      );
+                    })}
                   </div>
                 </>
               )}
             </div>
           </div>
-
-
         </>
       )}
 
-      {/* Material time picker for scheduling */}
       <MaterialTimePicker
         isOpen={schedTimePicker.open}
         initialTime={schedTimePicker.value}
@@ -4052,59 +4365,75 @@ const ratingLabel = (r: number) => ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Ex
 
 const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterRating, setFilterRating] = useState<number>(0);
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'BOOKING' | 'TICKET'>('ALL');
 
   const loadFeedbacks = async () => {
     setLoading(true); setError(null);
     try {
-      const data = await apiFetch(`/feedbacks/consultant/${consultantId}`);
-      const arr = extractArray(data);
-      if (arr.length === 0) { setFeedbacks([]); return; }
+      const [fData, tData] = await Promise.all([
+        apiFetch(`/feedbacks/consultant/${consultantId}`),
+        getTicketsByConsultant(consultantId)
+      ]);
+      const sessionArr = extractArray(fData);
+      const ticketArr = extractArray(tData);
+
       let bookingMap: Record<number, { clientName: string; slotDate: string; timeRange: string }> = {};
       try {
         const bData = await apiFetch(`/bookings/consultant/${consultantId}`);
         const bArr = extractArray(bData);
-        bArr.forEach((b: any) => { bookingMap[b.id] = { clientName: deepFindClientName(b), slotDate: deepFindDate(b), timeRange: deepFindTime(b) }; });
+        bArr.forEach((b: any) => {
+          bookingMap[b.id] = { clientName: deepFindClientName(b), slotDate: deepFindDate(b), timeRange: deepFindTime(b) };
+        });
       } catch { }
-      const enriched: FeedbackItem[] = await Promise.all(arr.map(async (f: any) => {
+
+      const enrichedSessions: FeedbackItem[] = await Promise.all(sessionArr.map(async (f: any) => {
         const ctx = f.bookingId ? bookingMap[f.bookingId] : undefined;
         let clientName = '';
-
-        const directReal = formatDisplayName(
-          (f as any).user?.name ||
-          (f as any).user?.fullName ||
-          (f as any).user?.displayName ||
-          (f as any).userName ||
-          (f as any).clientName ||
-          ''
-        );
-        if (directReal && !isPlaceholderDisplayName(directReal)) {
-          clientName = directReal;
-        }
-
-        if (!clientName && f.userId) {
-          clientName = await getUserDisplayName(Number(f.userId));
-        }
-
-        const ctxName = formatDisplayName(ctx?.clientName || '');
-        if (!clientName && ctxName && !isPlaceholderDisplayName(ctxName)) {
-          clientName = ctxName;
-        }
-
+        const namingFields = [
+          (f as any).user?.name, (f as any).user?.fullName, (f as any).user?.displayName,
+          (f as any).userName, (f as any).clientName
+        ];
+        const directName = namingFields.find(n => n && !isPlaceholderDisplayName(formatDisplayName(n)));
+        if (directName) clientName = formatDisplayName(directName);
+        if (!clientName && f.userId) clientName = await getUserDisplayName(Number(f.userId));
+        if (!clientName && ctx?.clientName) clientName = formatDisplayName(ctx.clientName);
         if (!clientName) clientName = 'Client';
 
         return {
           ...f,
+          category: 'BOOKING',
           rating: Number(f.rating || 0),
           clientName,
           slotDate: ctx?.slotDate || f.createdAt?.split('T')[0] || '',
           timeRange: ctx?.timeRange || '',
         };
       }));
-      enriched.sort((a, b) => b.id - a.id);
-      setFeedbacks(enriched);
+
+      const ticketFeedbacks: FeedbackItem[] = ticketArr
+        .filter((t: any) => t.feedbackRating && t.feedbackRating > 0)
+        .map((t: any) => ({
+          id: t.id + 1000000,
+          rating: Number(t.feedbackRating || 0),
+          comments: t.feedbackText,
+          ticketId: t.id,
+          category: 'TICKET',
+          clientName: formatDisplayName(t.user?.name || t.user?.fullName || t.clientName || t.userName || 'Client'),
+          slotDate: t.updatedAt?.split('T')[0] || t.createdAt?.split('T')[0] || '',
+          timeRange: '',
+          createdAt: t.createdAt
+        }));
+
+      const combined = [...enrichedSessions, ...ticketFeedbacks];
+      combined.sort((a, b) => {
+        const dateA = a.createdAt || a.slotDate || '';
+        const dateB = b.createdAt || b.slotDate || '';
+        return dateB.localeCompare(dateA);
+      });
+      setFeedbacks(combined);
     } catch (e: any) {
       setError(e?.message || 'Failed to load feedbacks.');
     } finally { setLoading(false); }
@@ -4112,8 +4441,13 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
 
   useEffect(() => { if (consultantId) loadFeedbacks(); }, [consultantId]);
 
-  const displayed = filterRating === 0 ? feedbacks : feedbacks.filter(f => Math.round(f.rating) === filterRating);
-  const avgRating = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '—';
+  const displayed = feedbacks.filter(f => {
+    const matchesRating = filterRating === 0 || Math.round(f.rating) === filterRating;
+    const matchesType = typeFilter === 'ALL' || f.category === typeFilter;
+    return matchesRating && matchesType;
+  });
+
+  const avgRating = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '-';
   const ratingCounts = [5, 4, 3, 2, 1].map(r => ({ r, count: feedbacks.filter(f => Math.round(f.rating) === r).length }));
 
   return (
@@ -4148,12 +4482,24 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
         </div>
       )}
       {feedbacks.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-          {[0, 5, 4, 3, 2, 1].map(r => (
-            <button key={r} onClick={() => setFilterRating(r)} style={{ padding: '6px 16px', borderRadius: 20, border: '1.5px solid', borderColor: filterRating === r ? '#0F766E' : '#E2E8F0', background: filterRating === r ? '#0F766E' : '#fff', color: filterRating === r ? '#fff' : '#64748B', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-              {r === 0 ? `All (${feedbacks.length})` : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{r}<Star size={12} fill="currentColor" stroke="none" /> ({ratingCounts.find(x => x.r === r)?.count || 0})</span>}
-            </button>
-          ))}
+        <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[0, 5, 4, 3, 2, 1].map(r => (
+              <button key={r} onClick={() => setFilterRating(r)} style={{ padding: '6px 12px', borderRadius: 20, border: '1.5px solid', borderColor: filterRating === r ? '#0F766E' : '#E2E8F0', background: filterRating === r ? '#0F766E' : '#fff', color: filterRating === r ? '#fff' : '#64748B', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                {r === 0 ? `All (${feedbacks.length})` : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{r}<Star size={11} fill="currentColor" stroke="none" /></span>}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, height: 20, background: '#E2E8F0' }} />
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as any)}
+            style={{ padding: '6px 12px', borderRadius: 10, border: '1.5px solid #CFFAFE', fontSize: 12, fontWeight: 600, color: '#0F766E', outline: 'none', background: '#fff', cursor: 'pointer' }}
+          >
+            <option value="ALL">Overall Feedback</option>
+            <option value="BOOKING">Booking Reviews</option>
+            <option value="TICKET">Ticket Reviews</option>
+          </select>
         </div>
       )}
       {error && <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px', color: '#B91C1C', fontSize: 13, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} /> {error}</div>}
@@ -4164,7 +4510,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
       ) : displayed.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 20px', background: '#F8FAFC', borderRadius: 16, color: '#94A3B8' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}><Star size={40} color="#CBD5E1" strokeWidth={1.8} /></div>
-          <p style={{ margin: 0, fontWeight: 600 }}>{feedbacks.length === 0 ? 'No feedbacks yet.' : `No ${filterRating}-star reviews.`}</p>
+          <p style={{ margin: 0, fontWeight: 600 }}>{feedbacks.length === 0 ? 'No feedbacks yet.' : `No ${filterRating}-star ${typeFilter !== 'ALL' ? typeFilter.toLowerCase() : ''} reviews.`}</p>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -4175,12 +4521,18 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
                   {(fb.clientName || 'A').charAt(0).toUpperCase()}
                 </div>
                 <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>{fb.clientName}</span>
                     <StarDisplay rating={Math.round(fb.rating)} size={15} />
                     <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: fb.rating >= 4 ? '#F0FDF4' : fb.rating >= 3 ? '#FFFBEB' : '#FEF2F2', color: fb.rating >= 4 ? '#16A34A' : fb.rating >= 3 ? '#D97706' : '#EF4444' }}>
                       {ratingLabel(Math.round(fb.rating))}
                     </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 6, background: fb.category === 'TICKET' ? '#FEF2F2' : '#ECFEFF', color: fb.category === 'TICKET' ? '#B91C1C' : '#0F766E', border: '1px solid currentColor', letterSpacing: '0.04em' }}>
+                      {fb.category === 'TICKET' ? 'TICKET FEEDBACK' : 'SESSION REVIEW'}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700 }}>#{fb.ticketId || fb.bookingId}</span>
                   </div>
                   {(fb.slotDate || fb.timeRange) && (
                     <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -4200,15 +4552,17 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
             </div>
           ))}
         </div>
-      )}
+      )
+      }
     </div>
   );
 };
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PROFILE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }> = ({ profile, onUpdate }) => {
+  const profileRating = useMemo(() => profile?.rating || 0, [profile]);
+
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<any>({});
   const [saving, setSaving] = useState(false);
@@ -4216,7 +4570,46 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [saveToast, setSaveToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [formError, setFormError] = useState<string>('');
-  const [timePickerConfig, setTimePickerConfig] = useState<{ isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string }>({ isOpen: false, field: null, value: '' });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [newSkill, setNewSkill] = useState("");
+  const [skillOptions, setSkillOptions] = useState<string[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [timePickerConfig, setTimePickerConfig] = useState<{ isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string; durationHours?: number }>({ isOpen: false, field: null, value: '', durationHours: 1 });
+
+  useEffect(() => {
+    let active = true;
+    setSkillsLoading(true);
+    getAllSkills()
+      .then((items: any[]) => {
+        if (!active) return;
+        const names = Array.from(new Set(
+          (Array.isArray(items) ? items : [])
+            .map((s: any) => String(s?.skillName || s?.name || s?.title || "").trim())
+            .filter(Boolean)
+        )).sort((a, b) => a.localeCompare(b));
+        setSkillOptions(names);
+      })
+      .catch(() => {
+        if (active) setSkillOptions([]);
+      })
+      .finally(() => {
+        if (active) setSkillsLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const validateForm = () => {
+    const errors: Record<string, string> = {};
+    if (!formData.name?.trim()) errors.name = "Name is required.";
+    if (!formData.email?.trim() || !/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/.test(formData.email)) errors.email = "Valid email is required.";
+    const expRaw = Number(formData.experience);
+    if (!Number.isFinite(expRaw) || expRaw <= 0 || !Number.isInteger(expRaw)) {
+      errors.experience = "Experience must be a whole number greater than 0.";
+    }
+    if (Number(formData.charges) <= 0) errors.charges = "Charges must be greater than 0.";
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // ── 1-month session duration lock ────────────────────────────────────────────
@@ -4234,7 +4627,6 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     const base = parseFloat(p.charges || '0');
     setFormData({
       name: p.name || '',
-      designation: p.designation || '',
       charges: p.charges || '',
       displayPrice: p.displayPrice ? String(p.displayPrice) : String(base + 200),
       shiftStart: trimTime(p.shiftStartTime || p.shift_start_time),
@@ -4271,8 +4663,8 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
 
   const handleSave = async () => {
     if (!profile) return;
+    if (!validateForm()) { setFormError('Please fix the highlighted profile fields.'); return; }
     if (!formData.name?.trim()) { setFormError('Name required.'); return; }
-    if (!formData.designation?.trim()) { setFormError('Designation required.'); return; }
     if (!formData.charges) { setFormError('Fee required.'); return; }
     if (!formData.shiftStart) { setFormError('Shift start required.'); return; }
     if (!formData.shiftEnd) { setFormError('Shift end required.'); return; }
@@ -4281,9 +4673,10 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     try {
       const skillsList: string[] = typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : (formData.skills || []);
       const toLocalTime = (t: string) => t.length === 5 ? `${t}:00` : t;
+      const experienceYears = Number.parseInt(String(formData.experience || ''), 10);
       await updateAdvisor(profile.id, {
         name: formData.name.trim(),
-        designation: formData.designation.trim(),
+        designation: profile.designation || '',
         charges: parseFloat(formData.charges) || 0,
         displayPrice: formData.displayPrice ? parseFloat(formData.displayPrice) : (parseFloat(formData.charges) || 0) + 200,
         email: profile.email,
@@ -4293,7 +4686,9 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         shiftStartTime: toLocalTime(formData.shiftStart),
         shiftEndTime: toLocalTime(formData.shiftEnd),
         slotsDuration: durationHoursToMinutes(formData.durationHours, 1),
-        yearsOfExperience: parseFloat(formData.experience) || (profile as any).yearsOfExperience || profile.experience || 0,
+        yearsOfExperience: Number.isFinite(experienceYears) && experienceYears > 0
+          ? experienceYears
+          : ((profile as any).yearsOfExperience || profile.experience || 0),
       }, photoFile ?? undefined);
       await onUpdate();
       // Set 1-month session duration lock after any save
@@ -4343,7 +4738,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         ) : (
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => { setIsEditing(false); setFormError(''); }} disabled={saving} style={{ padding: '8px 16px', background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0', borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={handleSave} disabled={saving} style={{ padding: '8px 16px', background: 'var(--color-primary-gradient)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 10px 24px rgba(15,118,110,0.18)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{saving ? 'Saving…' : <><CheckCircle size={13} /> Save</>}</button>
+            <button onClick={handleSave} disabled={saving} style={{ padding: '8px 16px', background: 'var(--color-primary-gradient)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 10px 24px rgba(15,118,110,0.18)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{saving ? 'Saving...' : <><CheckCircle size={13} /> Save</>}</button>
           </div>
         )}
       </div>
@@ -4359,10 +4754,9 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 4 }}>{profile.name}</div>
-                <div style={{ fontSize: 14, color: '#CCFBF1', marginBottom: 6 }}>{profile.designation}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profile.rating || 0) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>)}
-                  {profile.rating ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{Number(profile.rating).toFixed(1)}</span> : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>}
+                  {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profileRating) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>)}
+                  {profileRating ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{(profileRating).toFixed(1)} <span style={{ fontSize: 10, fontWeight: 500, color: '#CCFBF1', marginLeft: 4 }}>(Read-only)</span></span> : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>}
                 </div>
               </div>
               <div style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.10))', border: '1px solid rgba(255,255,255,0.28)', borderRadius: 16, padding: '14px 20px', textAlign: 'center', boxShadow: '0 12px 28px rgba(15,23,42,0.18)' }}>
@@ -4397,7 +4791,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
           </div>
         </div>
       ) : (
-        <div style={{ background: '#fff', borderRadius: 20, border: '1px solid #CFFAFE', padding: 28, boxShadow: '0 18px 48px rgba(15,23,42,0.06)' }}>
+        <><div style={{ background: '#fff', borderRadius: 20, border: '1px solid #CFFAFE', padding: 28, boxShadow: '0 18px 48px rgba(15,23,42,0.06)' }}>
           <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 20, padding: '16px 18px', borderRadius: 18, background: 'linear-gradient(135deg,#F0FDFA 0%,#ECFEFF 100%)', border: '1px solid #A5F3FC' }}>
             <div onClick={() => fileInputRef.current?.click()} style={{ width: 104, height: 104, borderRadius: '50%', flexShrink: 0, cursor: 'pointer', background: photoPreview ? 'transparent' : 'var(--portal-profile-gradient)', border: '3px solid #CFFAFE', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               {photoPreview ? <img src={photoPreview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={() => setPhotoPreview('')} /> : <span style={{ fontSize: 32, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>}
@@ -4412,82 +4806,213 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               {photoFile && <span style={{ marginLeft: 10, fontSize: 12, color: '#16A34A', fontWeight: 600 }}>{photoFile.name}</span>}
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 16, marginBottom: 24 }}>
-            <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Name *</label><input name="name" value={formData.name || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
-            <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Designation *</label><input name="designation" value={formData.designation || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Fee (₹) *</label>
-              <input name="charges" type="number" value={formData.charges || ''} onChange={e => { handleChange(e); const base = parseFloat(e.target.value) || 0; setFormData((prev: any) => ({ ...prev, charges: e.target.value, displayPrice: String(base + 200) })); }} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
-              {formData.charges && <div style={{ marginTop: 4, fontSize: 11, color: '#16A34A', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}><CheckCircle size={12} /> Customer sees: ₹{(parseFloat(formData.charges || '0') + 200).toLocaleString("en-IN")}</div>}
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Full Name *</label>
+            <input name="name" value={formData.name || ''} onChange={e => { const val = e.target.value; if (val.length === 1 && /[^a-zA-Z]/.test(val)) return; handleChange({ ...e, target: { ...e.target, value: val } } as any); }} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.name ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
+            {fieldErrors.name && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.name}</div>}
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Email Address *</label>
+            <input
+              name="email"
+              value={formData.email || ''}
+              readOnly
+              disabled
+              style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.email ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none', background: '#F8FAFC', color: '#64748B', cursor: 'not-allowed' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 10, color: '#94A3B8', fontWeight: 600 }}>
+              Email updates are locked to protect existing bookings and communication history.
             </div>
-            <div><label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Rating (0-5)</label><input name="rating" type="number" step="0.1" min="0" max="5" value={formData.rating || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} /></div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability Start *</label>
-              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart })} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}>
-                <span>{displayTime(formData.shiftStart)}</span>
-              </div>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                Session Duration *
-                {isSessionDurationLocked && (
-                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#92400E', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px' }}>
-                    🔒 Locked until {durationLockedUntilLabel}
-                  </span>
-                )}
-              </label>
-              {isSessionDurationLocked ? (
-                <div style={{ padding: '10px 14px', borderRadius: 8, background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 13, color: '#92400E', fontWeight: 700 }}>
-                  {formData.durationHours} hr — Session duration is locked for 1 month after each change to ensure booking consistency.
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-                  {[1, 2, 3].map(hours => {
-                    const active = Number(formData.durationHours || 1) === hours;
-                    return (
-                      <button
-                        type="button"
-                        key={hours}
-                        onClick={() => setFormData((prev: any) => ({ ...prev, durationHours: hours }))}
-                        style={{
-                          padding: '9px 10px',
-                          borderRadius: 8,
-                          border: `1.5px solid ${active ? '#0F766E' : '#CBD5E1'}`,
-                          background: active ? '#ECFEFF' : '#fff',
-                          color: active ? '#0F766E' : '#334155',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {hours} hr
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability End *</label>
-              <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftEnd', value: formData.shiftEnd })} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftEnd ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftEnd ? '#0F172A' : '#94A3B8' }}>
-                <span>{displayTime(formData.shiftEnd)}</span>
-              </div>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Experience (years)</label>
-              <input type="number" min="0" value={formData.experience ?? ''} onChange={e => setFormData((p: any) => ({ ...p, experience: e.target.value }))} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} placeholder="e.g. 5" />
-            </div>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Skills (comma separated)</label>
-              <input name="skills" value={formData.skills || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
-            </div>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Description</label>
-              <textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', outline: 'none' }} />
+            {fieldErrors.email && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.email}</div>}
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Fee (₹) *</label>
+            <input name="charges" type="number" value={formData.charges || ''} onChange={e => { handleChange(e); const base = parseFloat(e.target.value) || 0; setFormData((prev: any) => ({ ...prev, charges: e.target.value, displayPrice: String(base + 200) })); if (fieldErrors.charges) setFieldErrors({ ...fieldErrors, charges: '' }); }} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.charges ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
+            {fieldErrors.charges && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.charges}</div>}
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Rating</label>
+            <div style={{ width: '100%', padding: '8px 12px', background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: 8, fontSize: 13, boxSizing: 'border-box', color: '#94A3B8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Star size={13} fill="#CBD5E1" stroke="none" /> {profileRating.toFixed(1)} <span style={{ fontSize: 10, fontWeight: 500, fontStyle: 'italic' }}>(Read-only)</span>
             </div>
           </div>
-          <MaterialTimePicker isOpen={timePickerConfig.isOpen} initialTime={timePickerConfig.value} onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })} onSave={t => { if (timePickerConfig.field) { setFormData({ ...formData, [timePickerConfig.field]: t }); setFormError(''); } setTimePickerConfig({ ...timePickerConfig, isOpen: false }); }} />
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability Start *</label>
+            <div
+              onClick={() => {
+                if (saving) return;
+                // Parse current shiftStart HH:MM into an hour24 for the picker
+                const curHour = formData.shiftStart ? parseInt(formData.shiftStart.split(':')[0], 10) : 9;
+                setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart, durationHours: Number(formData.durationHours) || 1 });
+              }}
+              style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}
+            >
+              <span>{formData.shiftStart ? (() => {
+                // Show as "Start - End" range based on current duration
+                const [h, m] = formData.shiftStart.split(':').map(Number);
+                const dur = Number(formData.durationHours) || 1;
+                const endH = h + dur;
+                const fmt = (hour: number, min: number) => {
+                  const h12 = hour % 12 || 12;
+                  const ampm = hour >= 12 ? 'PM' : 'AM';
+                  return `${h12}:${String(min).padStart(2, '0')} ${ampm}`;
+                };
+                return `${fmt(h, m)} - ${fmt(endH, m)}`;
+              })() : `Pick availability slot`}</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748B" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
+            </div>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+              Session Duration *
+              {isSessionDurationLocked && (
+                <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#92400E', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 6, padding: '2px 7px' }}>
+                  🔒 Locked until {durationLockedUntilLabel}
+                </span>
+              )}
+            </label>
+            {isSessionDurationLocked ? (
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 13, color: '#92400E', fontWeight: 700 }}>
+                {formData.durationHours} hr - Session duration is locked for 1 month after each change to ensure booking consistency.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                {[1, 2, 3].map(hours => {
+                  const active = Number(formData.durationHours || 1) === hours;
+                  return (
+                    <button
+                      type="button"
+                      key={hours}
+                      onClick={() => setFormData((prev: any) => ({ ...prev, durationHours: hours }))}
+                      style={{
+                        padding: '9px 10px',
+                        borderRadius: 8,
+                        border: `1.5px solid ${active ? '#0F766E' : '#CBD5E1'}`,
+                        background: active ? '#ECFEFF' : '#fff',
+                        color: active ? '#0F766E' : '#334155',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {hours} hr
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Experience (years) *</label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              value={formData.experience ?? ''}
+              onChange={e => {
+                const digitsOnly = e.target.value.replace(/\D/g, '');
+                setFormData((p: any) => ({ ...p, experience: digitsOnly }));
+                if (fieldErrors.experience) setFieldErrors({ ...fieldErrors, experience: '' });
+              }}
+              style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.experience ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }}
+              placeholder="e.g. 5"
+            />
+            {fieldErrors.experience && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.experience}</div>}
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Skills</label>
+            <div style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: 14, padding: '16px 18px', marginBottom: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px 16px', maxHeight: 200, overflowY: 'auto', paddingRight: 8 }}>
+                {skillOptions.map(skill => {
+                  const currentSkills = Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
+                  const isChecked = currentSkills.includes(skill);
+                  return (
+                    <label key={skill} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '4px 0' }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={e => {
+                          const next = e.target.checked ? [...currentSkills, skill] : currentSkills.filter((s: string) => s !== skill);
+                          setFormData({ ...formData, skills: next });
+                        }}
+                        style={{ width: 15, height: 15, accentColor: '#0F766E' }} />
+                      <span style={{ fontSize: 12, color: '#334155', fontWeight: 500 }}>{skill}</span>
+                    </label>
+                  );
+                })}
+                {!skillsLoading && skillOptions.length === 0 && (
+                  <div style={{ gridColumn: '1 / -1', fontSize: 12, color: '#94A3B8' }}>
+                    No skills configured in Skills & Questions yet.
+                  </div>
+                )}
+              </div>
+              <div style={{ height: 1, background: '#E2E8F0', margin: '14px 0' }} />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <input
+                  type="text"
+                  placeholder="Add a custom skill..."
+                  value={newSkill}
+                  onChange={e => setNewSkill(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const val = newSkill.trim();
+                      if (val) {
+                        const current = Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
+                        if (!current.includes(val)) setFormData({ ...formData, skills: [...current, val] });
+                        setNewSkill("");
+                      }
+                    }
+                  }}
+                  style={{ flex: 1, padding: '8px 14px', borderRadius: 10, border: '1.5px solid #CFFAFE', fontSize: 13, outline: 'none' }} />
+                <button type="button" onClick={() => {
+                  const val = newSkill.trim();
+                  if (val) {
+                    const current = Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
+                    if (!current.includes(val)) setFormData({ ...formData, skills: [...current, val] });
+                    setNewSkill("");
+                  }
+                }} style={{ padding: '8px 16px', borderRadius: 10, background: '#0F766E', color: '#fff', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Add</button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {(Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : [])).map((skill: string) => (
+                <span key={skill} style={{ padding: '4px 12px', background: '#ECFEFF', border: '1px solid #A5F3FC', color: '#0F766E', borderRadius: 999, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {skill}
+                  <X size={10} strokeWidth={3} style={{ cursor: 'pointer' }} onClick={() => {
+                    const current = Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
+                    setFormData({ ...formData, skills: current.filter((s: string) => s !== skill) });
+                  }} />
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Description</label>
+            <textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', outline: 'none' }} />
+          </div>
         </div>
+          <ProfileHourRangeClockPicker
+            isOpen={timePickerConfig.isOpen}
+            initialHour={timePickerConfig.value ? parseInt(timePickerConfig.value.split(':')[0], 10) : null}
+            initialDuration={timePickerConfig.durationHours ?? Number(formData.durationHours) ?? 1}
+            onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })}
+            onSave={(startHour24, durHours) => {
+              const hh = String(startHour24).padStart(2, '0');
+              const endH = startHour24 + durHours;
+              const ehh = String(endH).padStart(2, '0');
+              setFormData((prev: any) => ({
+                ...prev,
+                shiftStart: `${hh}:00`,
+                shiftEnd: `${ehh}:00`,
+                durationHours: durHours,
+              }));
+              setFormError('');
+              setTimePickerConfig({ ...timePickerConfig, isOpen: false });
+            }}
+          />
+        </>
       )}
     </div>
   );
@@ -4519,6 +5044,65 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   const [toast, setToast] = React.useState<{ msg: string; ok: boolean } | null>(null);
   const [form, setForm] = React.useState<ConsultantOffer>({ title: '', description: '', discount: '', validFrom: '', validTo: '', isActive: true });
   const [showForm, setShowForm] = React.useState(false);
+  const [offerError, setOfferError] = React.useState<string | null>(null);
+  const todayIso = React.useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const validateOfferForm = () => {
+    const title = form.title.trim();
+    if (!title) return "Title is required.";
+    if (!/^[A-Za-z\s]+$/.test(title)) {
+      return "Title can contain letters and spaces only.";
+    }
+    if (!form.discount.trim()) return "Discount label is required.";
+
+    const d = form.discount.trim();
+    const compact = d.replace(/\s+/g, "");
+    const isPercentPattern = /^\d+(\.\d+)?%$/.test(compact);
+    const isFlatAmountPattern = /^\d+(\.\d+)?$/.test(compact);
+
+    if (!isPercentPattern && !isFlatAmountPattern) {
+      return "Discount label must be a percentage (e.g., 20%) or a flat amount (e.g., 500).";
+    }
+
+    const isPercent = compact.endsWith('%');
+    const numericMatch = compact.match(/\d+(\.\d+)?/);
+    const val = numericMatch ? parseFloat(numericMatch[0]) : NaN;
+
+    if (!isNaN(val) && isPercent) {
+      if (val > 100) return "Percentage discount cannot exceed 100%.";
+      if (val < 0) return "Discount cannot be negative.";
+    } else if (!isNaN(val)) {
+      if (val > 100000) return "Flat discount cannot exceed ₹1,00,000.";
+      if (val < 0) return "Discount cannot be negative.";
+    } else if (d.length < 3) {
+      return "Discount label must be at least 3 characters.";
+    }
+
+    const parseDateOnly = (value: string): Date | null => {
+      if (!value) return null;
+      const parsed = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return null;
+      parsed.setHours(0, 0, 0, 0);
+      return parsed;
+    };
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const validFromDate = parseDateOnly(form.validFrom);
+    const validToDate = parseDateOnly(form.validTo);
+
+    if (form.validFrom && !validFromDate) return "Valid From date is invalid.";
+    if (form.validTo && !validToDate) return "Valid Until date is invalid.";
+    if (validFromDate && validFromDate < today) return "Valid From cannot be in the past.";
+    if (validToDate && validToDate < today) return "Valid Until cannot be in the past.";
+    if (validFromDate && validToDate && validToDate < validFromDate) {
+      return "Valid Until must be same as or after Valid From.";
+    }
+
+    return null;
+  };
 
   const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 2500); };
 
@@ -4585,56 +5169,36 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   };
 
   const handleSave = async () => {
-    if (!form.title.trim()) { showToast('Title is required.', false); return; }
+    const err = validateOfferForm();
+    if (err) { setOfferError(err); return; }
+    setOfferError(null);
     setSaving(true);
 
-    const fmtDate = (d: string) => d ? d : undefined;
-    const fmtDatetime = (d: string) => d ? `${d}T00:00:00` : undefined;
+    const isEdit = Boolean(editing?.id);
+    const endpoint = isEdit ? `/offers/${editing!.id}` : `/offers`;
 
-    const buildPayload = (useDatetime: boolean, includeConsultantId: boolean) => {
-      const p: Record<string, any> = {
-        title: form.title.trim(),
-        description: form.description?.trim() || '',
-        discount: form.discount?.trim() || '',
-        isActive: Boolean(form.isActive),
-        active: Boolean(form.isActive), // backend alias
-      };
-      if (includeConsultantId) p.consultantId = consultantId;
-      const fmt = useDatetime ? fmtDatetime : fmtDate;
-      const vf = fmt(form.validFrom);
-      const vt = fmt(form.validTo);
-      if (vf) p.validFrom = vf;
-      if (vt) p.validTo = vt;
-      return p;
+    const payload: Record<string, any> = {
+      title: form.title.trim(),
+      description: form.description?.trim() || '',
+      discount: form.discount?.trim() || '',
+      isActive: Boolean(form.isActive),
+      active: Boolean(form.isActive),
+      consultantId: consultantId
     };
 
-    const isEdit = Boolean(editing?.id);
-    const strategies = [
-      buildPayload(false, true),
-      buildPayload(true, true),
-      buildPayload(false, false),
-      buildPayload(true, false),
-      { title: form.title.trim(), description: form.description?.trim() || '', discount: form.discount?.trim() || '', isActive: Boolean(form.isActive), active: Boolean(form.isActive), consultantId },
-    ];
+    const toLocalDateTime = (dt: string) => {
+      if (!dt) return undefined;
+      return dt.length === 10 ? `${dt}T00:00:00` : dt;
+    };
+
+    const vf = toLocalDateTime(form.validFrom);
+    const vt = toLocalDateTime(form.validTo);
+    if (vf) payload.validFrom = vf;
+    if (vt) payload.validTo = vt;
 
     let savedOffer: any = null;
-    let lastError = '';
-    for (let i = 0; i < strategies.length; i++) {
-      const noIdInBody = i === 2 || i === 3;
-      const endpoint = isEdit
-        ? `/offers/${editing!.id}${noIdInBody ? `?consultantId=${consultantId}` : ''}`
-        : `/offers${noIdInBody ? `?consultantId=${consultantId}` : ''}`;
-      try {
-        savedOffer = await apiFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(strategies[i]) });
-        break;
-      } catch (e: any) {
-        lastError = e?.message || 'Failed';
-        if (!lastError.includes('500') && !lastError.includes('deserializ') && !lastError.includes('parse')) break;
-      }
-    }
-
     try {
-      if (savedOffer == null) throw new Error(lastError || 'Failed to save offer');
+      savedOffer = await apiFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(payload) });
       const normalizedSaved = normalizeOffer({ ...form, ...savedOffer });
       if (isEdit) {
         setOffers(prev => prev.map(o => o.id === editing!.id
@@ -4735,17 +5299,34 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
         <div style={{ background: '#F8FAFC', border: '1.5px solid #A5F3FC', borderRadius: 16, padding: 24, marginBottom: 24 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 18 }}>{editing ? 'Edit Offer' : 'Create New Offer'}</div>
           <div className="offers-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            {offerError && (
+              <div style={{ gridColumn: '1/-1', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 14px', color: '#B91C1C', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={14} /> {offerError}
+              </div>
+            )}
             <div style={{ gridColumn: '1/-1' }}>
               <label style={labelStyle}>Title *</label>
-              <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. First Session Free" style={inputStyle} />
+              <input
+                value={form.title}
+                onChange={e => {
+                  setForm(f => ({ ...f, title: formatTitleLikeInput(e.target.value) }));
+                  if (offerError) setOfferError(null);
+                }}
+                placeholder="e.g. First Session Free"
+                style={{ ...inputStyle, borderColor: offerError && !form.title.trim() ? '#EF4444' : '#E2E8F0' }}
+              />
             </div>
             <div style={{ gridColumn: '1/-1' }}>
               <label style={labelStyle}>Description</label>
-              <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="Describe the offer…" style={{ ...inputStyle, resize: 'none' as any }} />
+              <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="Describe the offer..." style={{ ...inputStyle, height: 80, resize: 'none' as any }} />
             </div>
             <div>
-              <label style={labelStyle}>Discount Label</label>
-              <input value={form.discount} onChange={e => setForm(f => ({ ...f, discount: e.target.value }))} placeholder="e.g. 20% OFF / FREE" style={inputStyle} />
+              <label style={labelStyle}>Discount Label *</label>
+              <input value={form.discount} onChange={e => { setForm(f => ({ ...f, discount: e.target.value })); if (offerError) setOfferError(null); }} placeholder="e.g. 20% or 500" style={{ ...inputStyle, borderColor: offerError && offerError.includes('Discount') ? '#EF4444' : '#E2E8F0' }} />
+              <div style={{ marginTop: 4, fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                <Info size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Use a value like <strong>20%</strong> or <strong>500</strong>.</span>
+              </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 22 }}>
               <input type="checkbox" id="offer-active" checked={form.isActive} onChange={e => setForm(f => ({ ...f, isActive: e.target.checked }))} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#0F766E' }} />
@@ -4753,17 +5334,29 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
             </div>
             <div>
               <label style={labelStyle}>Valid From</label>
-              <input type="date" value={form.validFrom} onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))} style={inputStyle} />
+              <input
+                type="date"
+                value={form.validFrom}
+                min={todayIso}
+                onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))}
+                style={inputStyle}
+              />
             </div>
             <div>
               <label style={labelStyle}>Valid Until</label>
-              <input type="date" value={form.validTo} onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))} style={inputStyle} />
+              <input
+                type="date"
+                value={form.validTo}
+                min={todayIso}
+                onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))}
+                style={inputStyle}
+              />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
             <button onClick={() => setShowForm(false)} style={{ padding: '9px 20px', borderRadius: 9, border: '1.5px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
             <button onClick={handleSave} disabled={saving} style={{ padding: '9px 22px', borderRadius: 9, border: 'none', background: saving ? '#99F6E4' : '#0F766E', color: '#fff', fontSize: 13, fontWeight: 700, cursor: saving ? 'default' : 'pointer' }}>
-              {saving ? 'Saving…' : editing ? 'Update Offer' : 'Create Offer'}
+              {saving ? 'Saving...' : editing ? 'Update Offer' : 'Create Offer'}
             </button>
           </div>
         </div>
@@ -4832,7 +5425,7 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
                 <div className="offers-card-actions" style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                   <button onClick={() => openEdit(offer)} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #A5F3FC', background: '#ECFEFF', color: '#0F766E', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                   <button onClick={() => offer.id && setDeleteOfferConfirmId(offer.id)} disabled={deleting === offer.id} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: deleting === offer.id ? 0.6 : 1 }}>
-                    {deleting === offer.id ? '…' : 'Delete'}
+                    {deleting === offer.id ? '...' : 'Delete'}
                   </button>
                 </div>
               </div>
@@ -5045,7 +5638,7 @@ export default function AdvisorDashboard() {
             tickets.filter((t: any) => ['NEW', 'OPEN'].includes(t.status)).forEach((t: any) => {
               const notifId = `ticket_open_${t.id}`;
               if (!existingIds.has(notifId)) {
-                newNotifs.push({ id: notifId, type: 'warning', title: `Open Ticket${t.title ? ` — ${t.title}` : ""}`, message: `"${t.title || t.description || 'Support ticket'}" is awaiting your response. Priority: ${t.priority || 'MEDIUM'}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
+                newNotifs.push({ id: notifId, type: 'warning', title: `Open Ticket${t.title ? ` - ${t.title}` : ""}`, message: `"${t.title || t.description || 'Support ticket'}" is awaiting your response. Priority: ${t.priority || 'MEDIUM'}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
               }
             });
             if (newNotifs.length > 0) {
@@ -5304,7 +5897,7 @@ export default function AdvisorDashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
                 <span style={{ fontWeight: 700, color: '#92400E', fontSize: 13 }}>
-                  {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} — please review and respond.
+                  {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} - please review and respond.
                   {ticketCounts.slaRisk > 0 && <span style={{ marginLeft: 8, color: '#DC2626' }}>{ticketCounts.slaRisk} at SLA risk</span>}
                 </span>
               </div>
@@ -5358,7 +5951,7 @@ export default function AdvisorDashboard() {
           );
         })}
 
-        {/* ── Sign Out button — mobile only ── */}
+        {/* ── Sign Out button - mobile only ── */}
         <button
           className="tab-btn tab-btn-signout"
           onClick={handleLogout}

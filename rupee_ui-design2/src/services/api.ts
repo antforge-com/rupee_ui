@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// api.ts  —  Unified service layer
+// api.ts  -  Unified service layer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import axios from "axios";
@@ -9,7 +9,7 @@ import { decryptLocal } from "./crypto";
 export const BASE_URL = API_BASE_URL;
 
 // ── IST date/time formatters (exported for use in AdminPage, AdvisorDashboard, etc.) ──
-// Backend returns timestamps WITHOUT 'Z' — append it to force UTC parsing before IST conversion
+// Backend returns timestamps WITHOUT 'Z' - append it to force UTC parsing before IST conversion
 const _istToUTC = (iso: string): Date => {
   if (!iso) return new Date(0);
   if (iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso)) return new Date(iso);
@@ -34,6 +34,7 @@ export const parseLocalTime = (t: any): string => {
 };
 
 export const TOKEN_KEY = "fin_token";
+export const SESSION_EVENT_KEY = "fin_session_event";
 export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
 export const clearToken = () => {
@@ -41,6 +42,15 @@ export const clearToken = () => {
   localStorage.removeItem("fin_role");
   localStorage.removeItem("fin_user_id");
   localStorage.removeItem("fin_consultant_id");
+  localStorage.removeItem("fin_user_name");
+  localStorage.removeItem("fin_user_email");
+  localStorage.removeItem("fin_user_phone");
+  localStorage.removeItem("fin_first_login");
+  try {
+    localStorage.setItem(SESSION_EVENT_KEY, `logout:${Date.now()}`);
+  } catch {
+    // Ignore storage errors; local sign-out should still complete.
+  }
 };
 
 // FIX: Strip Spring Security's "ROLE_" prefix at the storage layer so that
@@ -62,7 +72,7 @@ export const debugToken = () => {
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
     const val = localStorage.getItem(key) || "";
-    console.log(`   "${key}" = ${val.length > 80 ? val.substring(0, 80) + "…" : val}`);
+    console.log(`   "${key}" = ${val.length > 80 ? val.substring(0, 80) + "..." : val}`);
   }
   const token = getToken();
   if (!token) {
@@ -84,8 +94,8 @@ export const debugToken = () => {
     const exp = jwtPayload.exp ? new Date(jwtPayload.exp * 1000) : null;
     if (exp) {
       const expired = exp < new Date();
-      console.log(`   Expires: ${exp.toLocaleString()} — ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
-      if (expired) console.error("   ⚠️  Token is expired — log in again!");
+      console.log(`   Expires: ${exp.toLocaleString()} - ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
+      if (expired) console.error("   ⚠️  Token is expired - log in again!");
     }
     console.groupEnd();
     return jwtPayload;
@@ -105,7 +115,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error?.response?.status === 401) {
-      console.error("🔐 401 Unauthorized — token expired, redirecting to login");
+      console.error("🔐 401 Unauthorized - token expired, redirecting to login");
       clearToken();
       window.location.href = "/login";
     }
@@ -118,7 +128,7 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   } else {
-    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" - request will be unauthenticated`);
   }
   return config;
 });
@@ -135,7 +145,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   if (token) {
     defaultHeaders["Authorization"] = `Bearer ${token}`;
   } else {
-    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" - request will be unauthenticated`);
   }
 
   try {
@@ -144,19 +154,33 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
       headers: { ...defaultHeaders, ...((options.headers as Record<string, string>) || {}) },
     });
 
-    const contentType = res.headers.get("content-type");
-    const data: any = contentType?.includes("application/json")
-      ? await res.json()
-      : { message: await res.text() };
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    // Some endpoints return plain text but incorrectly advertise JSON. Read as text first,
+    // then parse JSON opportunistically so we don't crash on invalid JSON payloads.
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+    const looksJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+    let data: any = { message: rawText };
+    if (contentType.includes("application/json") || looksJson) {
+      try {
+        data = trimmed ? JSON.parse(trimmed) : {};
+      } catch {
+        data = { message: rawText };
+      }
+    }
 
     if (!res.ok) {
       if (res.status === 403) {
         console.error(`🚫 403 Forbidden on ${options.method || "GET"} ${endpoint}`);
         console.error("   Response body:", data);
-        console.error("   Calling debugToken() to help diagnose…");
-        debugToken();
+        if (token) {
+          console.error("   Calling debugToken() to help diagnose...");
+          debugToken();
+        } else {
+          console.warn("   No auth token was attached to this request.");
+        }
       }
-      throw new Error(data?.message || `Request failed with status ${res.status}`);
+      throw new Error(data?.message || data?.error || `Request failed with status ${res.status}`);
     }
     return data;
   } catch (err: any) {
@@ -168,27 +192,65 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
 };
 
-const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
+type PublicFetchOptions = RequestInit & {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+};
+
+const publicFetch = async (endpoint: string, options: PublicFetchOptions = {}) => {
+  const { timeoutMs, timeoutMessage, signal, ...requestOptions } = options;
   const url = `${BASE_URL}${endpoint}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...((options.headers as Record<string, string>) || {}),
-    },
-  });
-  const ct = res.headers.get("content-type");
-  const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
-  if (!res.ok) {
-    const fieldErrors = (data?.fieldErrors as Record<string, string> | undefined)
-      ? Object.entries(data.fieldErrors as Record<string, string>)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ")
-      : null;
-    throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
+  const controller = timeoutMs ? new AbortController() : null;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const forwardAbort = () => controller?.abort();
+
+  try {
+    if (controller && signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener("abort", forwardAbort, { once: true });
+      }
+    }
+
+    if (controller && timeoutMs && timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
+    const res = await fetch(url, {
+      ...requestOptions,
+      signal: controller?.signal ?? signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...((requestOptions.headers as Record<string, string>) || {}),
+      },
+    });
+    const ct = res.headers.get("content-type");
+    const data = ct?.includes("application/json") ? await res.json() : { message: await res.text() };
+    if (!res.ok) {
+      const fieldErrors = (data?.fieldErrors as Record<string, string> | undefined)
+        ? Object.entries(data.fieldErrors as Record<string, string>)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(", ")
+        : null;
+      throw new Error(fieldErrors || data?.message || `Error ${res.status}`);
+    }
+    return data;
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(timeoutMessage || "Request timed out. Please try again.");
+    }
+    if (err?.name === "TypeError" && err?.message === "Failed to fetch") {
+      throw new Error("Cannot connect to server. Please check if the backend is running.");
+    }
+    throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (controller && signal) {
+      signal.removeEventListener("abort", forwardAbort);
+    }
   }
-  return data;
 };
 
 export const extractArray = (data: any): any[] => {
@@ -392,6 +454,8 @@ export const loginUser = async (identifier: string, password: string) => {
   const data = await publicFetch("/users/authenticate", {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
+    timeoutMs: 10000,
+    timeoutMessage: "Login is taking too long. Please try again or use Forgot Password.",
   });
   if (data?.token) setToken(data.token);
   if (data?.role) setRole(data.role);   // setRole now strips ROLE_ prefix automatically
@@ -418,10 +482,23 @@ export const logoutUser = () => clearToken();
 
 export const getCurrentUser = async () => apiFetch("/users/me");
 
-export const sendRegistrationOtp = async (email: string): Promise<void> => {
+export const sendRegistrationOtp = async (email: string, phoneNumber?: string): Promise<void> => {
+  // Backend AuthService.sendRegistrationOtp(email, phoneNumber) will also dispatch
+  // an SMS OTP if SMS is enabled and a phone number is provided.
   await publicFetch("/users/send-otp", {
     method: "POST",
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, phoneNumber: phoneNumber || undefined }),
+  });
+};
+
+// ── POST /api/users/check-otp  - NO AUTH ──────────────────────────────────────
+// Validates the OTP without consuming (marking as used) it.
+// Increments the attempt counter on failure to prevent brute-force attacks.
+// The OTP is fully consumed later when /onboarding is called.
+export const checkOtp = async (email: string, otp: string): Promise<void> => {
+  await publicFetch("/users/check-otp", {
+    method: "POST",
+    body: JSON.stringify({ email, otp }),
   });
 };
 
@@ -564,7 +641,7 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
     const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
     return extractArray(data);
   } catch {
-    // FIX: Filter fallback to AVAILABLE slots only — prevents showing already-booked slots
+    // FIX: Filter fallback to AVAILABLE slots only - prevents showing already-booked slots
     const all = await getTimeslotsByConsultant(consultantId);
     const filtered = extractArray(all).filter(
       (s: any) => (s.status || "").toUpperCase() === "AVAILABLE"
@@ -594,13 +671,13 @@ export const deleteTimeslot = async (id: number) =>
 export const getConsultantMasterSlots = async (consultantId: number) =>
   extractArray(await apiFetch(`/consultants/${consultantId}/master-timeslots`));
 
-// POST /api/bookings — BookingRequest DTO:
+// POST /api/bookings - BookingRequest DTO:
 // { consultantId, timeSlotId, baseAmount (required), offerId?, meetingMode, userNotes }
 // BookingService calculates: total = (baseAmount - discount) + platformFee automatically
 export const createBooking = async (payload: {
   consultantId: number;
   timeSlotId: number;
-  baseAmount: number;       // required by BookingRequest — server calculates total
+  baseAmount: number;       // required by BookingRequest - server calculates total
   offerId?: number | null;  // optional: which offer to apply
   meetingMode: string;
   userNotes?: string;
@@ -621,7 +698,7 @@ export const createBooking = async (payload: {
   return apiFetch("/bookings", { method: "POST", body: JSON.stringify(body) });
 };
 
-// POST /api/bookings/bulk — BulkBookingRequest DTO:
+// POST /api/bookings/bulk - BulkBookingRequest DTO:
 // { consultantId, timeSlotIds: [id1, id2], baseAmountPerSlot, offerId?, meetingMode, userNotes }
 // Returns BulkBookingResponse { bookings: [], grandTotal }
 export const createBulkBooking = async (payload: {
@@ -785,7 +862,7 @@ export const giveSlotSpecialBooking = async (
 
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
-// Swagger: GET /api/onboarding/{id} — returns full profile (name, email, phone, etc.)
+// Swagger: GET /api/onboarding/{id} - returns full profile (name, email, phone, etc.)
 export const getUserProfile = async (userId: number): Promise<any> => {
   try { return await apiFetch(`/onboarding/${userId}`); } catch { return null; }
 };
@@ -858,7 +935,7 @@ export const getAllBookings = async (): Promise<any[]> => {
   // Only try /bookings (the base endpoint).
   // /bookings/all → 500 "Unknown column 'b1_0.amount'"
   // /bookings/admin → 500 "Method parameter 'id': Failed to convert"
-  // Both fail on this backend — skip them entirely.
+  // Both fail on this backend - skip them entirely.
   try {
     const response = await api.get("/bookings");
     const extracted = extractArray(response.data);
@@ -923,7 +1000,7 @@ export const getBookingsPage = async (
     const data = await apiFetch(endpoint);
     // Spring Page object: { content:[], totalElements, totalPages, number }
     if (data && typeof data.totalElements === "number") return data;
-    // Fallback: plain array response — wrap it
+    // Fallback: plain array response - wrap it
     const arr = extractArray(data);
     return { content: arr, totalElements: arr.length, totalPages: 1, number: 0 };
   } catch (err: any) {
@@ -974,82 +1051,6 @@ export const updateBooking = async (id: number, payload: any) =>
 export const deleteBooking = async (id: number) =>
   apiFetch(`/bookings/${id}`, { method: "DELETE" });
 
-// ── Reschedule a normal (single-slot) booking ─────────────────────────────────
-// PUT /api/bookings/{id}/reschedule  — RescheduleBookingRequest: { newTimeSlotId }
-export const rescheduleBooking = async (
-  id: number,
-  payload: { newTimeSlotId: number }
-): Promise<any> =>
-  apiFetch(`/bookings/${id}/reschedule`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-
-// ── Reschedule one slot inside a bulk booking ─────────────────────────────────
-// PUT /api/bookings/bulk/{id}/reschedule  — RescheduleBulkBookingRequest:
-//   { oldTimeSlotId, newTimeSlotId }
-export const rescheduleBulkBooking = async (
-  id: number,
-  payload: { oldTimeSlotId: number; newTimeSlotId: number }
-): Promise<any> =>
-  apiFetch(`/bookings/bulk/${id}/reschedule`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-
-// ── Cancel a booking (normal OR bulk) ────────────────────────────────────────
-// PATCH /api/bookings/{id}/cancel — no body required
-// Idempotent: already-cancelled bookings return silently.
-export const cancelBooking = async (id: number): Promise<void> => {
-  await apiFetch(`/bookings/${id}/cancel`, { method: "PATCH" });
-};
-
-// ── Filter bookings by status with server-side pagination ─────────────────────
-// GET /api/bookings/status/{status}?page={p}&size={s}
-// Roles: ADMIN sees all; CONSULTANT sees own; USER/SUBSCRIBER sees own.
-export const getBookingsByStatus = async (
-  status: string,
-  page = 0,
-  size = 10
-): Promise<{ content: any[]; totalElements: number; totalPages: number; number: number }> => {
-  try {
-    const data = await apiFetch(
-      `/bookings/status/${encodeURIComponent(status)}?page=${page}&size=${size}`
-    );
-    if (data && typeof data.totalElements === "number") return data;
-    const arr = extractArray(data);
-    return { content: arr, totalElements: arr.length, totalPages: 1, number: 0 };
-  } catch (err: any) {
-    console.error(`getBookingsByStatus(${status}) error:`, err?.message);
-    return { content: [], totalElements: 0, totalPages: 0, number: page };
-  }
-};
-
-// ── Update a bulk booking (admin-level: status, payment, reassignment) ────────
-// PUT /api/bookings/bulk/{id}  — BulkBookingUpdateRequest:
-//   { bookingStatus?, paymentStatus?, meetingMode?, meetingNotes?,
-//     meetingLink?, meetingId?, timeSlotIds?: number[], consultantId? }
-export const updateBulkBooking = async (
-  id: number,
-  payload: Record<string, any>
-): Promise<any> =>
-  apiFetch(`/bookings/bulk/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-
-// ── Revenue & booking analytics for admin dashboard ───────────────────────────
-// GET /api/bookings/analytics?days={n}
-// Returns: { totalBookings, completed, totalRevenue, tableData[] }
-export const getRevenueAnalytics = async (days = 30): Promise<any> => {
-  try {
-    return await apiFetch(`/bookings/analytics?days=${days}`);
-  } catch (err: any) {
-    console.error("getRevenueAnalytics error:", err?.message);
-    return { totalBookings: 0, completed: 0, totalRevenue: 0, tableData: [] };
-  }
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SKILLS / SKILL MASTER
 // Backend endpoint: GET/POST /api/skills  or  /api/skill-master  or  /api/skillmaster
@@ -1067,7 +1068,7 @@ export const getAllSkills = async (): Promise<any[]> => {
     isActive: s.isActive !== false, // default true
   });
 
-  // Primary: GET /api/skills (SkillMasterController — returns only active skills)
+  // Primary: GET /api/skills (SkillMasterController - returns only active skills)
   const endpoints = ["/skills", "/skill-master", "/skillmaster", "/skill_master"];
   for (const ep of endpoints) {
     try {
@@ -1083,7 +1084,7 @@ export const getAllSkills = async (): Promise<any[]> => {
 };
 export const getSkills = getAllSkills;
 
-// SkillMaster CRUD — for admin panel
+// SkillMaster CRUD - for admin panel
 // Tries /skills first, falls back to /skill-master
 const SKILL_BASE = "/skills"; // primary endpoint
 
@@ -1094,7 +1095,7 @@ export const createSkill = async (payload: { name: string; description?: string 
     try { return await apiFetch(ep, { method: "POST", body: JSON.stringify(backendPayload) }); }
     catch (err: any) { if (!String(err?.message || "").includes("500")) throw err; }
   }
-  throw new Error("Could not create skill — server error on all endpoints.");
+  throw new Error("Could not create skill - server error on all endpoints.");
 };
 
 export const updateSkill = async (id: number, payload: { name: string; description?: string }): Promise<any> => {
@@ -1108,7 +1109,7 @@ export const updateSkill = async (id: number, payload: { name: string; descripti
 };
 
 export const deleteSkill = async (id: number): Promise<void> => {
-  // Primary: DELETE /api/skills/{id} — SkillMasterController soft-deletes skill + cascades to questions + answers
+  // Primary: DELETE /api/skills/{id} - SkillMasterController soft-deletes skill + cascades to questions + answers
   // Fallback to /skill-master/{id} for older backends
   for (const ep of [`/skills/${id}`, `/skill-master/${id}`, `/skillmaster/${id}`]) {
     try { return await apiFetch(ep, { method: "DELETE" }); }
@@ -1127,6 +1128,7 @@ export const createTicket = async (
     userId?: number | null;
     consultantId?: number | null;
     category: string;
+    categoryId?: number | null;   // Required by backend TicketRequest DTO
     description: string;
     attachmentUrl?: string;
     priority?: string;
@@ -1137,8 +1139,109 @@ export const createTicket = async (
   /** Pass true when the user is within the 2-month free guest trial window */
   isGuestTrial?: boolean
 ): Promise<any> => {
+  const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const normalizeTicketText = (value: any): string =>
+    String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  const resolveTicketCategoryLabel = (ticket: any): string => {
+    const raw = ticket?.category;
+    if (raw && typeof raw === "object") {
+      return String(raw.name || raw.categoryName || raw.label || raw.id || "");
+    }
+    return String(raw || ticket?.categoryName || ticket?.category_name || ticket?.categoryTitle || "");
+  };
+  const findRecoveredTicket = (tickets: any[], requestStartedAt: number): any | null => {
+    const targetUserId = Number(payload.userId || 0);
+    const targetDescription = normalizeTicketText(payload.description);
+    const targetCategory = normalizeTicketText(payload.category);
+    const targetPriority = normalizeTicketText(payload.priority || "MEDIUM");
+
+    return tickets
+      .filter((ticket: any) => {
+        const ticketUserId = Number(ticket?.userId || ticket?.user?.id || 0);
+        if (targetUserId > 0 && ticketUserId !== targetUserId) return false;
+
+        const createdAtRaw = ticket?.createdAt || ticket?.created_at;
+        const createdAtMs = createdAtRaw ? new Date(createdAtRaw).getTime() : NaN;
+        if (Number.isFinite(createdAtMs) && createdAtMs < (requestStartedAt - 60_000)) return false;
+
+        if (normalizeTicketText(ticket?.description) !== targetDescription) return false;
+
+        const ticketCategory = normalizeTicketText(resolveTicketCategoryLabel(ticket));
+        if (targetCategory && ticketCategory && ticketCategory !== targetCategory) return false;
+
+        const ticketPriority = normalizeTicketText(ticket?.priority || "MEDIUM");
+        if (targetPriority && ticketPriority && ticketPriority !== targetPriority) return false;
+
+        return true;
+      })
+      .sort((a: any, b: any) =>
+        new Date(b?.createdAt || b?.created_at || 0).getTime()
+        - new Date(a?.createdAt || a?.created_at || 0).getTime()
+      )[0] || null;
+  };
+  const recoverCreatedTicket = async (requestStartedAt: number): Promise<any | null> => {
+    const userId = Number(payload.userId || 0);
+    if (!userId) return null;
+
+    const deadline = Date.now() + 25_000;
+    while (Date.now() <= deadline) {
+      try {
+        const latestTickets = await getTicketsByUser(userId);
+        const recovered = findRecoveredTicket(latestTickets, requestStartedAt);
+        if (recovered) {
+          console.warn("⚠️ [createTicket] Recovered newly created ticket after slow backend response.", recovered);
+          return recovered;
+        }
+      } catch {
+        // Ignore transient read failures while the backend finishes processing.
+      }
+      if (Date.now() < deadline) await wait(3_000);
+    }
+
+    return null;
+  };
   const token = getToken();
-  const ticketPayload = { ...payload, status: payload.status || "NEW" };
+  const requestStartedAt = Date.now();
+
+  // FIX: categoryId is required by the backend TicketRequest DTO.
+  // If the caller only passed a category name string (e.g. "Billing") without a
+  // numeric categoryId, look it up from the active categories list so the POST
+  // never reaches the backend with a missing/null categoryId (which causes 400).
+  // Treat 0 as invalid (placeholder/unset) - same as null
+  let resolvedCategoryId = (payload.categoryId != null && payload.categoryId > 0)
+    ? payload.categoryId
+    : null;
+  if (resolvedCategoryId == null && payload.category) {
+    try {
+      // getActiveTicketCategories() already returns normalised { id, name } objects
+      // from /admin/config/categories - no extra field-normalisation required here.
+      const cats = await getActiveTicketCategories();
+      const match = cats.find(c => c.name.toLowerCase() === payload.category.toLowerCase());
+      if (match?.id) {
+        resolvedCategoryId = match.id;
+      } else if (cats.length > 0) {
+        console.warn(
+          `⚠️ [createTicket] No category matched "${payload.category}" - falling back to first active category id=${cats[0].id}`
+        );
+        resolvedCategoryId = cats[0].id;
+      }
+    } catch (err: any) {
+      console.warn("⚠️ [createTicket] Could not resolve categoryId from categories endpoint:", err?.message);
+    }
+  }
+
+  if (resolvedCategoryId == null) {
+    console.warn(
+      "⚠️ [createTicket] categoryId is still null - backend will likely reject with 400 Validation Failed. " +
+      "Ensure categories are loaded and the form passes a valid category name."
+    );
+  }
+
+  const ticketPayload = {
+    ...payload,
+    categoryId: resolvedCategoryId,
+    status: payload.status || "NEW",
+  };
 
   const form = new FormData();
   const blob = new Blob([JSON.stringify(ticketPayload)], { type: "application/json" });
@@ -1155,28 +1258,93 @@ export const createTicket = async (
   // a normal allowed cross-origin POST.
   if (isGuestTrial) form.append("guestTrialAccess", "true");
 
-  const res = await fetch(`${BASE_URL}/tickets`, {
-    method: "POST",
-    headers,
-    body: form,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.message || `Error ${res.status}`);
-  return data;
+  // Abort after 45 s - backend does synchronous email/notification work that can
+  // block for a long time; without a timeout the UI hangs in "Submitting..." forever.
+  // The ticket may still be created server-side even if we time out.
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), 45_000);
+
+  try {
+    const res = await fetch(`${BASE_URL}/tickets`, {
+      method: "POST",
+      headers,
+      body: form,
+      signal: controller.signal,
+    });
+    clearTimeout(abortTimer);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if ([502, 503, 504].includes(res.status)) {
+        const recovered = await recoverCreatedTicket(requestStartedAt);
+        if (recovered) return recovered;
+      }
+      throw new Error(data?.message || `Error ${res.status}`);
+    }
+    return data;
+  } catch (err: any) {
+    clearTimeout(abortTimer);
+    if (err?.name === "AbortError") {
+      const recovered = await recoverCreatedTicket(requestStartedAt);
+      if (recovered) return recovered;
+      throw new Error(
+        "The server is taking too long to respond. Your ticket may have been created - " +
+        "please refresh the Tickets tab to check before submitting again."
+      );
+    }
+    // Connection refused / server down - give a clear message instead of "Failed to fetch"
+    if (err?.name === "TypeError" || err?.message === "Failed to fetch") {
+      throw new Error("Cannot connect to the server. The backend appears to be offline - please try again in a moment.");
+    }
+    throw err;
+  }
+};
+
+/**
+ * Normalizes a raw ticket object from the backend into a consistent shape.
+ * The backend may return the category in several different ways depending on
+ * how the ticket was created:
+ *   - ticket.category            → plain string (legacy / direct name)
+ *   - ticket.category.name       → nested object { id, name }
+ *   - ticket.categoryName        → separate field used in some DTO versions
+ *   - ticket.categoryId only     → need to fall back to id as string label
+ * This ensures ticket.category is always a non-null string in the UI.
+ */
+const normalizeTicket = (t: any): any => {
+  if (!t) return t;
+  const raw = t.category;
+  let categoryName: string;
+
+  if (t.categoryName && typeof t.categoryName === "string" && t.categoryName.trim()) {
+    // ✅ Prefer the server-resolved string - TicketService.mapToTicketResponse()
+    // now always resolves the categoryId → name before returning the DTO.
+    categoryName = t.categoryName.trim();
+  } else if (raw && typeof raw === "object") {
+    // Legacy: backend returned category as a nested { id, name } object
+    categoryName = String(raw.name || raw.categoryName || raw.label || raw.id || "");
+  } else {
+    // Legacy: plain string or numeric ID fallback
+    categoryName = String(raw || t.category_name || t.categoryTitle || "");
+  }
+  return { ...t, category: categoryName };
 };
 
 export const getAllTickets = async (): Promise<any[]> => {
+  // FIX: Changed from /tickets (paginated, 10 rows default) to
+  // /analytics/tickets/all (unpaginated, returns every ticket enriched with
+  // consultantName, resolvedAt, closedAt, firstResponseAt).
+  // The old endpoint caused admin analytics to compute metrics on a fraction
+  // of the real ticket dataset.
   try {
-    const data = await apiFetch("/tickets");
+    const data = await apiFetch("/analytics/tickets/all");
     const arr = extractArray(data);
     if (arr.length === 0) {
-      console.warn("⚠️ [getAllTickets] /api/tickets returned empty array.");
+      console.warn("⚠️ [getAllTickets] /analytics/tickets/all returned empty array.");
       console.warn("   Check: (a) no tickets exist, OR (b) token lacks ROLE_ADMIN.");
       debugToken();
     } else {
-      console.log(`✅ [getAllTickets] Loaded ${arr.length} tickets`);
+      console.log(`✅ [getAllTickets] Loaded ${arr.length} tickets (full dataset)`);
     }
-    return arr;
+    return arr.map(normalizeTicket);
   } catch (err) {
     console.error("❌ [getAllTickets] error:", err);
     debugToken();
@@ -1212,7 +1380,7 @@ export const getTicketsByUser = async (userId: number): Promise<any[]> => {
     const data = await apiFetch(`/tickets/user/${userId}`);
     const arr = extractArray(data);
     console.log(`✅ getTicketsByUser(${userId}) → ${arr.length} tickets`);
-    return arr;
+    return arr.map(normalizeTicket);
   } catch (err: any) {
     console.error(`❌ getTicketsByUser(${userId}) failed:`, err?.message);
     return [];
@@ -1224,7 +1392,7 @@ export const getTicketsByConsultant = async (consultantId: number): Promise<any[
     const data = await apiFetch(`/tickets/consultant/${consultantId}`);
     const arr = extractArray(data);
     console.log(`✅ getTicketsByConsultant(${consultantId}) → ${arr.length} tickets`);
-    return arr;
+    return arr.map(normalizeTicket);
   } catch (err: any) {
     console.error(`❌ getTicketsByConsultant(${consultantId}) failed:`, err?.message);
     return [];
@@ -1236,7 +1404,7 @@ export const getTicketsByConsultant = async (consultantId: number): Promise<any[
 // NOT as a JSON object { status }. We try 3 strategies in order.
 /** PATCH /api/tickets/:id/status */
 export const updateTicketStatus = async (id: number, status: string): Promise<any> => {
-  // Swagger: PATCH /api/tickets/{id}/status?status={status} — status is a query param
+  // Swagger: PATCH /api/tickets/{id}/status?status={status} - status is a query param
   return apiFetch(`/tickets/${id}/status?status=${encodeURIComponent(status)}`, {
     method: "PATCH",
   });
@@ -1427,16 +1595,360 @@ export const submitTicketFeedback = async (
   rating: number,
   feedbackText: string
 ) => {
+  // Backend TicketController.submitFeedback reads payload.get("feedbackRating") -
+  // the key must be "feedbackRating" not "rating".
+  return apiFetch(`/tickets/${ticketId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedbackRating: rating, feedbackText }),
+  });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKET - MISSING ENDPOINTS FROM TicketController & TicketService
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/tickets/sla-breached  (Admin only)
+ * Returns all tickets whose SLA resolve deadline has been missed.
+ */
+export const getSlaBreachedTickets = async (): Promise<any[]> => {
   try {
-    return await apiFetch(`/tickets/${ticketId}/feedback`, {
-      method: "POST",
-      body: JSON.stringify({ rating, feedbackText }),
-    });
-  } catch {
-    return await apiFetch(`/tickets/${ticketId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ feedbackRating: rating, feedbackText }),
-    });
+    const data = await apiFetch("/tickets/sla-breached");
+    return (Array.isArray(data) ? data : extractArray(data)).map(normalizeTicket);
+  } catch (err: any) {
+    console.warn("⚠️  getSlaBreachedTickets failed:", err?.message);
+    return [];
+  }
+};
+
+/**
+ * GET /api/tickets/escalated
+ * Returns all escalated tickets (isEscalated = true).
+ */
+export const getEscalatedTickets = async (): Promise<any[]> => {
+  try {
+    const data = await apiFetch("/tickets/escalated");
+    return (Array.isArray(data) ? data : extractArray(data)).map(normalizeTicket);
+  } catch (err: any) {
+    console.warn("⚠️  getEscalatedTickets failed:", err?.message);
+    return [];
+  }
+};
+
+/**
+ * PATCH /api/tickets/{id}/priority
+ * Updates the priority of a ticket.
+ * Admin-only for downgrades; consultants can only upgrade.
+ */
+export const updateTicketPriority = async (
+  id: number,
+  priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT" | "CRITICAL"
+): Promise<any> => {
+  // Strategy 1: query param - matches Spring @RequestParam Priority newPriority
+  try {
+    return await apiFetch(
+      `/tickets/${id}/priority?priority=${encodeURIComponent(priority)}`,
+      { method: "PATCH" }
+    );
+  } catch (err: any) {
+    // 403 = admin-only downgrade rule - propagate immediately, don't retry
+    if (err?.message?.includes("403") || err?.message?.includes("Access Denied")) throw err;
+    console.warn("⚠️ updateTicketPriority query-param failed, trying body fallback:", err?.message);
+  }
+  // Strategy 2: JSON body - legacy @RequestBody variant
+  return apiFetch(`/tickets/${id}/priority`, {
+    method: "PATCH",
+    body: JSON.stringify({ priority }),
+  });
+};
+
+/**
+ * GET /api/admin/config/categories  - single source of truth for ticket categories.
+ * Returns active categories ordered by name from the Support Config endpoint.
+ * Normalises each entry to { id: number, name: string } for consistent use across all pages.
+ */
+export const getActiveTicketCategories = async (): Promise<{ id: number; name: string }[]> => {
+  try {
+    const data = await apiFetch("/admin/config/categories");
+    const arr: any[] = Array.isArray(data) ? data : extractArray(data);
+    return arr
+      .filter((c: any) => (c?.name || c?.categoryName) && c?.isActive !== false && c?.active !== false)
+      .map((c: any) => ({
+        id: Number(c.id ?? c.categoryId ?? c.category_id ?? 0),
+        name: String(c.name || c.categoryName || "").trim(),
+      }));
+  } catch (err: any) {
+    console.warn("⚠️ getActiveTicketCategories failed:", err?.message);
+    return [];
+  }
+};
+
+/** @alias getActiveTicketCategories - both point to /admin/config/categories */
+export const getTicketCategoriesFromConfig = getActiveTicketCategories;
+
+/**
+ * GET /api/tickets/user/{userId}?page=&size=&sortBy=   (paginated)
+ * Server-side paginated ticket list for a specific user.
+ */
+export const getTicketsByUserPaginated = async (
+  userId: number,
+  page = 0,
+  size = 10,
+  sortBy = "createdAt"
+): Promise<{ content: any[]; totalElements: number; totalPages: number; number: number }> => {
+  try {
+    const data = await apiFetch(
+      `/tickets/user/${userId}?page=${page}&size=${size}&sortBy=${sortBy}`
+    );
+    if (data && typeof data.totalElements === "number") return data;
+    const arr = extractArray(data);
+    return { content: arr, totalElements: arr.length, totalPages: 1, number: 0 };
+  } catch (err: any) {
+    console.warn("⚠️  getTicketsByUserPaginated failed:", err?.message);
+    return { content: [], totalElements: 0, totalPages: 0, number: page };
+  }
+};
+
+/**
+ * GET /api/tickets/consultant/{consultantId}?page=&size=&sortBy=   (paginated)
+ * Server-side paginated ticket list assigned to a specific consultant.
+ */
+export const getTicketsByConsultantPaginated = async (
+  consultantId: number,
+  page = 0,
+  size = 10,
+  sortBy = "createdAt"
+): Promise<{ content: any[]; totalElements: number; totalPages: number; number: number }> => {
+  try {
+    const data = await apiFetch(
+      `/tickets/consultant/${consultantId}?page=${page}&size=${size}&sortBy=${sortBy}`
+    );
+    if (data && typeof data.totalElements === "number") return data;
+    const arr = extractArray(data);
+    return { content: arr, totalElements: arr.length, totalPages: 1, number: 0 };
+  } catch (err: any) {
+    console.warn("⚠️  getTicketsByConsultantPaginated failed:", err?.message);
+    return { content: [], totalElements: 0, totalPages: 0, number: page };
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TICKET ANALYTICS - TicketService dashboard methods
+// Assumed paths: GET /api/tickets/analytics/{tab}?days=&period=&groupBy=
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/tickets/analytics/graph?period=DAILY|WEEKLY
+ * Returns ticket counts grouped by category and by consultant.
+ */
+export const getTicketGraphSummaries = async (
+  period: "DAILY" | "WEEKLY" = "WEEKLY"
+): Promise<{ byCategory: any[]; byConsultant: any[] }> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/graph?period=${period}`);
+    return {
+      byCategory: Array.isArray(data?.byCategory) ? data.byCategory : [],
+      byConsultant: Array.isArray(data?.byConsultant) ? data.byConsultant : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getTicketGraphSummaries failed:", err?.message);
+    return { byCategory: [], byConsultant: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/volume?days=
+ * Returns daily created/resolved counts, resolution rate, and chart data.
+ */
+export const getTicketVolumeAnalytics = async (days = 14): Promise<{
+  totalCreated: number;
+  totalResolved: number;
+  totalOpen: number;
+  resolutionRate: number;
+  chartData: Array<{ date: string; created: number; resolved: number }>;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/volume?days=${days}`);
+    return {
+      totalCreated: Number(data?.totalCreated || 0),
+      totalResolved: Number(data?.totalResolved || 0),
+      totalOpen: Number(data?.totalOpen || 0),
+      resolutionRate: Number(data?.resolutionRate || 0),
+      chartData: Array.isArray(data?.chartData) ? data.chartData : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getTicketVolumeAnalytics failed:", err?.message);
+    return { totalCreated: 0, totalResolved: 0, totalOpen: 0, resolutionRate: 0, chartData: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/agents?days=
+ * Returns per-consultant assignment and resolution counts.
+ */
+export const getAgentPerformanceAnalytics = async (days = 14): Promise<{
+  totalAgents: number;
+  totalAssigned: number;
+  avgResolutionRate: number;
+  tableData: Array<{ consultantId: number; assigned: number; resolved: number; rate: number }>;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/agents?days=${days}`);
+    return {
+      totalAgents: Number(data?.totalAgents || 0),
+      totalAssigned: Number(data?.totalAssigned || 0),
+      avgResolutionRate: Number(data?.avgResolutionRate || 0),
+      tableData: Array.isArray(data?.tableData) ? data.tableData : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getAgentPerformanceAnalytics failed:", err?.message);
+    return { totalAgents: 0, totalAssigned: 0, avgResolutionRate: 0, tableData: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/resolution?period=DAILY|WEEKLY
+ * Returns average resolution time, average response time, and total resolved count.
+ */
+export const getResolutionAnalytics = async (
+  period: "DAILY" | "WEEKLY" = "WEEKLY"
+): Promise<{
+  averageResolutionHours: number;
+  averageResponseHours: number;
+  totalResolved: number;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/resolution?period=${period}`);
+    return {
+      averageResolutionHours: Number(data?.averageResolutionHours || 0),
+      averageResponseHours: Number(data?.averageResponseHours || 0),
+      totalResolved: Number(data?.totalResolved || 0),
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getResolutionAnalytics failed:", err?.message);
+    return { averageResolutionHours: 0, averageResponseHours: 0, totalResolved: 0 };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/sla?days=
+ * Returns SLA breach counts broken down by category.
+ */
+export const getSlaAnalytics = async (days = 14): Promise<{
+  totalTracked: number;
+  totalBreached: number;
+  compliant: number;
+  tableData: Array<{ category: string; total: number; breached: number }>;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/sla?days=${days}`);
+    return {
+      totalTracked: Number(data?.totalTracked || 0),
+      totalBreached: Number(data?.totalBreached || 0),
+      compliant: Number(data?.compliant || 0),
+      tableData: Array.isArray(data?.tableData) ? data.tableData : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getSlaAnalytics failed:", err?.message);
+    return { totalTracked: 0, totalBreached: 0, compliant: 0, tableData: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/response-time?days=
+ * Returns average / median resolution times and priority breakdown chart.
+ */
+export const getResponseTimeAnalytics = async (days = 14): Promise<{
+  averageResolution: number;
+  medianResolution: number;
+  averageResponse: number;
+  priorityChart: Array<{ priority: string; avgHours: number }>;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/response-time?days=${days}`);
+    return {
+      // Java constants: KEY_AVG_RESOLUTION="averageResolution", KEY_AVG_RESPONSE="averageResponse"
+      // Alias guards handle any legacy camelCase variants from older controller versions.
+      averageResolution: Number(
+        data?.averageResolution ?? data?.avgResolution ?? data?.averageResolutionHours ?? 0
+      ),
+      medianResolution: Number(data?.medianResolution ?? data?.medianResolutionHours ?? 0),
+      averageResponse: Number(
+        data?.averageResponse ?? data?.avgResponse ?? data?.averageResponseHours ?? 0
+      ),
+      priorityChart: Array.isArray(data?.priorityChart) ? data.priorityChart : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getResponseTimeAnalytics failed:", err?.message);
+    return { averageResolution: 0, medianResolution: 0, averageResponse: 0, priorityChart: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/reports?days=&groupBy=CATEGORY|CONSULTANT|STATUS|PRIORITY
+ * Returns totals and chart data grouped by the chosen dimension.
+ */
+export const getAdvancedReportsAnalytics = async (
+  days = 14,
+  groupBy: "CATEGORY" | "CONSULTANT" | "STATUS" | "PRIORITY" = "CATEGORY"
+): Promise<{
+  totalTickets: number;
+  topLabel: string;
+  topCount: number;
+  chartData: Array<{ label: string; count: number }>;
+}> => {
+  try {
+    const data = await apiFetch(
+      `/tickets/analytics/reports?days=${days}&groupBy=${groupBy}`
+    );
+    return {
+      totalTickets: Number(data?.totalTickets || 0),
+      topLabel: data?.topLabel || "N/A",
+      topCount: Number(data?.topCount || 0),
+      chartData: Array.isArray(data?.chartData) ? data.chartData : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getAdvancedReportsAnalytics failed:", err?.message);
+    return { totalTickets: 0, topLabel: "N/A", topCount: 0, chartData: [] };
+  }
+};
+
+/**
+ * GET /api/tickets/analytics/support-config?days=
+ * Returns a full support-config summary: metrics, category/priority/agent breakdown.
+ */
+export const getSupportConfigReports = async (days = 14): Promise<{
+  totalTickets: number;
+  resolved: number;
+  resolveRate: number;
+  slaBreaches: number;
+  escalated: number;
+  avgFirstResponse: number;
+  avgResolution: number;
+  byCategory: Array<{ label: string; count: number }>;
+  byPriority: Array<{ label: string; count: number }>;
+  agentPerformance: Array<{ consultantId: number; assigned: number; resolved: number }>;
+}> => {
+  try {
+    const data = await apiFetch(`/tickets/analytics/support-config?days=${days}`);
+    return {
+      totalTickets: Number(data?.totalTickets || 0),
+      resolved: Number(data?.resolved || 0),
+      resolveRate: Number(data?.resolveRate || 0),
+      slaBreaches: Number(data?.slaBreaches || 0),
+      escalated: Number(data?.escalated || 0),
+      avgFirstResponse: Number(data?.avgFirstResponse || 0),
+      avgResolution: Number(data?.avgResolution || 0),
+      byCategory: Array.isArray(data?.byCategory) ? data.byCategory : [],
+      byPriority: Array.isArray(data?.byPriority) ? data.byPriority : [],
+      agentPerformance: Array.isArray(data?.agentPerformance) ? data.agentPerformance : [],
+    };
+  } catch (err: any) {
+    console.warn("⚠️  getSupportConfigReports failed:", err?.message);
+    return {
+      totalTickets: 0, resolved: 0, resolveRate: 0, slaBreaches: 0, escalated: 0,
+      avgFirstResponse: 0, avgResolution: 0, byCategory: [], byPriority: [], agentPerformance: [],
+    };
   }
 };
 
@@ -1448,18 +1960,6 @@ export const getMyUnreadNotifications = async () => {
 export const markNotificationAsRead = async (id: number) =>
   apiFetch(`/notifications/${id}/read`, { method: "PUT" });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NOTIFICATION EMAIL STUBS
-// The backend's NotificationService fires all transactional emails internally
-// (ticket created/updated/assigned, booking confirmed/cancelled, etc.).
-// There are NO frontend-facing /notifications/email/* routes on the server —
-// any call to those endpoints would silently 404.
-//
-// These functions are kept as no-ops so existing call-sites in AdminPage and
-// AdvisorDashboard continue to compile without changes.  They log a debug line
-// so you know the backend already handled the email.
-// ─────────────────────────────────────────────────────────────────────────────
-
 export const sendTicketStatusEmail = async (payload: {
   ticketId: number;
   ticketTitle: string;
@@ -1468,8 +1968,15 @@ export const sendTicketStatusEmail = async (payload: {
   userName?: string;
   updatedBy?: string;
 }): Promise<void> => {
-  // No-op: backend NotificationService.notifyTicketUpdate() sends this email automatically.
-  console.debug(`[email no-op] ticket-status for #${payload.ticketId} → backend handled`);
+  try {
+    await apiFetch("/notifications/email/ticket-update", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Status email sent to ${payload.userEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketStatusEmail failed (non-fatal):`, err?.message);
+  }
 };
 
 export const sendTicketAssignedEmail = async (payload: {
@@ -1480,8 +1987,15 @@ export const sendTicketAssignedEmail = async (payload: {
   assignedBy?: string;
   priority?: string;
 }): Promise<void> => {
-  // No-op: backend NotificationService.notifyNewAssignment() sends this email automatically.
-  console.debug(`[email no-op] ticket-assigned for #${payload.ticketId} → backend handled`);
+  try {
+    await apiFetch("/notifications/email/ticket-assigned", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Assignment email sent to ${payload.consultantEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketAssignedEmail failed (non-fatal):`, err?.message);
+  }
 };
 
 export const sendTicketCommentEmail = async (payload: {
@@ -1492,8 +2006,15 @@ export const sendTicketCommentEmail = async (payload: {
   commentPreview: string;
   repliedBy?: string;
 }): Promise<void> => {
-  // No-op: backend NotificationService.notifyNewComment() sends this email automatically.
-  console.debug(`[email no-op] ticket-comment for #${payload.ticketId} → backend handled`);
+  try {
+    await apiFetch("/notifications/email/ticket-comment", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Reply email sent to ${payload.userEmail} for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketCommentEmail failed (non-fatal):`, err?.message);
+  }
 };
 
 export const sendTicketEscalatedEmail = async (payload: {
@@ -1503,8 +2024,218 @@ export const sendTicketEscalatedEmail = async (payload: {
   consultantEmail?: string;
   reason?: string;
 }): Promise<void> => {
-  // No-op: backend NotificationService.notifyEscalation() sends this email automatically.
-  console.debug(`[email no-op] ticket-escalated for #${payload.ticketId} → backend handled`);
+  try {
+    await apiFetch("/notifications/email/ticket-escalated", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    console.log(`✉️  Escalation email sent for ticket #${payload.ticketId}`);
+  } catch (err: any) {
+    console.warn(`⚠️  sendTicketEscalatedEmail failed (non-fatal):`, err?.message);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL SERVICE - Full endpoint set matching backend EmailService
+// All calls are fire-and-forget (errors are non-fatal, never throw)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// --- BOOKING EMAILS ---
+
+export const emailOnBookingConfirmedUser = async (payload: {
+  to: string;
+  bookingId: number;
+  meetingMode: string;
+  amount: string;
+  discountAmount?: string;
+  meetingLink?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-confirmed-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingConfirmedUser (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingAlertConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  meetingMode: string;
+  clientEmail: string;
+  meetingLink?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-alert-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingAlertConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingCancelledUser = async (payload: {
+  to: string;
+  bookingId: number;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-cancelled-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingCancelledUser (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingCancelledConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-cancelled-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingCancelledConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingRescheduledUser = async (payload: {
+  to: string;
+  bookingId: number;
+  meetingMode: string;
+  meetingLink?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-rescheduled-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingRescheduledUser (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingRescheduledConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  meetingMode: string;
+  clientEmail: string;
+  meetingLink?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-rescheduled-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingRescheduledConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnBookingReassignedUser = async (payload: {
+  to: string;
+  bookingId: number;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/booking-reassigned-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnBookingReassignedUser (non-fatal):", err?.message); }
+};
+
+// --- TICKET EMAILS ---
+
+export const emailOnTicketCreated = async (payload: {
+  to: string;
+  ticketNumber: string;
+  category: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-created", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnTicketCreated (non-fatal):", err?.message); }
+};
+
+export const emailOnTicketUpdated = async (payload: {
+  to: string;
+  ticketNumber: string;
+  status: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/ticket-updated", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnTicketUpdated (non-fatal):", err?.message); }
+};
+
+// --- EMAIL → TICKET (ADMIN/OPS) ---
+
+export const emailToTicketHealth = async (): Promise<string> => {
+  const data: any = await apiFetch("/email-to-ticket/health", { method: "GET" });
+  return String(data?.message ?? data ?? "");
+};
+
+export const triggerEmailToTicketPoll = async (): Promise<string> => {
+  const data: any = await apiFetch("/email-to-ticket/poll", { method: "POST" });
+  return String(data?.message ?? data ?? "");
+};
+
+// --- SPECIAL BOOKING EMAILS ---
+
+export const emailOnSpecialBookingRequestUser = async (payload: {
+  to: string;
+  bookingId: number;
+  hours: number;
+  consultantEmail: string;
+  meetingMode: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-request-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRequestUser (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingRequestConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  hours: number;
+  clientEmail: string;
+  meetingMode: string;
+  userNotes?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-request-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRequestConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingConfirmedUser = async (payload: {
+  to: string;
+  bookingId: number;
+  date: string;
+  time: string;
+  hours: number;
+  meetingMode: string;
+  meetingLink?: string;
+  consultantEmail: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-confirmed-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingConfirmedUser (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingConfirmedConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  date: string;
+  time: string;
+  hours: number;
+  meetingMode: string;
+  meetingLink?: string;
+  clientEmail: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-confirmed-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingConfirmedConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingRescheduledUser = async (payload: {
+  to: string;
+  bookingId: number;
+  date: string;
+  time: string;
+  hours: number;
+  meetingMode: string;
+  meetingLink?: string;
+  consultantEmail: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-rescheduled-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRescheduledUser (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingRescheduledConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  date: string;
+  time: string;
+  hours: number;
+  meetingMode: string;
+  meetingLink?: string;
+  clientEmail: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-rescheduled-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRescheduledConsultant (non-fatal):", err?.message); }
 };
 
 export const SLA_HOURS: Record<string, number> = {
@@ -1588,12 +2319,12 @@ export const updateFeedback = async (id: number, payload: {
   comments?: string;
 }) => apiFetch(`/feedbacks/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-// ── DELETE /api/feedbacks/{id}  — auth required; only owner or ADMIN ──────────
+// ── DELETE /api/feedbacks/{id}  - auth required; only owner or ADMIN ──────────
 export const deleteFeedback = async (id: number): Promise<void> => {
   await apiFetch(`/feedbacks/${id}`, { method: "DELETE" });
 };
 
-// ── GET /api/feedbacks/consultant/{consultantId}  — auth required ─────────────
+// ── GET /api/feedbacks/consultant/{consultantId}  - auth required ─────────────
 export const getFeedbackByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
     const data = await apiFetch(`/feedbacks/consultant/${consultantId}`);
@@ -1601,15 +2332,15 @@ export const getFeedbackByConsultant = async (consultantId: number): Promise<any
   } catch { return []; }
 };
 
-// ── GET /api/feedbacks/{id}  — auth required ─────────────────────────────────
+// ── GET /api/feedbacks/{id}  - auth required ─────────────────────────────────
 export const getFeedbackById = async (id: number): Promise<any> =>
   apiFetch(`/feedbacks/${id}`);
 
-// ── GET /api/feedbacks/meeting/{meetingId}  — auth required ──────────────────
+// ── GET /api/feedbacks/meeting/{meetingId}  - auth required ──────────────────
 export const getFeedbackByMeeting = async (meetingId: number): Promise<any> =>
   apiFetch(`/feedbacks/meeting/${meetingId}`);
 
-// ── GET /api/feedbacks/public/highest-rated?limit={n}  — NO AUTH ─────────────
+// ── GET /api/feedbacks/public/highest-rated?limit={n}  - NO AUTH ─────────────
 // Used on the public homepage to showcase top reviews.
 // Backend caps at 50; defaults to 5 if limit ≤ 0.
 export const getHighestRatedFeedbacks = async (limit = 5): Promise<any[]> => {
@@ -1626,7 +2357,7 @@ export const getHighestRatedFeedbacks = async (limit = 5): Promise<any[]> => {
   } catch { return []; }
 };
 
-// ── GET /api/feedbacks  — auth required, returns all feedbacks (admin view) ───
+// ── GET /api/feedbacks  - auth required, returns all feedbacks (admin view) ───
 export const getAllFeedbacksAdmin = async (): Promise<any[]> => {
   try {
     const data = await apiFetch("/feedbacks");
@@ -1671,10 +2402,16 @@ export const loginWithGoogleToken = async (googleIdToken: string) => {
 };
 
 export const escalateTicket = async (id: number, reason?: string): Promise<any> => {
-  // Swagger: POST /api/tickets/{id}/escalate with body {reason: string}
+  // Mirror backend guard: TicketEscalationRequest.reason must be non-blank.
+  // Validate client-side so we never hit the backend with an empty reason string.
+  const trimmedReason = (reason || "").trim();
+  if (!trimmedReason) {
+    throw new Error("Escalation reason is required.");
+  }
+  // Swagger: POST /api/tickets/{id}/escalate - body { reason: string }
   return apiFetch(`/tickets/${id}/escalate`, {
     method: "POST",
-    body: JSON.stringify({ reason: reason || "Escalated by consultant" }),
+    body: JSON.stringify({ reason: trimmedReason }),
   });
 };
 
@@ -1687,7 +2424,7 @@ export const getCannedResponses = async (): Promise<any[]> => {
 export const createCannedResponse = async (payload: {
   title: string; message: string; category?: string;
 }): Promise<any> =>
-  // Swagger: POST /api/admin/config/canned-responses — uses "content" not "message"
+  // Swagger: POST /api/admin/config/canned-responses - uses "content" not "message"
   apiFetch("/admin/config/canned-responses", {
     method: "POST",
     body: JSON.stringify({ title: payload.title, content: payload.message || (payload as any).content || "", category: payload.category }),
@@ -1703,11 +2440,8 @@ export const deleteCannedResponse = async (id: number): Promise<void> => {
   await apiFetch(`/admin/config/canned-responses/${id}`, { method: "DELETE" });
 };
 
-export const getTicketCategories = async (): Promise<any[]> => {
-  // Swagger: GET /api/admin/config/categories
-  const data = await apiFetch("/admin/config/categories");
-  return Array.isArray(data) ? data : extractArray(data);
-};
+/** @alias getActiveTicketCategories - both point to /admin/config/categories */
+export const getTicketCategories = getActiveTicketCategories;
 
 export const createTicketCategory = async (payload: {
   name: string; description?: string;
@@ -1934,15 +2668,15 @@ tr:nth-child(even){background:#f8fafc}</style></head><body>
 export default api;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OFFERS — public & authenticated
+// OFFERS - public & authenticated
 // These endpoints may return 403 if called without a valid token on some
 // server configurations. We always catch and return [] to prevent home page
 // errors.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /api/offers/checkout?consultantId=  — active APPROVED offers for booking/home page
- * Backend: OfferController.getActiveOffersForCheckout — returns only APPROVED + isActive + in date range
+ * GET /api/offers/checkout?consultantId=  - active APPROVED offers for booking/home page
+ * Backend: OfferController.getActiveOffersForCheckout - returns only APPROVED + isActive + in date range
  * Safe: returns [] on any error
  */
 export const getActiveOffers = async (consultantId?: number): Promise<any[]> => {
@@ -2006,7 +2740,7 @@ export const getActiveOffers = async (consultantId?: number): Promise<any[]> => 
 };
 
 /**
- * GET /api/offers/checkout?consultantId=:id — active approved offers for a consultant's booking page
+ * GET /api/offers/checkout?consultantId=:id - active approved offers for a consultant's booking page
  */
 export const getOffersByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
@@ -2041,7 +2775,7 @@ const normalizeOfferDate = (dateInput: string | Date): string => {
 };
 
 /**
- * POST /api/offers — create offer (admin or consultant)
+ * POST /api/offers - create offer (admin or consultant)
  * Backend OfferRequest: title*, description, discount*, validFrom*, validTo*, isActive, consultantId
  * Backend expects dates in format: yyyy-MM-dd'T'HH:mm:ss (e.g., "2026-03-18T00:00:00")
  * Backend auto-sets status: ADMIN → APPROVED, CONSULTANT → PENDING
@@ -2057,7 +2791,7 @@ export const createOffer = async (payload: {
   consultantId?: number | null;
   [key: string]: any;
 }): Promise<any> => {
-  // Send only fields defined in OfferRequest DTO — extra fields cause 500
+  // Send only fields defined in OfferRequest DTO - extra fields cause 500
   const body: Record<string, any> = {
     title: payload.title,
     description: payload.description || "",
@@ -2071,7 +2805,7 @@ export const createOffer = async (payload: {
 };
 
 /**
- * PUT /api/offers/:id — update offer
+ * PUT /api/offers/:id - update offer
  * Backend OfferRequest same fields as createOffer
  * Backend expects dates in format: yyyy-MM-dd'T'HH:mm:ss
  */
@@ -2089,18 +2823,18 @@ export const updateOffer = async (id: number, payload: any): Promise<any> => {
 };
 
 /**
- * DELETE /api/offers/:id — delete offer
+ * DELETE /api/offers/:id - delete offer
  */
 export const deleteOffer = async (id: number): Promise<void> =>
   apiFetch(`/offers/${id}`, { method: "DELETE" });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REVIEWS — public & authenticated
+// REVIEWS - public & authenticated
 // Safe: returns [] on any error (including 403 for public visitors)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /api/reviews — approved reviews for home page testimonials
+ * GET /api/reviews - approved reviews for home page testimonials
  * Safe: returns [] on 403/401 (public visitors)
  */
 export const getPublicReviews = async (): Promise<any[]> => {
@@ -2118,7 +2852,7 @@ export const getPublicReviews = async (): Promise<any[]> => {
           return Array.isArray(data) ? data : extractArray(data);
         }
         if (res.status === 403 || res.status === 401) {
-          console.warn(`⚠️ getPublicReviews: ${res.status} on ${ep} — returning []`);
+          console.warn(`⚠️ getPublicReviews: ${res.status} on ${ep} - returning []`);
           return [];
         }
       } catch { continue; }
@@ -2131,7 +2865,7 @@ export const getPublicReviews = async (): Promise<any[]> => {
 };
 
 /**
- * GET /api/reviews/consultant/:id — reviews for a specific consultant
+ * GET /api/reviews/consultant/:id - reviews for a specific consultant
  */
 export const getReviewsByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
@@ -2141,14 +2875,14 @@ export const getReviewsByConsultant = async (consultantId: number): Promise<any[
 };
 
 /**
- * POST /api/reviews — submit a review after a completed session
+ * POST /api/reviews - submit a review after a completed session
  */
 export const submitReview = async (payload: {
   consultantId: number; bookingId: number; rating: number; reviewText: string;
 }): Promise<any> => apiFetch("/reviews", { method: "POST", body: JSON.stringify(payload) });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// USER CATEGORIES — save questionnaire answers to backend
+// USER CATEGORIES - save questionnaire answers to backend
 // Endpoint: POST /api/users/:id/categories
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2156,7 +2890,7 @@ export const saveUserCategories = async (
   userId: number,
   categories: Array<{ category: string; subOption: string; answers: Record<string, string> }>
 ): Promise<any> => {
-  // Try multiple endpoint/payload variants — backend may use different structure
+  // Try multiple endpoint/payload variants - backend may use different structure
   const attempts = [
     // Variant 1: standard array POST
     { url: `/users/${userId}/categories`, body: JSON.stringify(categories) },
@@ -2172,7 +2906,7 @@ export const saveUserCategories = async (
       return await apiFetch(attempt.url, { method: "POST", body: attempt.body });
     } catch (err: any) {
       const msg = String(err?.message || "");
-      // Only retry on 500 — propagate auth errors immediately
+      // Only retry on 500 - propagate auth errors immediately
       if (!msg.includes("500") && !msg.includes("Internal Server")) {
         console.warn("⚠️ saveUserCategories failed (non-fatal):", msg);
         return null;
@@ -2180,7 +2914,7 @@ export const saveUserCategories = async (
       // else try next variant
     }
   }
-  // All failed — save to localStorage as final fallback (already done by caller)
+  // All failed - save to localStorage as final fallback (already done by caller)
   console.warn("⚠️ saveUserCategories: all endpoints failed, relying on localStorage");
   return null;
 };
@@ -2193,7 +2927,7 @@ export const getUserCategories = async (userId: number): Promise<any[]> => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATIC CONTENT — Backend: StaticContentController @ /api/static-content
+// STATIC CONTENT - Backend: StaticContentController @ /api/static-content
 // GET  /api/static-content/{contentType}  → StaticContentResponse
 // GET  /api/static-content               → List<StaticContentResponse>
 // POST /api/static-content               → upsert (admin only)
@@ -2201,13 +2935,13 @@ export const getUserCategories = async (userId: number): Promise<any[]> => {
 
 export const getStaticContent = async (contentType: string): Promise<any | null> => {
   try {
-    return await apiFetch(`/static-content/${contentType}`);
+    return await publicFetch(`/static-content/${contentType}`);
   } catch { return null; }
 };
 
 export const getAllStaticContent = async (): Promise<any[]> => {
   try {
-    const data = await apiFetch("/static-content");
+    const data = await publicFetch("/static-content");
     return Array.isArray(data) ? data : extractArray(data);
   } catch { return []; }
 };
@@ -2227,12 +2961,12 @@ export const saveStaticContent = async (payload: {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TERMS & CONDITIONS — delegates to StaticContentController (backward compat)
+// TERMS & CONDITIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const getLocalTermsFallback = (): any[] => {
+const getLocalStaticContentFallback = (storageKey: string): any[] => {
   try {
-    const raw = localStorage.getItem("fin_terms_versions");
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return [];
     const versions = JSON.parse(raw);
     if (!Array.isArray(versions) || versions.length === 0) return [];
@@ -2243,32 +2977,24 @@ const getLocalTermsFallback = (): any[] => {
   }
 };
 
-export const getTermsAndConditions = async (): Promise<any[]> => {
-  const attempts: Array<() => Promise<any>> = [
-    () => publicFetch("/static-content/TERMS_AND_CONDITIONS"),
-    () => publicFetch("/admin/terms-and-conditions/active"),
-    () => publicFetch("/admin/terms-and-conditions"),
-    () => apiFetch("/static-content/TERMS_AND_CONDITIONS"),
-    () => apiFetch("/admin/terms-and-conditions/active"),
-    () => apiFetch("/admin/terms-and-conditions"),
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      const data = await attempt();
-      if (data && (data.content || data.text)) return [data];
-      const arr = Array.isArray(data) ? data : extractArray(data);
-      if (arr.length > 0) return arr;
-    } catch (e: any) {
-      const msg = String(e?.message || "");
-      if (!msg.includes("404") && !msg.includes("401") && !msg.includes("403")) {
-        console.warn("⚠️ getTermsAndConditions attempt failed:", e?.message);
-      }
+const getStaticContentWithFallback = async (
+  contentType: string,
+  storageKey: string,
+): Promise<any[]> => {
+  const fallback = getLocalStaticContentFallback(storageKey);
+  try {
+    const data = await publicFetch(`/static-content/${contentType}`);
+    return data && (data.content || data.text) ? [data] : fallback;
+  } catch (e: any) {
+    if (!String(e?.message || "").includes("404")) {
+      console.warn(`⚠️ ${contentType} /static-content failed:`, e?.message);
     }
+    return fallback;
   }
-
-  return getLocalTermsFallback();
 };
+
+export const getTermsAndConditions = async (): Promise<any[]> =>
+  getStaticContentWithFallback("TERMS_AND_CONDITIONS", "fin_terms_versions");
 
 export const saveTermsAndConditions = async (payload: {
   version: string; content: string; isActive: boolean;
@@ -2282,21 +3008,36 @@ export const saveTermsAndConditions = async (payload: {
         lastUpdatedBy: "Admin",
       }),
     });
-  } catch {
-    try {
-      return await apiFetch("/admin/terms-and-conditions", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-    } catch (err: any) {
-      console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
-      return null;
-    }
+  } catch (err: any) {
+    console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
+    return null;
+  }
+};
+
+export const getPrivacyPolicy = async (): Promise<any[]> => {
+  return getStaticContentWithFallback("PRIVACY_POLICY", "fin_privacy_versions");
+};
+
+export const savePrivacyPolicy = async (payload: {
+  version: string; content: string; isActive: boolean;
+}): Promise<any> => {
+  try {
+    return await apiFetch("/static-content", {
+      method: "POST",
+      body: JSON.stringify({
+        contentType: "PRIVACY_POLICY",
+        content: payload.content,
+        lastUpdatedBy: "Admin",
+      }),
+    });
+  } catch (err: any) {
+    console.warn("⚠️ savePrivacyPolicy failed:", err?.message);
+    return null;
   }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN — Add Member (POST /api/admin/users)
+// ADMIN - Add Member (POST /api/admin/users)
 // Handles bcrypt encryption on backend, sets isFirstLogin=true
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2344,7 +3085,7 @@ export interface FeeConfig {
 
 /**
  * GET /api/admin/settings/public/fee-config
- * Public endpoint — accessible by all users (no auth required).
+ * Public endpoint - accessible by all users (no auth required).
  * Returns the platform commission configuration.
  */
 export const getFeeConfig = async (): Promise<FeeConfig> => {
@@ -2436,10 +3177,10 @@ export const calculateTotalPrice = (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QUESTIONS & ANSWERS — Backend: QuestionController @ /api/questions
+// QUESTIONS & ANSWERS - Backend: QuestionController @ /api/questions
 //                                AnswerController  @ /api/answers
 //
-// Updated schema (standalone questions — NOT linked to skills):
+// Updated schema (standalone questions - NOT linked to skills):
 //   Question   { id, text, type, options, placeholder, isActive, updatedAt }
 //   QuestionRequest  { text, type?, options?, placeholder? }
 //   QuestionResponse { id, text, type, options, placeholder, isActive, updatedAt }
@@ -2448,10 +3189,10 @@ export const calculateTotalPrice = (
 //   AnswerSubmissionRequest { bookingId, consultantId?, answers: [{ questionId, text }] }
 //
 // Question types:
-//   "radio"       — single-choice, options stored as "|||"-delimited string
-//   "multiselect" — multi-choice,  options stored as "|||"-delimited string
-//   "text"        — free-text input, placeholder supported
-//   "mobile"      — 10-digit IN phone input, placeholder supported
+//   "radio"       - single-choice, options stored as "|||"-delimited string
+//   "multiselect" - multi-choice,  options stored as "|||"-delimited string
+//   "text"        - free-text input, placeholder supported
+//   "mobile"      - 10-digit IN phone input, placeholder supported
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire type returned by GET /api/questions */
@@ -2477,7 +3218,7 @@ export interface BackendAnswer {
   isActive?: boolean;
 }
 
-/** Frontend display model — extends BackendQuestion with parsed options array */
+/** Frontend display model - extends BackendQuestion with parsed options array */
 export interface AdminQuestion {
   id?: number;
   text: string;
@@ -2501,7 +3242,7 @@ export const parseQuestionOptions = (raw?: string | null): string[] => {
 /**
  * GET /api/questions
  * Fetches ALL active standalone questions.
- * Public/user endpoint — no admin token required.
+ * Public/user endpoint - no admin token required.
  */
 export const getAllActiveQuestions = async (skillIds?: number[]): Promise<BackendQuestion[]> => {
   try {
@@ -2525,7 +3266,7 @@ export const getAllActiveQuestions = async (skillIds?: number[]): Promise<Backen
 
 /**
  * Alias kept for the AdminPage QuestionsManagementPanel.
- * Calls GET /api/questions — returns all active standalone questions.
+ * Calls GET /api/questions - returns all active standalone questions.
  */
 export const getAdminQuestions = getAllActiveQuestions;
 
@@ -2533,10 +3274,10 @@ export const getAdminQuestions = getAllActiveQuestions;
  * POST /api/questions  (ADMIN only)
  * Creates a new standalone question.
  *
- * @param payload.text        — question text (required)
- * @param payload.type        — "radio" | "multiselect" | "text" | "mobile"  (default: "radio")
- * @param payload.options     — "|||"-delimited option string for radio/multiselect
- * @param payload.placeholder — hint text for text/mobile inputs
+ * @param payload.text        - question text (required)
+ * @param payload.type        - "radio" | "multiselect" | "text" | "mobile"  (default: "radio")
+ * @param payload.options     - "|||"-delimited option string for radio/multiselect
+ * @param payload.placeholder - hint text for text/mobile inputs
  */
 export const createAdminQuestion = async (payload: {
   text: string;
@@ -2586,7 +3327,7 @@ export const deleteAdminQuestion = async (id: number): Promise<void> =>
 
 // ── LEGACY COMPAT ─────────────────────────────────────────────────────────────
 /**
- * @deprecated  Questions are now standalone — skillIds param is ignored.
+ * @deprecated  Questions are now standalone - skillIds param is ignored.
  * Use getAllActiveQuestions() instead.
  */
 export const getQuestionsBySkills = async (
@@ -2602,7 +3343,7 @@ export const getQuestionsBySkills = async (
 export interface AnswerResponse {
   id: number;
   bookingId: number;
-  bookingType: string; // "NORMAL" | "SPECIAL" — matches AnswerResponse DTO
+  bookingType: string; // "NORMAL" | "SPECIAL" - matches AnswerResponse DTO
   questionId: number;
   text: string;
   updatedAt?: string;
@@ -2613,10 +3354,10 @@ export interface AnswerResponse {
  * POST /api/answers
  * User submits answers to post-booking questions for a specific booking.
  *
- * @param bookingId    — The booking this answer set belongs to (required by backend DTO)
- * @param answers      — Array of { questionId, text } pairs
- * @param consultantId — Optional: the consultant associated with the booking
- * @param bookingType  — "NORMAL" (default) or "SPECIAL" — required by AnswerSubmissionRequest DTO
+ * @param bookingId    - The booking this answer set belongs to (required by backend DTO)
+ * @param answers      - Array of { questionId, text } pairs
+ * @param consultantId - Optional: the consultant associated with the booking
+ * @param bookingType  - "NORMAL" (default) or "SPECIAL" - required by AnswerSubmissionRequest DTO
  *
  * Backend: AnswerSubmissionRequest now requires bookingType to correctly scope
  * soft-deletes and avoid ID collisions between the bookings and special_bookings tables.
@@ -2652,9 +3393,9 @@ export const getUserAnswers = async (userId: number): Promise<BackendAnswer[]> =
 /**
  * GET /api/users/:userId/bookings/:bookingId/answers?type=NORMAL|SPECIAL
  * Admin / consultant endpoint: fetch all active answers for a specific booking.
- * Calls AnswerController.getAnswersForBooking — returns List<AnswerResponse>.
+ * Calls AnswerController.getAnswersForBooking - returns List<AnswerResponse>.
  *
- * @param bookingType — "NORMAL" (default) or "SPECIAL".
+ * @param bookingType - "NORMAL" (default) or "SPECIAL".
  * Backend requires this to distinguish between the bookings and special_bookings
  * tables, since IDs from both tables can collide.
  */
@@ -2704,7 +3445,7 @@ export const getPublicHomeOffers = async (): Promise<any[]> => {
  * - Includes global admin offers + consultant-specific offers.
  * - Filters out offers the user has already redeemed (non-CANCELLED bookings).
  *
- * @param consultantId  Optional — pass the consultant's ID to include their offers.
+ * @param consultantId  Optional - pass the consultant's ID to include their offers.
  */
 export const getActiveOffersForCheckout = async (consultantId?: number): Promise<any[]> => {
   try {
@@ -2715,7 +3456,7 @@ export const getActiveOffersForCheckout = async (consultantId?: number): Promise
 };
 
 /**
- * GET /api/offers/admin — fetch all offers (admin view: PENDING, APPROVED, REJECTED)
+ * GET /api/offers/admin - fetch all offers (admin view: PENDING, APPROVED, REJECTED)
  * Returns consultant-submitted offers (consultantId != null) and global admin offers
  */
 export const getConsultantSubmittedOffers = async (): Promise<any[]> => {
@@ -2728,7 +3469,7 @@ export const getConsultantSubmittedOffers = async (): Promise<any[]> => {
 };
 
 /**
- * GET /api/offers/admin — all offers for admin management panel
+ * GET /api/offers/admin - all offers for admin management panel
  */
 export const getAllOffersForAdmin = async (): Promise<any[]> => {
   try {
@@ -2738,15 +3479,15 @@ export const getAllOffersForAdmin = async (): Promise<any[]> => {
 };
 
 /**
- * PUT /api/offers/{id}/status?status=APPROVED — approve a consultant offer
- * Backend: OfferController.updateOfferStatus — admin only
+ * PUT /api/offers/{id}/status?status=APPROVED - approve a consultant offer
+ * Backend: OfferController.updateOfferStatus - admin only
  */
 export const approveOffer = async (id: number): Promise<any> =>
   apiFetch(`/offers/${id}/status?status=APPROVED`, { method: "PUT" });
 
 /**
- * PUT /api/offers/{id}/status?status=REJECTED — reject a consultant offer
- * Backend: OfferController.updateOfferStatus — admin only
+ * PUT /api/offers/{id}/status?status=REJECTED - reject a consultant offer
+ * Backend: OfferController.updateOfferStatus - admin only
  */
 export const rejectOffer = async (id: number): Promise<any> =>
   apiFetch(`/offers/${id}/status?status=REJECTED`, { method: "PUT" });

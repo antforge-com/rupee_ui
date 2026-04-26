@@ -115,7 +115,7 @@ const parseTimeLabelToMinutes = (value: string): number | null => {
 
 const bookingStartMinutes = (booking: Pick<Booking, "time">): number => {
   const fromRange = parseTimeLabelToMinutes(
-    String(booking.time || "").split(/[-–]/)[0]?.trim() || ""
+    String(booking.time || "").split(/[--]/)[0]?.trim() || ""
   );
   if (fromRange !== null) return fromRange;
   return parseTimeLabelToMinutes(booking.time || "") ?? Number.MAX_SAFE_INTEGER;
@@ -414,7 +414,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     }
   };
 
-  // ── Robust date parser — handles "2026-03-25", "25 Mar 2026", "Mar 25, 2026" etc.
+  // ── Robust date parser - handles "2026-03-25", "25 Mar 2026", "Mar 25, 2026" etc.
   const parseBookingDate = (raw: string): string => {
     if (!raw) return "";
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw; // already ISO
@@ -483,7 +483,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
       const rawDate = ts.slotDate || b.slotDate || b.bookingDate || b.date || "";
       const date = parseBookingDate(rawDate);
       const masterKey = ts.masterTimeSlotId || b.masterTimeSlotId;
-      // Helper to format HH:MM → 12-hr and optionally build start–end range
+      // Helper to format HH:MM → 12-hr and optionally build start-end range
       const fmt12 = (h: number, m: number) => {
         const ampm = h >= 12 ? "PM" : "AM";
         const h12 = h % 12 || 12;
@@ -549,14 +549,14 @@ export default function BookingsPage({ isAdmin = false }: Props) {
   };
   const revenue = bookings.filter(b => b.status === "COMPLETED").reduce((s, b) => s + b.amount, 0);
 
-  const pageNums = (): (number | "…")[] => {
+  const pageNums = (): (number | "...")[] => {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i);
     const set = new Set([0, totalPages - 1, currentPage - 1, currentPage, currentPage + 1]
       .filter(p => p >= 0 && p < totalPages));
     const sorted = [...set].sort((a, b) => a - b);
-    const result: (number | "…")[] = [];
+    const result: (number | "...")[] = [];
     sorted.forEach((p, i) => {
-      if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("…");
+      if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("...");
       result.push(p);
     });
     return result;
@@ -615,7 +615,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                 <button onClick={() => setEditingBooking(null)} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
                 <button onClick={handleSaveEdit} disabled={savingEdit}
                   style={{ flex: 2, padding: "11px", borderRadius: 10, border: "none", background: savingEdit ? "#99F6E4" : "linear-gradient(135deg, #0F766E, #0D9488)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                  {savingEdit ? "Saving…" : "Save Changes"}
+                  {savingEdit ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </div>
@@ -623,7 +623,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         </div>
       )}
 
-      {/* ── Refresh button — consultant dashboard only.
+      {/* ── Refresh button - consultant dashboard only.
            Admin view omits this; the parent BookingsSectionWrapper header provides it. ── */}
       {!isAdmin && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 20 }}>
@@ -784,8 +784,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
             <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0}
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: currentPage === 0 ? "not-allowed" : "pointer", border: "1.5px solid #E2E8F0", background: currentPage === 0 ? "#F8FAFC" : "#fff", color: currentPage === 0 ? "#CBD5E1" : "#0F766E", display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronLeft size={14} /> Prev</button>
             {pageNums().map((pg, i) =>
-              pg === "…" ? (
-                <span key={`e-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>…</span>
+              pg === "..." ? (
+                <span key={`e-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>...</span>
               ) : (
                 <button key={pg} onClick={() => goToPage(pg as number)}
                   style={{ width: 36, height: 36, borderRadius: 8, fontSize: 13, fontWeight: pg === currentPage ? 800 : 600, cursor: "pointer", border: pg === currentPage ? "2px solid #0F766E" : pageCache[pg as number] ? "1.5px solid #A5F3FC" : "1.5px solid #E2E8F0", background: pg === currentPage ? "#0F766E" : pageCache[pg as number] ? "#ECFEFF" : "#fff", color: pg === currentPage ? "#fff" : pageCache[pg as number] ? "#0F766E" : "#374151" }}>

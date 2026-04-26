@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// crypto.ts  —  Password encryption utility (AES-256-CBC via Web Crypto API)
+// crypto.ts  -  Password encryption utility (AES-256-CBC via Web Crypto API)
 //
 // Why AES and NOT RSA:
 //   The backend uses BCryptPasswordEncoder. BCrypt is a one-way hash and
@@ -16,7 +16,7 @@
 // PasswordDecryptionUtil class your backend team needs to add.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Shared secret — MUST match app.encryption.secret-key in application.properties ──
+// ── Shared secret - MUST match app.encryption.secret-key in application.properties ──
 const AES_SECRET_KEY = "M33tTh3M4st3rs@2026SecureKey!!32"; // exactly 32 chars
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ export const encryptPassword = async (plainText: string): Promise<string> => {
   if (!plainText) return plainText;
 
   if (typeof window === "undefined" || !window?.crypto?.subtle) {
-    console.warn("[crypto] Web Crypto unavailable — sending plain text");
+    console.warn("[crypto] Web Crypto unavailable - sending plain text");
     return plainText;
   }
 
@@ -120,12 +120,12 @@ export const encryptLocal = (value: string): string => {
 };
 
 /**
- * Reverse of encryptLocal.  Handles both obfuscated ("enc:…") and legacy
+ * Reverse of encryptLocal.  Handles both obfuscated ("enc:...") and legacy
  * plain-text values so existing sessions are not broken after a deploy.
  */
 export const decryptLocal = (stored: string): string => {
   if (!stored) return stored;
-  if (!stored.startsWith("enc:")) return stored; // legacy plain-text — pass through
+  if (!stored.startsWith("enc:")) return stored; // legacy plain-text - pass through
   try {
     return _xor(atob(stored.slice(4)), AES_SECRET_KEY);
   } catch {
@@ -134,7 +134,7 @@ export const decryptLocal = (stored: string): string => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BACKEND INTEGRATION — share this with your backend team
+// BACKEND INTEGRATION - share this with your backend team
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // 1) application.properties  (add this line)
@@ -175,7 +175,7 @@ export const decryptLocal = (stored: string): string => {
 //                cipher.init(Cipher.DECRYPT_MODE, keySpec, new IvParameterSpec(iv));
 //                return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
 //            } catch (Exception e) {
-//                // Not encrypted or wrong format — treat as plain text (safe fallback)
+//                // Not encrypted or wrong format - treat as plain text (safe fallback)
 //                return payload;
 //            }
 //        }

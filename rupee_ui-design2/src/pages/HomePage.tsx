@@ -21,6 +21,7 @@ import logoImg from '../assests/Meetmasterslogopng.png';
 import { API_BASE_URL } from "../config/api";
 import { getHighestRatedFeedbacks, getPublicHomeOffers, getRole } from "../services/api";
 import { decryptLocal } from "../services/crypto";
+import { isValidEmail, startsWithCapital, startsWithLetter } from "../utils/formUtils";
 
 interface Offer {
   id: number;
@@ -411,9 +412,35 @@ export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [contactForm, setContactForm] = useState({ name: "", email: "", message: "" });
-  const [contactError, setContactError] = useState("");
+  const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
+  const [contactTouched, setContactTouched] = useState<Record<string, boolean>>({});
   const [contactSending, setContactSending] = useState(false);
   const [contactSuccess, setContactSuccess] = useState(false);
+
+  const validateContact = (data = contactForm) => {
+    const newErrors: Record<string, string> = {};
+
+    if (!data.name.trim()) {
+      newErrors.name = "Name is required.";
+    } else if (!startsWithLetter(data.name)) {
+      newErrors.name = "Name must start with an alphabetic letter.";
+    } else if (!startsWithCapital(data.name)) {
+      newErrors.name = "Name must start with a capital letter.";
+    }
+
+    if (!data.email.trim()) {
+      newErrors.email = "Email is required.";
+    } else if (!isValidEmail(data.email)) {
+      newErrors.email = "Please enter a valid email address.";
+    }
+
+    if (!data.message.trim()) {
+      newErrors.message = "Message is required.";
+    }
+
+    setContactErrors(newErrors);
+    return newErrors;
+  };
 
   const [offers, setOffers] = useState<Offer[]>([]);
   const [offersLoading, setOffersLoading] = useState(true);
@@ -423,9 +450,23 @@ export default function HomePage() {
   const [reviewsLoading, setReviewsLoading] = useState(true);
 
   const openContact = () => {
-    setContactError("");
+    setContactErrors({});
+    setContactTouched({});
     setContactSuccess(false);
     setShowContact(true);
+  };
+
+  const openPrivacyPolicy = () => {
+    navigate("/privacy-policy");
+  };
+
+  const openTermsAndConditions = () => {
+    navigate("/terms-and-conditions");
+  };
+
+  const handleContactBlur = (field: string) => {
+    setContactTouched(prev => ({ ...prev, [field]: true }));
+    validateContact();
   };
 
   const closeOverlays = () => {
@@ -581,7 +622,7 @@ export default function HomePage() {
 
     const slideOne = () => {
       if (offersAutoScrollPausedRef.current) {
-        // User hovering/dragging — retry after a short delay
+        // User hovering/dragging - retry after a short delay
         phaseTimer = setTimeout(slideOne, 120);
         return;
       }
@@ -592,7 +633,7 @@ export default function HomePage() {
 
       const animate = (now: number) => {
         if (offersAutoScrollPausedRef.current) {
-          // Interrupted mid-glide — snap to target and re-enter pause
+          // Interrupted mid-glide - snap to target and re-enter pause
           rail.scrollLeft = start + cardWidth;
           clampToMiddle();
           phaseTimer = setTimeout(slideOne, PAUSE_MS);
@@ -604,7 +645,7 @@ export default function HomePage() {
         if (t < 1) {
           rafId = requestAnimationFrame(animate);
         } else {
-          // Glide done — sit still before next slide
+          // Glide done - sit still before next slide
           phaseTimer = setTimeout(slideOne, PAUSE_MS);
         }
       };
@@ -629,6 +670,9 @@ export default function HomePage() {
 
     const beginDrag = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // Don't hijack clicks on buttons or links - let them fire normally
+      const target = e.target as HTMLElement;
+      if (target.closest("button, a, [role='button']")) return;
       dragState.active = true;
       dragState.pointerId = e.pointerId;
       dragState.startX = e.clientX;
@@ -659,6 +703,12 @@ export default function HomePage() {
 
     const suppressClickAfterDrag = (e: MouseEvent) => {
       if (!dragState.moved) return;
+      // Don't suppress clicks on interactive elements (buttons, links) even after drag
+      const target = e.target as HTMLElement;
+      if (target.closest("button, a, [role='button']")) {
+        dragState.moved = false;
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       dragState.moved = false;
@@ -666,7 +716,11 @@ export default function HomePage() {
 
     // ── Pause on hover so users can read cards ──
     const onMouseEnter = () => { offersAutoScrollPausedRef.current = true; };
-    const onMouseLeave = () => { offersAutoScrollPausedRef.current = false; };
+    const onMouseLeave = (e: MouseEvent) => {
+      // Don't resume if the user is clicking a button (relatedTarget is outside rail)
+      if (dragState.active) return;
+      offersAutoScrollPausedRef.current = false;
+    };
 
     const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
       syncLoopWidth();
@@ -704,12 +758,13 @@ export default function HomePage() {
   }, [displayOffers.length]);
 
   const handleContactSubmit = async () => {
-    if (!contactForm.name.trim() || !contactForm.email.trim() || !contactForm.message.trim()) {
-      setContactError("Please fill in all fields.");
-      return;
-    }
+    // Mark all as touched
+    setContactTouched({ name: true, email: true, message: true });
+    const e = validateContact();
+    if (Object.keys(e).length > 0) return;
+
     setContactSending(true);
-    setContactError("");
+    setContactErrors({});
     let backendSuccess = false;
     try {
       const res = await fetch(`${BASE}/contact/public/submit`, {
@@ -733,18 +788,30 @@ export default function HomePage() {
     } catch { }
     setContactSuccess(true);
     setContactForm({ name: "", email: "", message: "" });
+    setContactTouched({});
     setContactSending(false);
   };
 
   const handleClaimOffer = (offer: Offer) => {
+    // Always save the offer so it can be applied after login
     localStorage.setItem("fin_pending_offer", JSON.stringify({
       id: offer.id, title: offer.title, description: offer.description,
       discount: offer.discount, consultantId: offer.consultantId, consultantName: offer.consultantName,
     }));
-    const token = localStorage.getItem("fin_token");
+
+    // Pause auto-scroll immediately so the carousel doesn't keep moving during navigation
+    offersAutoScrollPausedRef.current = true;
+
+    const token = (localStorage.getItem("fin_token") || "").trim();
+    if (!token) {
+      // Not logged in - scroll to top first, then navigate to login
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setTimeout(() => navigate("/login"), 300);
+      return;
+    }
     const role = getStoredRole();
     const canUseUserBooking = ["USER", "SUBSCRIBER", "GUEST", "MEMBER"].includes(role);
-    navigate(token && canUseUserBooking ? "/user" : "/login");
+    navigate(canUseUserBooking ? "/user" : "/login");
   };
 
   return (
@@ -965,8 +1032,8 @@ export default function HomePage() {
             <img src={logoImg} alt="Meet The Masters" className="hp-footer-logo" />
             <div className="hp-footer-links">
               <span style={{ cursor: "pointer" }} onClick={openContact}>Contact Us</span>
-              <span>Privacy</span>
-              <span>Terms</span>
+              <span style={{ cursor: "pointer" }} onClick={openPrivacyPolicy}>Privacy</span>
+              <span style={{ cursor: "pointer" }} onClick={openTermsAndConditions}>Terms</span>
             </div>
           </div>
         </div>
@@ -1003,26 +1070,59 @@ export default function HomePage() {
                 </div>
               ) : (
                 <>
-                  <div className="hp-contact-input-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><User size={17} /></span>
-                    <input value={contactForm.name} onChange={(e) => setContactForm(f => ({ ...f, name: e.target.value }))} placeholder="Your Name" className="hp-contact-input" />
-                  </div>
-                  <div className="hp-contact-input-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><Mail size={17} /></span>
-                    <input value={contactForm.email} onChange={(e) => setContactForm(f => ({ ...f, email: e.target.value }))} placeholder="Email Address" type="email" className="hp-contact-input" />
-                  </div>
-                  <div className="hp-contact-textarea-wrapper">
-                    <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, marginTop: 2 }}><MessageSquare size={17} /></span>
-                    <textarea value={contactForm.message} onChange={(e) => setContactForm(f => ({ ...f, message: e.target.value }))} placeholder="Your message…" rows={4} className="hp-contact-textarea" />
-                  </div>
-                  {contactError && (
-                    <div style={{ color: "#FCA5A5", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-                      <AlertTriangle size={13} /> {contactError}
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><User size={17} /></span>
+                      <input 
+                        value={contactForm.name} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          // Block numbers and special characters as the very first character
+                          if (val.length === 1 && /[^a-zA-Z]/.test(val)) return;
+                          setContactForm(f => ({ ...f, name: val }));
+                          if (contactTouched.name) validateContact({ ...contactForm, name: val });
+                        }} 
+                        onBlur={() => handleContactBlur("name")}
+                        placeholder="Your Name" 
+                        className="hp-contact-input" 
+                      />
                     </div>
-                  )}
+                    {contactTouched.name && contactErrors.name && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.name}</div>}
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><Mail size={17} /></span>
+                      <input 
+                        value={contactForm.email} 
+                        onChange={(e) => { setContactForm(f => ({ ...f, email: e.target.value })); if (contactTouched.email) validateContact({ ...contactForm, email: e.target.value }); }} 
+                        onBlur={() => handleContactBlur("email")}
+                        placeholder="Email Address" 
+                        type="email" 
+                        className="hp-contact-input" 
+                      />
+                    </div>
+                    {contactTouched.email && contactErrors.email && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.email}</div>}
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <div className="hp-contact-textarea-wrapper" style={{ marginBottom: 0 }}>
+                      <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, marginTop: 2 }}><MessageSquare size={17} /></span>
+                      <textarea 
+                        value={contactForm.message} 
+                        onChange={(e) => { setContactForm(f => ({ ...f, message: e.target.value })); if (contactTouched.message) validateContact({ ...contactForm, message: e.target.value }); }} 
+                        onBlur={() => handleContactBlur("message")}
+                        placeholder="Your message..." 
+                        rows={4} 
+                        className="hp-contact-textarea" 
+                      />
+                    </div>
+                    {contactTouched.message && contactErrors.message && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.message}</div>}
+                  </div>
+                  {/* Removed global error display */}
                   <button onClick={handleContactSubmit} disabled={contactSending} className="hp-contact-submit-btn">
                     <Send size={15} />
-                    {contactSending ? "Sending…" : "Send Message"}
+                    {contactSending ? "Sending..." : "Send Message"}
                   </button>
                 </>
               )}
@@ -1051,7 +1151,7 @@ export default function HomePage() {
           min-height: 100vh; overflow-x: hidden; min-width: 320px;
         }
 
-        /* ═══ HEADER ═══ */
+        /* === HEADER === */
         .hp-header {
           position: fixed; top: 0; left: 0; right: 0; z-index: 100;
           background: linear-gradient(135deg, #0F172A 0%, #0F766E 48%, #2563EB 100%);
@@ -1092,7 +1192,7 @@ export default function HomePage() {
         }
         .hp-mobile-nav-link:hover { color: #fff; }
 
-        /* ═══ BUTTONS ═══ */
+        /* === BUTTONS === */
         .hp-login-btn:hover { background: linear-gradient(135deg, #0D9488, #1D4ED8); box-shadow: 0 4px 16px rgba(15,118,110,0.45); transform: translateY(-1px); }
         .hp-login-btn {
          padding: 8px 20px; border-radius: 10px; border: none;
@@ -1110,7 +1210,7 @@ export default function HomePage() {
         }
         .hp-primary-btn:hover { background: linear-gradient(135deg, #0D9488, #1D4ED8); box-shadow: 0 4px 16px rgba(15,118,110,0.45); transform: translateY(-1px); }
 
-        /* ═══ HERO ═══ */
+        /* === HERO === */
         .hp-velorah-outer {
           position: relative; width: 100%; min-height: 100vh;
           overflow: hidden; display: flex; flex-direction: column;
@@ -1153,7 +1253,7 @@ export default function HomePage() {
         .animate-fade-rise       { animation: fade-rise 0.8s ease-out both; }
         .animate-fade-rise-delay { animation: fade-rise 0.8s ease-out 0.2s both; }
 
-        /* ═══ SECTION LAYOUT ═══ */
+        /* === SECTION LAYOUT === */
         .hp-offers-section,
         .hp-reviews-section {
           padding: 78px 24px;
@@ -1227,7 +1327,7 @@ export default function HomePage() {
         .hp-state-card-offers h3, .hp-state-card-offers p { color: #475569; }
         .hp-state-logo { width: 52px; height: auto; display: block; animation: mtmPulse 1.8s ease-in-out infinite; }
 
-        /* ═══ OFFERS RAIL ═══ */
+        /* === OFFERS RAIL === */
         .hp-offers-rail {
           display: flex;
           gap: var(--hp-offer-rail-gap);
@@ -1245,7 +1345,7 @@ export default function HomePage() {
         .hp-offers-rail:active { cursor: grabbing; }
         .hp-offers-rail::-webkit-scrollbar { display: none; }
 
-        /* ═══ OFFER CARD ═══ */
+        /* === OFFER CARD === */
         .hp-offer-card {
           position: relative;
           flex: 0 0 var(--hp-offer-card-width);
@@ -1311,7 +1411,7 @@ export default function HomePage() {
         }
         .hp-offer-cta:hover { transform: translateY(-1px); filter: brightness(1.02); }
 
-        /* ═══ REVIEWS ═══ */
+        /* === REVIEWS === */
         .hp-reviews-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
         .hp-review-card {
           position: relative; background: #fff; border-radius: 20px; padding: 26px;
@@ -1346,7 +1446,7 @@ export default function HomePage() {
           box-shadow: 0 10px 24px rgba(15,118,110,0.18); display: inline-flex; align-items: center; gap: 8px;
         }
 
-        /* ═══ FOOTER ═══ */
+        /* === FOOTER === */
         .hp-footer {
           background: linear-gradient(135deg, #0F172A 0%, #0F766E 48%, #2563EB 100%);
           padding: 28px 0;
@@ -1384,7 +1484,7 @@ export default function HomePage() {
         }
         .hp-footer-links span:hover { color: #fff; }
 
-        /* ═══ CONTACT MODAL ═══ */
+        /* === CONTACT MODAL === */
         .hp-contact-modal-overlay {
           position: fixed; inset: 0; z-index: 200;
           background: rgba(15,23,42,0.7);
@@ -1430,7 +1530,7 @@ export default function HomePage() {
         .hp-contact-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .hp-contact-success { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 
-        /* ═══ WHATSAPP ═══ */
+        /* === WHATSAPP === */
         .hp-whatsapp-button {
           position: fixed; bottom: 24px; right: 24px; z-index: 99;
           width: 54px; height: 54px; border-radius: 50%;
@@ -1441,7 +1541,7 @@ export default function HomePage() {
         }
         .hp-whatsapp-button:hover { transform: scale(1.12); box-shadow: 0 8px 28px rgba(37,211,102,0.55); }
 
-        /* ═══ ANIMATIONS ═══ */
+        /* === ANIMATIONS === */
         @keyframes pulse   { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.85;transform:scale(1.04)} }
         @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
         @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
@@ -1463,7 +1563,7 @@ export default function HomePage() {
 
         div::-webkit-scrollbar { display: none; }
 
-        /* ═══ RESPONSIVE ═══ */
+        /* === RESPONSIVE === */
         @media (max-width: 1100px) {
           .hp-offers-head { align-items: center; }
           .hp-offers-section {

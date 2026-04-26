@@ -5,6 +5,7 @@ import { BrowserRouter, Route, Routes, useNavigate } from "react-router-dom";
 import AdminPage from "./pages/AdminPage";
 import AdvisorDashboard from "./pages/AdvisorDashboard";
 import HomePage from "./pages/HomePage";
+import LegalContentPage from "./pages/LegalContentPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import UserPage from "./pages/UserPage";
@@ -13,7 +14,7 @@ import UserPage from "./pages/UserPage";
 import { NotificationProvider } from "./pages/NotificationSystem";
 
 // ── Service Imports ──
-import { getRole, getToken } from "./services/api";
+import { getRole, getToken, SESSION_EVENT_KEY } from "./services/api";
 
 // ── Role helpers ──────────────────────────────────────────────────────────────
 const normalizeRole = (raw?: string | null) =>
@@ -57,6 +58,14 @@ function AppRoutes() {
       <Route path="/" element={<HomePage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/terms-and-conditions"
+        element={<LegalContentPage contentType="TERMS_AND_CONDITIONS" title="Terms & Conditions" />}
+      />
+      <Route
+        path="/privacy-policy"
+        element={<LegalContentPage contentType="PRIVACY_POLICY" title="Privacy Policy" />}
+      />
 
       <Route
         path="/user"
@@ -89,11 +98,23 @@ function AppRoutes() {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_EVENT_KEY) return;
+      if (!event.newValue?.startsWith("logout:")) return;
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   return (
     // NotificationProvider wraps the entire app so every page can use
     // useNotifications(), UserTicketMonitor, NotificationBell, etc.
     // Note: AdminPage has its own internal NotificationProvider wrap too,
-    // which is fine — the inner one takes precedence for admin-specific
+    // which is fine - the inner one takes precedence for admin-specific
     // notifications while this outer one covers UserPage and AdvisorDashboard.
     <NotificationProvider>
       <BrowserRouter>

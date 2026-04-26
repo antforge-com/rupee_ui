@@ -7,14 +7,14 @@
  *   - UserPage         → ticket update notifications for customers
  *
  * Exports:
- *   NotificationProvider      — wrap your page/app with this
- *   useNotifications          — hook to read/write notifications
- *   ToastContainer            — auto-dismiss toast stack (top-right)
- *   NotificationBell          — dropdown bell icon
- *   EscalationMonitor         — background SLA breach checker
- *   UserNotificationMonitor   — polls fin_notifs_USER_<id> for new items
- *   ConsultantNotificationMonitor — polls fin_notifs_CONSULTANT_<id>
- *   sendEmailNotification     — fire-and-forget email helper
+ *   NotificationProvider      - wrap your page/app with this
+ *   useNotifications          - hook to read/write notifications
+ *   ToastContainer            - auto-dismiss toast stack (top-right)
+ *   NotificationBell          - dropdown bell icon
+ *   EscalationMonitor         - background SLA breach checker
+ *   UserNotificationMonitor   - polls fin_notifs_USER_<id> for new items
+ *   ConsultantNotificationMonitor - polls fin_notifs_CONSULTANT_<id>
+ *   sendEmailNotification     - fire-and-forget email helper
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -28,7 +28,7 @@ import React, {
   useState,
 } from "react";
 import { buildApiUrl } from "../config/api";
-import { getUserDisplayName } from "../services/api";
+import { getUserDisplayName, markNotificationAsRead } from "../services/api";
 import { decryptLocal } from "../services/crypto";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +45,7 @@ export interface AppNotification {
   read: boolean;
   ticketId?: number;
   link?: string;
+  dedupeKey?: string;
 }
 
 interface NotificationContextValue {
@@ -102,6 +103,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const addNotification = useCallback(
     (n: Omit<AppNotification, "id" | "timestamp" | "read">) => {
       setNotifications(prev => {
+        const dedupeKey = String(n.dedupeKey || "").trim();
+        if (dedupeKey) {
+          const isDuplicateByKey = prev.some(existing => existing.dedupeKey === dedupeKey);
+          if (isDuplicateByKey) return prev;
+        }
+
         // Deduplicate: skip if an identical title+message notification was added in the last 60 seconds
         const cutoff = Date.now() - 60_000;
         const isDuplicate = prev.some(
@@ -117,6 +124,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
           timestamp: new Date(),
           read: false,
+          dedupeKey: dedupeKey || undefined,
         };
         return [newNotif, ...prev].slice(0, 50);
       });
@@ -126,17 +134,30 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const markRead = useCallback((id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    const nid = Number(id);
+    if (!isNaN(nid)) markNotificationAsRead(nid).catch(() => { });
   }, []);
 
   const markAllRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    setNotifications(prev => {
+      prev.forEach(n => {
+        if (!n.read) {
+          const nid = Number(n.id);
+          if (!isNaN(nid)) markNotificationAsRead(nid).catch(() => { });
+        }
+      });
+      return prev.map(n => ({ ...n, read: true }));
+    });
   }, []);
 
   const clearAll = useCallback(() => {
     setNotifications([]);
-    // Clear from localStorage immediately so EscalationMonitor re-seed finds nothing
-    try { localStorage.removeItem(STORAGE_KEY()); } catch { }
-    // Persist a sentinel so EscalationMonitor doesn't immediately re-fire on same session
+    const key = STORAGE_KEY();
+    // Clear from localStorage immediately so monitors re-seed finds nothing
+    try { localStorage.removeItem(key); } catch { }
+    // Persist a sentinel so monitors don't immediately re-fire on same session
+    try { localStorage.setItem(`${key}_CLEARED_AT`, String(Date.now())); } catch { }
+    // Legacy sentinel for EscalationMonitor
     try { localStorage.setItem("fin_notifs_alerted_cleared", String(Date.now())); } catch { }
   }, []);
 
@@ -194,8 +215,14 @@ export const ToastContainer: React.FC = () => {
   const { notifications } = useNotifications();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seenIds = useRef<Set<string>>(new Set());
+  const seededFromStorage = useRef(false);
 
   useEffect(() => {
+    if (!seededFromStorage.current) {
+      notifications.forEach(n => seenIds.current.add(n.id));
+      seededFromStorage.current = true;
+      return;
+    }
     const latest = notifications[0];
     if (!latest || seenIds.current.has(latest.id)) return;
     seenIds.current.add(latest.id);
@@ -446,7 +473,7 @@ interface EscalationMonitorProps {
     agentName?: string;
     consultantId?: number;
   }>;
-  /** SLA window in hours — default 2 */
+  /** SLA window in hours - default 2 */
   slaHours?: number;
 }
 
@@ -504,7 +531,7 @@ export const EscalationMonitor: React.FC<EscalationMonitorProps> = ({
         alerted.current.add(t.id);
         addNotification({
           type: "error",
-          title: `⏰ SLA Breach — Ticket #${t.id}`,
+          title: `⏰ SLA Breach - Ticket #${t.id}`,
           message: `"${t.title}" has been open for ${Math.floor(hoursOpen)}h ${Math.floor((hoursOpen % 1) * 60)}m. Immediate action required!`,
           ticketId: t.id,
         });
@@ -541,7 +568,7 @@ export const EscalationMonitor: React.FC<EscalationMonitorProps> = ({
 // Polls `fin_notifs_USER_<userId>` in localStorage every 10 seconds and
 // on window focus.  When Admin writes a new entry there (status change, reply,
 // assignment), this component picks it up and fires addNotification() so the
-// UserPage bell lights up immediately — no page refresh required.
+// UserPage bell lights up immediately - no page refresh required.
 //
 // Usage (inside UserPage, after the <header>):
 //   <UserNotificationMonitor
@@ -571,7 +598,12 @@ export const UserNotificationMonitor: React.FC<UserNotificationMonitorProps> = (
       const raw = localStorage.getItem(`fin_notifs_USER_${userId}`);
       if (!raw) return;
       const items: any[] = JSON.parse(raw);
-      const fresh = items.filter(n => n?.id && !importedIds.current.has(String(n.id)));
+      const clearedAt = Number(localStorage.getItem(`fin_notifs_USER_${userId}_CLEARED_AT`) || 0);
+      const fresh = items.filter(n => {
+        if (!n?.id || importedIds.current.has(String(n.id))) return false;
+        const createdAt = new Date(n.timestamp || n.createdAt || Date.now()).getTime();
+        return createdAt > clearedAt;
+      });
       if (fresh.length === 0) return;
 
       // Mark them as seen for this session
@@ -584,6 +616,7 @@ export const UserNotificationMonitor: React.FC<UserNotificationMonitorProps> = (
           title: n.title || "New Notification",
           message: n.message || "",
           ticketId: n.ticketId,
+          dedupeKey: String(n.id),
         });
       });
 
@@ -658,6 +691,21 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
     try { return await getUserDisplayName(userId); } catch { return "Client"; }
   }, []);
 
+  const resolveEventStamp = useCallback((record: any): string => (
+    String(
+      record?.updatedAt
+      || record?.updated_at
+      || record?.lastUpdatedAt
+      || record?.lastModifiedAt
+      || record?.modifiedAt
+      || record?.statusUpdatedAt
+      || record?.statusChangedAt
+      || record?.createdAt
+      || record?.created_at
+      || ""
+    ).trim()
+  ), []);
+
   // ── Poll localStorage (admin-written notifications) ──
   const poll = useCallback(() => {
     if (!consultantId) return;
@@ -665,7 +713,12 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
       const raw = localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}`);
       if (!raw) return;
       const items: any[] = JSON.parse(raw);
-      const fresh = items.filter(n => n?.id && !importedIds.current.has(String(n.id)));
+      const clearedAt = Number(localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}_CLEARED_AT`) || 0);
+      const fresh = items.filter(n => {
+        if (!n?.id || importedIds.current.has(String(n.id))) return false;
+        const createdAt = new Date(n.timestamp || n.createdAt || Date.now()).getTime();
+        return createdAt > clearedAt;
+      });
       if (fresh.length === 0) return;
 
       fresh.forEach(n => importedIds.current.add(String(n.id)));
@@ -675,11 +728,12 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
           title: n.title || "New Notification",
           message: n.message || "",
           ticketId: n.ticketId,
+          dedupeKey: String(n.id),
         });
       });
 
       if (onNewNotifications) onNewNotifications(fresh);
-    } catch { }
+    } catch { recordFailure(); }
   }, [consultantId, addNotification, onNewNotifications]);
 
   // ── Poll bookings API for status changes ──
@@ -710,9 +764,12 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
           : null;
         const userId: number | null = b.userId || b.user?.id || null;
         const dateStr = b.slotDate || b.bookingDate || b.date || "";
+        const eventStamp = resolveEventStamp(b) || st;
 
         const buildNotif = (clientName: string) => {
-          const notifId = `booking_${id}_${st}_${Date.now()}`;
+          const notifId = prevStatus !== undefined && prevStatus !== st
+            ? `booking_${id}_${st}_${eventStamp}`
+            : `booking_new_${id}_${eventStamp}`;
           if (prevStatus !== undefined && prevStatus !== st) {
             if (st === "CONFIRMED" || st === "BOOKED") {
               newNotifs.push({ id: notifId, type: "success", title: "Booking Confirmed", message: `Session with ${clientName}${dateStr ? ` on ${dateStr}` : ""} has been confirmed.`, timestamp: new Date().toISOString(), read: false });
@@ -722,7 +779,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
               newNotifs.push({ id: notifId, type: "info", title: "Session Completed", message: `Your session with ${clientName}${dateStr ? ` on ${dateStr}` : ""} has been marked as completed.`, timestamp: new Date().toISOString(), read: false });
             }
           } else if (prevStatus === undefined && (st === "PENDING" || st === "CONFIRMED" || st === "BOOKED")) {
-            const newNotifId = `booking_new_${id}`;
+            const newNotifId = `booking_new_${id}_${eventStamp}`;
             if (!importedIds.current.has(newNotifId)) {
               importedIds.current.add(newNotifId);
               if (st === "PENDING") {
@@ -739,8 +796,16 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
           (prevStatus === undefined && (st === "PENDING" || st === "CONFIRMED" || st === "BOOKED"));
 
         if (needsNotif && !isSeeding.current) {
+          // Check if this booking was created after the most recent 'Clear all' action
+          const clearedAt = Number(localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}_CLEARED_AT`) || 0);
+          const createdAt = new Date(b.createdAt || b.created_at || b.timestamp || Date.now()).getTime();
+          if (createdAt <= clearedAt) {
+            seenBookingIds.current.set(id, st);
+            return;
+          }
+
           if (embeddedName) {
-            // Name already in booking — use it directly
+            // Name already in booking - use it directly
             buildNotif(embeddedName);
           } else {
             // Fetch name from /api/users/:id then build the notif
@@ -757,6 +822,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
       await Promise.allSettled(pendingResolutions);
 
       if (newNotifs.length > 0) {
+        newNotifs.forEach(n => importedIds.current.add(String(n.id)));
         // Persist to localStorage
         try {
           const key = `fin_notifs_CONSULTANT_${consultantId}`;
@@ -769,16 +835,38 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
         } catch { }
         // Fire toast notifications
         newNotifs.forEach(n => {
-          addNotification({ type: n.type as NotifType, title: n.title, message: n.message });
+          addNotification({
+            type: n.type as NotifType,
+            title: n.title,
+            message: n.message,
+            dedupeKey: String(n.id),
+          });
         });
         if (onNewNotifications) onNewNotifications(newNotifs);
       }
     } catch { }
-  }, [consultantId, addNotification, onNewNotifications]);
+  }, [consultantId, addNotification, onNewNotifications, resolveEventStamp, resolveUserName]);
 
   // ── Poll tickets API for assignment and status changes ──
+  const apiFailures = useRef(0);
+  const backoffUntil = useRef(0);
+
+  const isBackingOff = () => Date.now() < backoffUntil.current;
+
+  const recordFailure = () => {
+    apiFailures.current += 1;
+    // Exponential backoff: 1 fail = 30s, 2 = 60s, 3+ = 5 min
+    const backoffMs = apiFailures.current >= 3 ? 5 * 60_000
+      : apiFailures.current === 2 ? 60_000
+        : 30_000;
+    backoffUntil.current = Date.now() + backoffMs;
+    console.warn(`[NotificationSystem] Backend unreachable (${apiFailures.current} failures). Pausing polls for ${backoffMs / 1000}s.`);
+  };
+
+  const recordSuccess = () => { apiFailures.current = 0; backoffUntil.current = 0; };
+
   const pollTickets = useCallback(async () => {
-    if (!consultantId) return;
+    if (!consultantId || isBackingOff()) return;
     try {
       const token = localStorage.getItem("fin_token");
       const res = await fetch(buildApiUrl(`/tickets/consultant/${consultantId}`), {
@@ -796,27 +884,38 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
         const title = t.title || t.description || "Ticket";
 
         if (prevStatus === undefined) {
-          // First time seeing — only notify after the initial seed pass
+          // First time seeing - only notify after the initial seed pass
           const notifId = `ticket_new_${id}`;
-          if (!isSeeding.current && !importedIds.current.has(notifId) && ["NEW", "OPEN", "IN_PROGRESS"].includes(st)) {
+          const isRelevant = ["NEW", "OPEN", "IN_PROGRESS"].includes(st);
+          if (!isSeeding.current && !importedIds.current.has(notifId) && isRelevant) {
+            // Check if this ticket was created after the most recent 'Clear all' action
+            const clearedAt = Number(localStorage.getItem(`fin_notifs_CONSULTANT_${consultantId}_CLEARED_AT`) || 0);
+            const createdAt = new Date(t.createdAt || t.created_at || t.timestamp || Date.now()).getTime();
+            if (createdAt <= clearedAt) {
+               seenTicketIds.current.set(id, st);
+               return;
+            }
+
             importedIds.current.add(notifId);
-            newNotifs.push({ id: notifId, type: "warning", title: `Ticket Assigned${title ? ` — ${title}` : ""}`, message: `"${title}" has been assigned to you. Priority: ${t.priority || "MEDIUM"}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
+            newNotifs.push({ id: notifId, type: "warning", title: `Ticket Assigned${title ? ` - ${title}` : ""}`, message: `"${title}" has been assigned to you. Priority: ${t.priority || "MEDIUM"}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
           }
         } else if (prevStatus !== st) {
           // Status changed
-          const notifId = `ticket_${id}_${st}_${Date.now()}`;
+          const notifId = `ticket_${id}_${st}_${resolveEventStamp(t) || st}`;
           if (st === "RESOLVED") {
-            newNotifs.push({ id: notifId, type: "success", title: `Ticket Resolved${title ? ` — ${title}` : ""}`, message: `"${title}" has been marked as resolved.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
+            newNotifs.push({ id: notifId, type: "success", title: `Ticket Resolved${title ? ` - ${title}` : ""}`, message: `"${title}" has been marked as resolved.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
           } else if (st === "ESCALATED") {
-            newNotifs.push({ id: notifId, type: "error", title: `Ticket Escalated${title ? ` — ${title}` : ""}`, message: `"${title}" has been escalated. Immediate action required.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
+            newNotifs.push({ id: notifId, type: "error", title: `Ticket Escalated${title ? ` - ${title}` : ""}`, message: `"${title}" has been escalated. Immediate action required.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
           } else if (st === "CLOSED") {
-            newNotifs.push({ id: notifId, type: "info", title: `Ticket Closed${title ? ` — ${title}` : ""}`, message: `"${title}" has been closed.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
+            newNotifs.push({ id: notifId, type: "info", title: `Ticket Closed${title ? ` - ${title}` : ""}`, message: `"${title}" has been closed.`, timestamp: new Date().toISOString(), read: false, ticketId: t.id });
           }
         }
         seenTicketIds.current.set(id, st);
       });
 
+      recordSuccess();
       if (newNotifs.length > 0) {
+        newNotifs.forEach(n => importedIds.current.add(String(n.id)));
         try {
           const key = `fin_notifs_CONSULTANT_${consultantId}`;
           const existing: any[] = JSON.parse(localStorage.getItem(key) || "[]");
@@ -827,12 +926,18 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
           }
         } catch { }
         newNotifs.forEach(n => {
-          addNotification({ type: n.type as NotifType, title: n.title, message: n.message, ticketId: n.ticketId });
+          addNotification({
+            type: n.type as NotifType,
+            title: n.title,
+            message: n.message,
+            ticketId: n.ticketId,
+            dedupeKey: String(n.id),
+          });
         });
         if (onNewNotifications) onNewNotifications(newNotifs);
       }
     } catch { }
-  }, [consultantId, addNotification, onNewNotifications]);
+  }, [consultantId, addNotification, onNewNotifications, resolveEventStamp]);
 
   // Seed importedIds with whatever is already stored
   useEffect(() => {
@@ -889,7 +994,7 @@ export const ConsultantNotificationMonitor: React.FC<ConsultantNotificationMonit
 export const markNotificationReadOnBackend = async (notifId: string | number): Promise<void> => {
   const token = localStorage.getItem("fin_token");
   try {
-    await fetch(buildApiUrl(`/notifications/${notifId}/mark-read`), {
+    await fetch(buildApiUrl(`/notifications/${notifId}/read`), {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
