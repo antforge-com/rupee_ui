@@ -1,0 +1,11 @@
+{
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "/rupee_ui-design2/package.json",
+        "rupee_ui-design2/package.json"
+      ],
+      "url": "./.vscode/package.schema.json"
+    }
+  ]
+}
