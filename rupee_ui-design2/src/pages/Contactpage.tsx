@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import headerLogoImg from "../assests/MeetMastersHorizontalLogo.png";
 import { isValidEmail, startsWithCapital, startsWithLetter } from "../utils/formUtils";
 import { SUPPORT_EMAIL } from "../config/support";
 
@@ -111,9 +112,7 @@ export default function ContactPage() {
             Back
           </button>
           <div style={{ height: 20, width: 1, background: "#E2E8F0" }} />
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#0F172A", letterSpacing: "0.04em" }}>
-            MEET THE <span style={{ color: "#0F766E" }}>MASTERS</span>
-          </div>
+          <img src={headerLogoImg} alt="Meet The Masters" style={{ height: 40, width: "auto", maxWidth: 250, objectFit: "contain", display: "block" }} />
         </div>
       </header>
 
@@ -140,7 +139,7 @@ export default function ContactPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 32, alignItems: "start" }}>
 
-          {/* Left — Contact info */}
+          {/* Left - Contact info */}
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {[
               {
@@ -153,13 +152,13 @@ export default function ContactPage() {
                 icon: <Phone size={20} color="#0F766E" strokeWidth={1.8} />,
                 label: "Call Us",
                 value: "+91 99999 99999",
-                sub: "Mon – Sat, 9 AM – 6 PM IST",
+                sub: "Mon - Sat, 9 AM - 6 PM IST",
               },
               {
                 icon: <MapPin size={20} color="#0F766E" strokeWidth={1.8} />,
                 label: "Office",
                 value: "Hyderabad, Telangana",
-                sub: "India — 500 081",
+                sub: "India - 500 081",
               },
             ].map((item, i) => (
               <div key={i} style={{
@@ -188,8 +187,8 @@ export default function ContactPage() {
             }}>
               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Office Hours</div>
               {[
-                { day: "Monday – Friday", time: "9:00 AM – 6:00 PM" },
-                { day: "Saturday", time: "10:00 AM – 2:00 PM" },
+                { day: "Monday - Friday", time: "9:00 AM - 6:00 PM" },
+                { day: "Saturday", time: "10:00 AM - 2:00 PM" },
                 { day: "Sunday", time: "Closed" },
               ].map((h, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "rgba(255,255,255,0.85)", marginBottom: 6 }}>
@@ -200,7 +199,7 @@ export default function ContactPage() {
             </div>
           </div>
 
-          {/* Right — Form */}
+          {/* Right - Form */}
           <div style={{
             background: "#fff", border: "1px solid #E2E8F0", borderRadius: 20,
             padding: "36px 32px", boxShadow: "0 4px 20px rgba(0,0,0,0.06)",
@@ -330,7 +329,7 @@ export default function ContactPage() {
                   {sending ? (
                     <>
                       <span style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-                      Sending…
+                      Sending...
                     </>
                   ) : (
                     <>

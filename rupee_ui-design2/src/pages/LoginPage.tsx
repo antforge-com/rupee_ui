@@ -1,7 +1,8 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle, Eye, EyeOff, Lock, Mail, Settings, WifiOff, X } from "lucide-react";
 import { ChangeEvent, KeyboardEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getTermsAndConditions, loginUser, resetPassword, sendForgotPasswordOtp } from "../services/api";
+import headerLogoImg from "../assests/MeetMastersHorizontalLogo.png";
+import { getPrivacyPolicy, getTermsAndConditions, loginUser, resetPassword, sendForgotPasswordOtp } from "../services/api";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -23,7 +24,7 @@ interface PasswordInputProps {
 }
 
 const PasswordInput: React.FC<PasswordInputProps> = ({
-  value, onChange, onKeyDown, placeholder = "••••••••",
+  value, onChange, onKeyDown, placeholder = "********",
   hasError = false, autoFocus = false, style,
 }) => {
   const [visible, setVisible] = useState(false);
@@ -39,7 +40,8 @@ const PasswordInput: React.FC<PasswordInputProps> = ({
       <button type="button" onClick={() => setVisible(v => !v)}
         title={visible ? "Hide password" : "Show password"} tabIndex={-1}
         style={{
-          position: "absolute", right: 12, background: "none", border: "none", cursor: "pointer",
+          position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+          background: "none", border: "none", cursor: "pointer",
           padding: 4, display: "flex", alignItems: "center", justifyContent: "center",
           color: visible ? "var(--color-primary)" : "var(--text-muted)",
           transition: "color 0.2s", borderRadius: "var(--radius-sm)"
@@ -53,54 +55,62 @@ const PasswordInput: React.FC<PasswordInputProps> = ({
 // ─────────────────────────────────────────────────────────────────────────────
 // Terms Modal
 // ─────────────────────────────────────────────────────────────────────────────
-const DEFAULT_TERMS_CONTENT = `1. Acceptance of Terms
-By accessing and using Meet The Masters, you agree to these Terms & Conditions.
+const DEFAULT_PRIVACY_CONTENT = `1. Information We Collect
+We collect information that you provide directly, including account details, profile preferences, and booking information.
 
-2. Use of Services
-The platform provides access to financial consultants and may only be used for lawful purposes.
+2. How We Use Information
+Your information is used to deliver consultations, process bookings, improve platform quality, and support customer service.
 
-3. Confidentiality
-Consultation details and shared information must be handled confidentially.
+3. Sharing of Information
+We do not sell personal data. Information is shared only with required service providers and consultants to enable platform services.
 
-4. Booking & Payments
-Bookings are confirmed after successful payment. Cancellation and refund rules apply as per platform policy.
+4. Data Security
+We use reasonable administrative and technical safeguards to protect your personal data from unauthorized access.
 
-5. Disclaimer
-Guidance shared on the platform is informational and does not guarantee financial outcomes.
+5. Data Retention
+We retain data only as long as needed for legal, business, and service obligations.
 
-6. Privacy
-Personal information is stored and processed according to applicable data-protection requirements.
+6. Your Rights
+You may request access, correction, or deletion of your personal data subject to applicable laws.
 
-7. Governing Law
-These terms are governed by the laws of India.`;
+7. Policy Updates
+We may update this Privacy Policy periodically and publish the latest version on the platform.`;
 
-const TermsModal: React.FC<{ content: string; loading: boolean; onClose: () => void; onAccept: () => void }> = ({ content, loading, onClose, onAccept }) => (
-  <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="modal-content animate-fade-up">
-      <div className="modal-header">
-        <div className="modal-title">Terms & Conditions</div>
-        <button onClick={onClose} className="icon-button-circle"><X size={20} /></button>
-      </div>
-      <div className="modal-body">
-        {loading ? (
-          <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
-            Loading the latest saved Terms & Conditions...
-          </div>
-        ) : (
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.7 }}>
-            {content || DEFAULT_TERMS_CONTENT}
-          </pre>
-        )}
-      </div>
-      <div className="modal-footer">
-        <button onClick={onClose} className="btn-secondary" style={{ flex: 1 }}>Close</button>
-        <button onClick={() => { onAccept(); onClose(); }} className="btn-primary" style={{ flex: 2 }}>
-          <CheckCircle size={18} /> I Agree & Accept
-        </button>
+const LegalModal: React.FC<{ title: string; content: string | null; loading: boolean; onClose: () => void; onAccept: () => void }> = ({ title, content, loading, onClose, onAccept }) => {
+  const trimmedContent = content?.trim();
+
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-content animate-fade-up">
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button onClick={onClose} className="icon-button-circle"><X size={20} /></button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+              Loading the latest saved content...
+            </div>
+          ) : trimmedContent ? (
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.7 }}>
+              {trimmedContent}
+            </pre>
+          ) : (
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+              The latest {title} content is not available right now.
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose} className="btn-secondary" style={{ flex: 1 }}>Close</button>
+          <button onClick={() => { onAccept(); onClose(); }} className="btn-primary" style={{ flex: 2 }}>
+            <CheckCircle size={18} /> I Agree & Accept
+          </button>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reset Password Page
@@ -147,7 +157,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
 
   const handleResetPassword = async () => {
     if (!otp || otp.length !== 6) { setError("Please enter the 6-digit OTP."); return; }
-    if (!newPassword || newPassword.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (!newPassword || newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (newPassword !== confirmPass) { setError("Passwords do not match."); return; }
     setLoading(true); setError("");
     try {
@@ -175,7 +185,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
       </button>
       <div className="auth-card animate-fade-up">
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div className="auth-brand">MEET THE MASTERS</div>
+          <img src={headerLogoImg} alt="Meet The Masters" style={{ height: 54, width: "auto", maxWidth: "100%", objectFit: "contain", cursor: "pointer" }} onClick={onBackToLogin} />
           <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
             {step === "done"
               ? <><CheckCircle className="icon-sm" style={{ color: "var(--color-success)" }} /> Password Reset!</>
@@ -209,7 +219,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             {error && <div className="error-banner" style={{ marginTop: 12 }}><AlertTriangle size={16} /> {error}</div>}
             <button onClick={handleSendOtp} disabled={loading || !email.trim()}
               className="btn-primary" style={{ width: "100%", marginTop: 12 }}>
-              {loading ? "Sending OTP…" : "Send Reset OTP"}
+              {loading ? "Sending OTP..." : "Send Reset OTP"}
             </button>
           </div>
         )}
@@ -230,7 +240,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             <div style={{ textAlign: "right", marginTop: 8, marginBottom: 12 }}>
               <button onClick={handleResendOtp} disabled={countdown > 0 || loading}
                 className="auth-link" style={{ fontSize: 12, background: 'none' }}>
-                {loading ? "Sending…" : countdown > 0 ? `Resend in ${countdown}s` : "Resend OTP"}
+                {loading ? "Sending..." : countdown > 0 ? `Resend in ${countdown}s` : "Resend OTP"}
               </button>
             </div>
             <div className="badge badge-warning" style={{ marginBottom: 16, width: '100%', justifyContent: 'flex-start', padding: '10px 14px' }}>
@@ -238,7 +248,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             </div>
             <label className="label-base">NEW PASSWORD</label>
             <PasswordInput value={newPassword} onChange={e => { setNewPassword(e.target.value); setError(""); }}
-              placeholder="Min. 6 characters" style={{ marginBottom: 16 }} />
+              placeholder="Min. 8 characters" style={{ marginBottom: 16 }} />
             <label className="label-base">CONFIRM PASSWORD</label>
             <PasswordInput value={confirmPass} onChange={e => { setConfirmPass(e.target.value); setError(""); }}
               onKeyDown={e => { if (e.key === "Enter") handleResetPassword(); }}
@@ -250,9 +260,9 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             )}
             {error && <div className="error-banner" style={{ marginTop: 12 }}><AlertTriangle size={16} /> {error}</div>}
             <button onClick={handleResetPassword}
-              disabled={loading || otp.length !== 6 || !newPassword || newPassword !== confirmPass}
+              disabled={loading || otp.length !== 6 || !newPassword || newPassword.length < 8 || newPassword !== confirmPass}
               className="btn-primary" style={{ width: "100%", marginTop: 24 }}>
-              {loading ? "Verifying…" : "Verify OTP & Reset Password"}
+              {loading ? "Verifying..." : "Verify OTP & Reset Password"}
             </button>
           </div>
         )}
@@ -300,9 +310,13 @@ export default function LoginPage() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [termsShake, setTermsShake] = useState(false);
-  const [termsContent, setTermsContent] = useState(DEFAULT_TERMS_CONTENT);
+  const [termsContent, setTermsContent] = useState<string | null>(null);
   const [termsLoading, setTermsLoading] = useState(false);
   const [termsLoaded, setTermsLoaded] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [privacyContent, setPrivacyContent] = useState(DEFAULT_PRIVACY_CONTENT);
+  const [privacyLoading, setPrivacyLoading] = useState(false);
+  const [privacyLoaded, setPrivacyLoaded] = useState(false);
 
   const [showResetPage, setShowResetPage] = useState(false);
   const [resetInitialEmail, setResetInitialEmail] = useState("");
@@ -325,11 +339,14 @@ export default function LoginPage() {
           .map((record: any) => String(record?.content || record?.text || "").trim())
           .filter(Boolean)
           .join("\n\n");
-        if (content) setTermsContent(content);
+        setTermsContent(content || null);
         setTermsLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setTermsLoaded(true);
+        if (!cancelled) {
+          setTermsContent(null);
+          setTermsLoaded(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setTermsLoading(false);
@@ -339,6 +356,34 @@ export default function LoginPage() {
       cancelled = true;
     };
   }, [showTermsModal, termsLoaded]);
+
+  useEffect(() => {
+    if (!showPrivacyModal || privacyLoaded) return;
+
+    let cancelled = false;
+    setPrivacyLoading(true);
+
+    getPrivacyPolicy()
+      .then((records) => {
+        if (cancelled) return;
+        const content = (Array.isArray(records) ? records : [])
+          .map((record: any) => String(record?.content || record?.text || "").trim())
+          .filter(Boolean)
+          .join("\n\n");
+        if (content) setPrivacyContent(content);
+        setPrivacyLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setPrivacyLoaded(true);
+      })
+      .finally(() => {
+        if (!cancelled) setPrivacyLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showPrivacyModal, privacyLoaded]);
 
   const classifyError = (err: any): { msg: string; type: ErrorType } => {
     const msg = (err?.message || "").toLowerCase();
@@ -432,7 +477,7 @@ export default function LoginPage() {
       setLoading(false);
     }
     // Note: we do NOT call setLoading(false) on success because
-    // window.location.href causes a full navigation — the component unmounts.
+    // window.location.href causes a full navigation - the component unmounts.
   };
 
   const handleKeyDown = (e: KeyboardEvent) => { if (e.key === "Enter") handleLogin(); };
@@ -454,10 +499,20 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       {showTermsModal && (
-        <TermsModal
+        <LegalModal
+          title="Terms & Conditions"
           content={termsContent}
           loading={termsLoading}
           onClose={() => setShowTermsModal(false)}
+          onAccept={() => { setTermsAccepted(true); setApiError(""); setErrorType(""); }}
+        />
+      )}
+      {showPrivacyModal && (
+        <LegalModal
+          title="Privacy Policy"
+          content={privacyContent}
+          loading={privacyLoading}
+          onClose={() => setShowPrivacyModal(false)}
           onAccept={() => { setTermsAccepted(true); setApiError(""); setErrorType(""); }}
         />
       )}
@@ -468,7 +523,9 @@ export default function LoginPage() {
       </button>
 
       <div className="auth-card animate-fade-up">
-        <h1 className="auth-brand" onClick={() => navigate("/")}>MEET THE MASTERS</h1>
+        <div style={{ textAlign: "center", marginBottom: 6 }}>
+          <img src={headerLogoImg} alt="Meet The Masters" onClick={() => navigate("/")} style={{ height: 58, width: "auto", maxWidth: "100%", objectFit: "contain", cursor: "pointer" }} />
+        </div>
         <p className="auth-tagline">Experience the Experience</p>
 
         <div className="auth-input-group">
@@ -490,7 +547,7 @@ export default function LoginPage() {
             value={pass}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setPass(e.target.value); setApiError(""); setErrorType(""); }}
             onKeyDown={handleKeyDown}
-            placeholder="••••••••"
+            placeholder="********"
             hasError={!!(apiError && errorType === "auth")}
           />
         </div>
@@ -528,7 +585,7 @@ export default function LoginPage() {
             I agree to the{" "}
             <span onClick={e => { e.preventDefault(); setShowTermsModal(true); }} className="auth-link">Terms & Conditions</span>
             {" "}and{" "}
-            <span onClick={e => { e.preventDefault(); setShowTermsModal(true); }} className="auth-link">Privacy Policy</span>
+            <span onClick={e => { e.preventDefault(); setShowPrivacyModal(true); }} className="auth-link">Privacy Policy</span>
           </label>
         </div>
 
@@ -562,7 +619,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <button type="button" onClick={handleLogin} disabled={loading}
+        <button type="button" onClick={handleLogin} disabled={loading || !cred.trim() || !pass.trim() || !termsAccepted}
           className="btn-primary" style={{ width: "100%", padding: '14px', fontSize: '16px' }}>
           {loading
             ? <><span className="animate-spin" style={{

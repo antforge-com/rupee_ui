@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import logoImg from "../assests/Meetmasterslogopng.png";
+import logoImg from "../assests/MeetMastersMLogo.png";
 import { changePassword, getCurrentUser } from "../services/api";
 
 const overlayStyle: React.CSSProperties = {

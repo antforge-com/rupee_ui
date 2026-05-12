@@ -1,6 +1,6 @@
 import { AlertTriangle, Building2, Calendar, Check, ChevronLeft, ChevronRight, Monitor, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import logoImg from "../assests/Meetmasterslogopng.png";
+import logoImg from "../assests/MeetMastersMLogo.png";
 import { API_ORIGIN } from "../config/api";
 import {
   extractArray,
@@ -22,6 +22,9 @@ interface Booking {
   status: string;
   amount: number;
   meetingMode: string;
+  paymentStatus?: string;
+  refundStatus?: string;
+  razorpayRefundId?: string;
   isSpecial?: boolean;
   duration?: string;        // e.g. "1 hr", "2 hrs"
   specialStatus?: string;   // raw SpecialBookingStatus: REQUESTED | SCHEDULED | CONFIRMED | COMPLETED | CANCELLED
@@ -52,15 +55,82 @@ const prettifyName = (raw: string): string => {
   return raw;
 };
 
+const extractUserId = (b: any): number => Number(
+  b?.userId ||
+  b?.user_id ||
+  b?.clientId ||
+  b?.client_id ||
+  b?.customerId ||
+  b?.customer_id ||
+  b?.memberId ||
+  b?.member_id ||
+  b?.bookedById ||
+  b?.booked_by_id ||
+  b?.user?.id ||
+  b?.client?.id ||
+  b?.customer?.id ||
+  b?.member?.id ||
+  0
+) || 0;
+
+const extractConsultantId = (b: any): number => Number(
+  b?.consultantId ||
+  b?.consultant_id ||
+  b?.advisorId ||
+  b?.advisor_id ||
+  b?.providerId ||
+  b?.provider_id ||
+  b?.consultant?.id ||
+  b?.advisor?.id ||
+  b?.provider?.id ||
+  0
+) || 0;
+
+const extractUserName = (b: any, userNameMap: Record<number, string> = {}): string => {
+  const uid = extractUserId(b);
+  return prettifyName(
+    b?.user?.name ||
+    b?.user?.fullName ||
+    b?.user?.displayName ||
+    b?.user?.username ||
+    b?.client?.name ||
+    b?.client?.fullName ||
+    b?.client?.displayName ||
+    b?.customer?.name ||
+    b?.customer?.fullName ||
+    b?.member?.name ||
+    b?.member?.fullName ||
+    b?.userName ||
+    b?.user_name ||
+    b?.clientName ||
+    b?.client_name ||
+    b?.customerName ||
+    b?.customer_name ||
+    b?.memberName ||
+    b?.member_name ||
+    b?.bookedByName ||
+    b?.booked_by_name ||
+    b?.userEmail ||
+    b?.user?.email ||
+    (uid && userNameMap[uid]) ||
+    ""
+  );
+};
+
 const extractAdvisorName = (b: any, consultantNameMap: Record<number, string> = {}): string =>
   b.consultant?.name ||
   b.consultant?.fullName ||
+  b.consultant?.displayName ||
   b.advisor?.name ||
+  b.advisor?.fullName ||
   b.consultantName ||
+  b.consultant_name ||
   b.advisorName ||
+  b.advisor_name ||
   b.providerName ||
-  consultantNameMap[b.consultantId] ||
-  (b.consultantId ? "Consultant" : null) ||
+  b.provider_name ||
+  consultantNameMap[extractConsultantId(b)] ||
+  (extractConsultantId(b) ? "Consultant" : null) ||
   "Consultant";
 
 const parseSpecialBookingMeta = (rawNotes: any): SpecialBookingMeta | null => {
@@ -87,10 +157,22 @@ const normaliseBookingDateKey = (raw: string): string => {
     return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   }
 
+  const shortYearDashMatch = value.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+  if (shortYearDashMatch) {
+    const [, dd, mm, yy] = shortYearDashMatch;
+    return `20${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
   const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashMatch) {
     const [, dd, mm, yyyy] = slashMatch;
     return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
+  const shortYearSlashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (shortYearSlashMatch) {
+    const [, dd, mm, yy] = shortYearSlashMatch;
+    return `20${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   }
 
   const parsed = new Date(value);
@@ -115,7 +197,7 @@ const parseTimeLabelToMinutes = (value: string): number | null => {
 
 const bookingStartMinutes = (booking: Pick<Booking, "time">): number => {
   const fromRange = parseTimeLabelToMinutes(
-    String(booking.time || "").split(/[-–]/)[0]?.trim() || ""
+    String(booking.time || "").split(/[--]/)[0]?.trim() || ""
   );
   if (fromRange !== null) return fromRange;
   return parseTimeLabelToMinutes(booking.time || "") ?? Number.MAX_SAFE_INTEGER;
@@ -143,6 +225,36 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; border: string 
   DEFAULT: { bg: "#F1F5F9", color: "#64748B", border: "#CBD5E1" },
 };
 const getStatus = (s: string) => STATUS_STYLES[s] || STATUS_STYLES.DEFAULT;
+const STATUS_DISPLAY_LABELS: Record<string, string> = {
+  PENDING: "Pending",
+  CONFIRMED: "Confirmed",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+  REQUESTED: "Requested",
+};
+const STATUS_ACTION_LABELS: Record<string, string> = {
+  PENDING: "Mark Pending",
+  CONFIRMED: "Confirm",
+  COMPLETED: "Complete",
+  CANCELLED: "Cancel",
+};
+const FINAL_BOOKING_STATUSES = new Set(["COMPLETED", "CANCELLED"]);
+const BOOKING_STATUS_OPTIONS = ["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"];
+
+const readApiError = async (res: Response, fallback: string): Promise<string> => {
+  try {
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = await res.json();
+      return data?.message || data?.error || fallback;
+    }
+
+    const text = await res.text();
+    return text || fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 const authFetch = async (url: string) => {
   const token = getToken();
@@ -153,8 +265,27 @@ const authFetch = async (url: string) => {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw new Error(await readApiError(res, `HTTP ${res.status}`));
   return res.json();
+};
+
+const bookingRenderKey = (booking: Booking) =>
+  `${booking.isSpecial ? "special" : "regular"}-${booking.id}`;
+
+const getPrimaryTimeSlotId = (booking: any): number => {
+  const fromArray = Array.isArray(booking?.timeSlotIds) ? booking.timeSlotIds[0] : booking?.timeSlotIds;
+  return Number(
+    booking?.timeSlotId ||
+    booking?.timeslotId ||
+    booking?.time_slot_id ||
+    booking?.slotId ||
+    booking?.slot_id ||
+    booking?.timeSlot?.id ||
+    booking?.timeslot?.id ||
+    booking?.slot?.id ||
+    fromArray ||
+    0
+  ) || 0;
 };
 
 const _masterMapCache: Record<number, string> = {};
@@ -186,28 +317,115 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     setTimeout(() => setActionMsg(null), 3000);
   };
 
+  const updateBookingInState = (bookingId: number, patch: Partial<Booking>) => {
+    setBookings(prev => sortBookingsChronologically(prev.map(b => !b.isSpecial && b.id === bookingId ? { ...b, ...patch } : b)));
+    setPageCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(k => {
+        updated[Number(k)] = sortBookingsChronologically(updated[Number(k)]?.map(b =>
+          !b.isSpecial && b.id === bookingId ? { ...b, ...patch } : b
+        ) || []);
+      });
+      return updated;
+    });
+  };
+
+  const updateSpecialBookingInState = (bookingId: number, patch: Partial<Booking>) => {
+    setBookings(prev => sortBookingsChronologically(prev.map(b => b.isSpecial && b.id === bookingId ? { ...b, ...patch } : b)));
+    setPageCache(prev => {
+      const updated = { ...prev };
+      Object.keys(updated).forEach(k => {
+        updated[Number(k)] = sortBookingsChronologically(updated[Number(k)]?.map(b =>
+          b.isSpecial && b.id === bookingId ? { ...b, ...patch } : b
+        ) || []);
+      });
+      return updated;
+    });
+  };
+
+  const cancelRegularBooking = async (bookingId: number) => {
+    const token = getToken();
+    const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/cancel`, {
+      method: "PATCH",
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(await readApiError(res, `HTTP ${res.status}`));
+    }
+    let patch: Partial<Booking> = { status: "CANCELLED" };
+    try {
+      const fresh = await authFetch(`/api/bookings/${bookingId}`);
+      patch = {
+        status: (fresh.bookingStatus || fresh.BookingStatus || fresh.status || "CANCELLED").toUpperCase(),
+        paymentStatus: (fresh.paymentStatus || fresh.payment_status || "").toUpperCase() || undefined,
+        razorpayRefundId: fresh.razorpayRefundId || fresh.razorpay_refund_id || undefined,
+      };
+    } catch {
+      // The cancel endpoint is the source of truth; refresh is best effort for payment status.
+    }
+    updateBookingInState(bookingId, patch);
+  };
+
+  const cancelSpecialBooking = async (bookingId: number) => {
+    const token = getToken();
+    const res = await fetch(`${API_BASE}/api/special-bookings/${bookingId}/cancel`, {
+      method: "PATCH",
+      headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(await readApiError(res, `HTTP ${res.status}`));
+    }
+
+    let patch: Partial<Booking> = { status: "CANCELLED", specialStatus: "CANCELLED" };
+    try {
+      const fresh = await authFetch(`/api/special-bookings/${bookingId}`);
+      patch = {
+        status: "CANCELLED",
+        specialStatus: String(fresh.status || fresh.specialBookingStatus || "CANCELLED").toUpperCase(),
+        paymentStatus: String(fresh.paymentStatus || fresh.payment_status || "").toUpperCase() || undefined,
+        refundStatus: String(fresh.refundStatus || fresh.refund_status || fresh.refund?.status || "").toUpperCase() || undefined,
+        razorpayRefundId: fresh.razorpayRefundId || fresh.razorpay_refund_id || undefined,
+      };
+    } catch {
+      // Cancellation succeeded; refund/payment details are refreshed when the page reloads.
+    }
+    updateSpecialBookingInState(bookingId, patch);
+  };
+
   const handleDeleteBooking = async (id: number) => {
     setDeletingId(id);
     try {
-      const token = getToken();
-      const res = await fetch(`${API_BASE}/api/bookings/${id}/cancel`, {
-        method: "PATCH",
-        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      });
-      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
-      setBookings(prev => prev.filter(b => b.id !== id));
-      setTotalElements(p => p - 1);
-      showMsg(`Booking #${id} deleted.`);
+      await cancelRegularBooking(id);
+      showMsg(`Booking #${id} cancelled. Refund processed if payment was captured.`);
     } catch (e: any) {
-      showMsg(e?.message || "Delete failed.", false);
+      showMsg(e?.message || "Cancel failed.", false);
     } finally {
       setDeletingId(null);
     }
   };
 
-  const handleStatusChange = async (bookingId: number, newStatus: string) => {
+  const handleStatusChange = async (bookingId: number, newStatus: string, isSpecial = false) => {
+    const current = bookings.find(b => b.id === bookingId && Boolean(b.isSpecial) === Boolean(isSpecial));
+    if (current?.status && FINAL_BOOKING_STATUSES.has(current.status)) {
+      showMsg(`${STATUS_DISPLAY_LABELS[current.status] || current.status} bookings cannot be changed.`, false);
+      return;
+    }
     setChangingStatusId(bookingId);
     try {
+      if (isSpecial) {
+        if (newStatus !== "CANCELLED") {
+          showMsg("Special bookings can be cancelled here; scheduling changes stay in the consultant workflow.", false);
+          return;
+        }
+        await cancelSpecialBooking(bookingId);
+        showMsg(`Special booking #${bookingId} cancelled. Refund processed if payment was captured.`);
+        return;
+      }
+      if (newStatus === "CANCELLED") {
+        await cancelRegularBooking(bookingId);
+        showMsg(`Booking #${bookingId} cancelled. Refund processed if payment was captured.`);
+        return;
+      }
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/bookings/${bookingId}`, {
         method: "PUT",
@@ -217,17 +435,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         },
         body: JSON.stringify({ bookingStatus: newStatus }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: newStatus } : b));
-      setPageCache(prev => {
-        const updated = { ...prev };
-        Object.keys(updated).forEach(k => {
-          updated[Number(k)] = updated[Number(k)]?.map(b =>
-            b.id === bookingId ? { ...b, status: newStatus } : b
-          );
-        });
-        return updated;
-      });
+      if (!res.ok) throw new Error(await readApiError(res, `HTTP ${res.status}`));
+      updateBookingInState(bookingId, { status: newStatus });
       showMsg(`Booking #${bookingId} updated to ${newStatus}`);
     } catch (e: any) {
       showMsg(e?.message || "Status update failed.", false);
@@ -243,8 +452,19 @@ export default function BookingsPage({ isAdmin = false }: Props) {
 
   const handleSaveEdit = async () => {
     if (!editingBooking) return;
+    if (FINAL_BOOKING_STATUSES.has(editingBooking.status)) {
+      showMsg(`${STATUS_DISPLAY_LABELS[editingBooking.status] || editingBooking.status} bookings cannot be changed.`, false);
+      setEditingBooking(null);
+      return;
+    }
     setSavingEdit(true);
     try {
+      if (editForm.status === "CANCELLED") {
+        await cancelRegularBooking(editingBooking.id);
+        setEditingBooking(null);
+        showMsg(`Booking #${editingBooking.id} cancelled. Refund processed if payment was captured.`);
+        return;
+      }
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/bookings/${editingBooking.id}`, {
         method: "PUT",
@@ -254,10 +474,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         },
         body: JSON.stringify({ bookingStatus: editForm.status }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setBookings(prev => prev.map(b =>
-        b.id === editingBooking.id ? { ...b, status: editForm.status as any } : b
-      ));
+      if (!res.ok) throw new Error(await readApiError(res, `HTTP ${res.status}`));
+      updateBookingInState(editingBooking.id, { status: editForm.status as any });
       setEditingBooking(null);
       showMsg(`Booking #${editingBooking.id} updated.`);
     } catch (e: any) {
@@ -356,12 +574,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
             timeDisplay = `${fmt12(startH, startM)} - ${fmt12(endH, endM)}`;
           } catch { timeDisplay = String(scheduledTime).substring(0, 5); }
         }
-        const uid = b.userId || b.user_id;
-        const userName = prettifyName(
-          b.user?.name || b.user?.fullName || b.user?.username ||
-          b.userName || b.clientName || (uid && _userCache[uid]) || ""
-        ) || "Client";
-        const advisorName = _consultantCache[b.consultantId] || "Consultant";
+        const userName = extractUserName(b, _userCache) || "Client";
+        const advisorName = extractAdvisorName(b, _consultantCache);
         return {
           id: b.id,
           user: userName,
@@ -372,6 +586,9 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           status: displayStatus,
           amount: Number(b.sessionAmount || b.totalAmount || b.total_amount || b.amount || b.charges || 0),
           meetingMode: (b.meetingMode || b.meeting_mode || "ONLINE").toUpperCase(),
+          paymentStatus: String(b.paymentStatus || b.payment_status || "").toUpperCase() || undefined,
+          refundStatus: String(b.refundStatus || b.refund_status || b.refund?.status || "").toUpperCase() || undefined,
+          razorpayRefundId: b.razorpayRefundId || b.razorpay_refund_id || undefined,
           isSpecial: true,
           duration,
           specialStatus: rawStatus,
@@ -414,12 +631,17 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     }
   };
 
-  // ── Robust date parser — handles "2026-03-25", "25 Mar 2026", "Mar 25, 2026" etc.
+  // ── Robust date parser - handles "2026-03-25", "25 Mar 2026", "Mar 25, 2026" etc.
   const parseBookingDate = (raw: string): string => {
     if (!raw) return "";
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw; // already ISO
     const d = new Date(raw);
     if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    const shortYearDashMatch = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+    if (shortYearDashMatch) {
+      const [, dd, mm, yy] = shortYearDashMatch;
+      return `20${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+    }
     // Handle "25 Mar 2026"
     const m = raw.match(/^(\d{1,2})\s+(\w+)\s+(\d{4})$/);
     if (m) {
@@ -433,7 +655,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     if (!Array.isArray(raw) || raw.length === 0) return [];
 
     const slotMap: Record<number, any> = {};
-    const uniqueSlotIds = [...new Set(raw.map((b: any) => b.timeSlotId).filter(Boolean))] as number[];
+    const uniqueSlotIds = [...new Set(raw.map(getPrimaryTimeSlotId).filter(Boolean))] as number[];
     const slotFetches = uniqueSlotIds.map(async (tsId: number) => {
       try { const ts = await authFetch(`/api/timeslots/${tsId}`); if (ts) slotMap[tsId] = ts; } catch { }
     });
@@ -448,7 +670,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         }).catch(() => { });
 
     const uncachedCids = [...new Set(
-      raw.map((b: any) => b.consultantId).filter((id: any) => id && !_consultantCache[id])
+      raw.map(extractConsultantId).filter((id: any) => id && !_consultantCache[id])
     )] as number[];
     const consultantFetches = uncachedCids.map(async (id) => {
       try {
@@ -463,11 +685,11 @@ export default function BookingsPage({ isAdmin = false }: Props) {
 
     const needsUserEnrichment = raw.filter((b: any) => {
       const hasName = b.user?.name || b.user?.fullName || b.user?.username || b.userName || b.clientName;
-      const uid = b.userId || b.user?.id || b.clientId;
+      const uid = extractUserId(b);
       return !hasName && uid && !_userCache[uid];
     });
     const uncachedUids = [...new Set(
-      needsUserEnrichment.map((b: any) => b.userId || b.user?.id || b.clientId)
+      needsUserEnrichment.map(extractUserId)
     )] as number[];
     const userFetches = uncachedUids.map(async (uid) => {
       try {
@@ -479,11 +701,11 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     await Promise.all([...slotFetches, masterFetch, ...consultantFetches, ...userFetches]);
 
     const mapped: Booking[] = raw.map((b: any) => {
-      const ts = slotMap[b.timeSlotId] || {};
+      const ts = slotMap[getPrimaryTimeSlotId(b)] || {};
       const rawDate = ts.slotDate || b.slotDate || b.bookingDate || b.date || "";
       const date = parseBookingDate(rawDate);
       const masterKey = ts.masterTimeSlotId || b.masterTimeSlotId;
-      // Helper to format HH:MM → 12-hr and optionally build start–end range
+      // Helper to format HH:MM → 12-hr and optionally build start-end range
       const fmt12 = (h: number, m: number) => {
         const ampm = h >= 12 ? "PM" : "AM";
         const h12 = h % 12 || 12;
@@ -510,11 +732,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         (b.scheduledTime ? buildTimeRange(b.scheduledTime) : "") ||
         (b.slotTime ? buildTimeRange(b.slotTime) : "") ||
         "";
-      const uid = b.userId || b.user?.id || b.clientId;
-      const rawUserName =
-        b.user?.name || b.user?.fullName || b.user?.username ||
-        b.client?.name || b.userName || b.clientName || (uid && _userCache[uid]) || "";
-      const userName = prettifyName(rawUserName) || (uid ? "Client" : `Booking #${b.id}`);
+      const uid = extractUserId(b);
+      const userName = extractUserName(b, _userCache) || (uid ? "Client" : `Booking #${b.id}`);
       const advisorName = extractAdvisorName(b, _consultantCache);
       const status = (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase();
       return {
@@ -527,6 +746,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         status,
         amount: Number(b.totalAmount || b.amount || b.charges || b.fee || b.consultantCharges || 0),
         meetingMode: b.meetingMode || b.meeting_mode || b.mode || "",
+        paymentStatus: (b.paymentStatus || b.payment_status || "").toUpperCase(),
+        razorpayRefundId: b.razorpayRefundId || b.razorpay_refund_id || undefined,
       };
     });
 
@@ -549,14 +770,14 @@ export default function BookingsPage({ isAdmin = false }: Props) {
   };
   const revenue = bookings.filter(b => b.status === "COMPLETED").reduce((s, b) => s + b.amount, 0);
 
-  const pageNums = (): (number | "…")[] => {
+  const pageNums = (): (number | "...")[] => {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i);
     const set = new Set([0, totalPages - 1, currentPage - 1, currentPage, currentPage + 1]
       .filter(p => p >= 0 && p < totalPages));
     const sorted = [...set].sort((a, b) => a - b);
-    const result: (number | "…")[] = [];
+    const result: (number | "...")[] = [];
     sorted.forEach((p, i) => {
-      if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("…");
+      if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push("...");
       result.push(p);
     });
     return result;
@@ -607,15 +828,18 @@ export default function BookingsPage({ isAdmin = false }: Props) {
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }}>Booking Status</label>
                 <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}
-                  style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
-                  {["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"].map(s => <option key={s} value={s}>{s}</option>)}
+                  disabled={FINAL_BOOKING_STATUSES.has(editingBooking.status)}
+                  style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: FINAL_BOOKING_STATUSES.has(editingBooking.status) ? "#F8FAFC" : "#fff", fontFamily: "inherit", outline: "none", cursor: FINAL_BOOKING_STATUSES.has(editingBooking.status) ? "not-allowed" : "pointer" }}>
+                  {(FINAL_BOOKING_STATUSES.has(editingBooking.status) ? [editingBooking.status] : BOOKING_STATUS_OPTIONS).map(s => (
+                    <option key={s} value={s}>{s === editingBooking.status ? (STATUS_DISPLAY_LABELS[s] || s) : (STATUS_ACTION_LABELS[s] || s)}</option>
+                  ))}
                 </select>
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
                 <button onClick={() => setEditingBooking(null)} style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-                <button onClick={handleSaveEdit} disabled={savingEdit}
-                  style={{ flex: 2, padding: "11px", borderRadius: 10, border: "none", background: savingEdit ? "#99F6E4" : "linear-gradient(135deg, #0F766E, #0D9488)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                  {savingEdit ? "Saving…" : "Save Changes"}
+                <button onClick={handleSaveEdit} disabled={savingEdit || FINAL_BOOKING_STATUSES.has(editingBooking.status)}
+                  style={{ flex: 2, padding: "11px", borderRadius: 10, border: "none", background: (savingEdit || FINAL_BOOKING_STATUSES.has(editingBooking.status)) ? "#99F6E4" : "linear-gradient(135deg, #0F766E, #0D9488)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (savingEdit || FINAL_BOOKING_STATUSES.has(editingBooking.status)) ? "not-allowed" : "pointer" }}>
+                  {savingEdit ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </div>
@@ -623,7 +847,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         </div>
       )}
 
-      {/* ── Refresh button — consultant dashboard only.
+      {/* ── Refresh button - consultant dashboard only.
            Admin view omits this; the parent BookingsSectionWrapper header provides it. ── */}
       {!isAdmin && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 20 }}>
@@ -702,8 +926,9 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {filtered.map((b, idx) => {
             const sc = getStatus(b.status);
+            const statusIsFinal = FINAL_BOOKING_STATUSES.has(b.status);
             return (
-              <div key={b.id} style={{
+              <div key={bookingRenderKey(b)} style={{
                 background: "#fff", border: "1px solid #F1F5F9",
                 borderLeft: `4px solid ${sc.border}`, borderRadius: 14,
                 padding: "16px 20px", display: "flex", alignItems: "flex-start",
@@ -752,11 +977,19 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                 {/* Status / action */}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, color: "#CBD5E1" }}>#{currentPage * PAGE_SIZE + idx + 1}</span>
-                  {isAdmin && !b.isSpecial ? (
+                  {isAdmin ? (
                     <div style={{ position: "relative" }}>
-                      <select value={b.status} disabled={changingStatusId === b.id} onChange={e => handleStatusChange(b.id, e.target.value)}
-                        style={{ padding: "5px 28px 5px 12px", borderRadius: 20, border: `1.5px solid ${sc.border}`, background: changingStatusId === b.id ? "#F8FAFC" : sc.bg, color: changingStatusId === b.id ? "#94A3B8" : sc.color, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", cursor: changingStatusId === b.id ? "not-allowed" : "pointer", outline: "none", appearance: "none", WebkitAppearance: "none", fontFamily: "inherit", transition: "all 0.15s", minWidth: 110 }}>
-                        {["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"].map(s => <option key={s} value={s}>{s}</option>)}
+                      <select value={b.status} disabled={changingStatusId === b.id || statusIsFinal} onChange={e => handleStatusChange(b.id, e.target.value, !!b.isSpecial)}
+                        style={{ padding: "5px 28px 5px 12px", borderRadius: 20, border: `1.5px solid ${sc.border}`, background: (changingStatusId === b.id || statusIsFinal) ? "#F8FAFC" : sc.bg, color: changingStatusId === b.id ? "#94A3B8" : sc.color, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", cursor: (changingStatusId === b.id || statusIsFinal) ? "not-allowed" : "pointer", outline: "none", appearance: "none", WebkitAppearance: "none", fontFamily: "inherit", transition: "all 0.15s", minWidth: 110 }}>
+                        {(statusIsFinal ? [b.status] : b.isSpecial ? [b.status, "CANCELLED"] : BOOKING_STATUS_OPTIONS)
+                          .filter((s, i, arr) => s && arr.indexOf(s) === i)
+                          .map(s => {
+                            const isCurrent = s === b.status;
+                            const currentLabel = b.isSpecial && b.specialStatus === "REQUESTED" && isCurrent
+                              ? "Requested"
+                              : STATUS_DISPLAY_LABELS[s] || s;
+                            return <option key={s} value={s}>{isCurrent ? currentLabel : (STATUS_ACTION_LABELS[s] || s)}</option>;
+                          })}
                       </select>
                       <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", fontSize: 9, color: sc.color }}>▼</span>
                       {changingStatusId === b.id && <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", width: 12, height: 12, border: "2px solid #E2E8F0", borderTopColor: "#0F766E", borderRadius: "50%", animation: "spin 0.7s linear infinite", display: "inline-block" }} />}
@@ -764,6 +997,54 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                   ) : (
                     <span style={{ padding: "5px 14px", borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
                       {b.isSpecial && b.specialStatus === "REQUESTED" ? "REQUESTED" : b.status}
+                    </span>
+                  )}
+                  {b.paymentStatus && (
+                    <span style={{
+                      padding: "4px 10px",
+                      borderRadius: 20,
+                      background: b.paymentStatus === "REFUNDED" ? "#F0FDF4" : "#F8FAFC",
+                      color: b.paymentStatus === "REFUNDED" ? "#15803D" : "#64748B",
+                      border: `1px solid ${b.paymentStatus === "REFUNDED" ? "#BBF7D0" : "#E2E8F0"}`,
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: "0.04em",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {b.paymentStatus}
+                    </span>
+                  )}
+                  {b.refundStatus && (
+                    <span style={{
+                      padding: "4px 10px",
+                      borderRadius: 20,
+                      background: "#F0FDF4",
+                      color: "#15803D",
+                      border: "1px solid #BBF7D0",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: "0.04em",
+                      whiteSpace: "nowrap",
+                    }}>
+                      REFUND {b.refundStatus}
+                    </span>
+                  )}
+                  {b.razorpayRefundId && (
+                    <span title={b.razorpayRefundId} style={{
+                      padding: "4px 10px",
+                      borderRadius: 20,
+                      background: "#ECFEFF",
+                      color: "#0F766E",
+                      border: "1px solid #A5F3FC",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: "0.04em",
+                      whiteSpace: "nowrap",
+                      maxWidth: 180,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}>
+                      Refund ID {b.razorpayRefundId}
                     </span>
                   )}
                 </div>
@@ -784,8 +1065,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
             <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0}
               style={{ padding: "6px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: currentPage === 0 ? "not-allowed" : "pointer", border: "1.5px solid #E2E8F0", background: currentPage === 0 ? "#F8FAFC" : "#fff", color: currentPage === 0 ? "#CBD5E1" : "#0F766E", display: "inline-flex", alignItems: "center", gap: 6 }}><ChevronLeft size={14} /> Prev</button>
             {pageNums().map((pg, i) =>
-              pg === "…" ? (
-                <span key={`e-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>…</span>
+              pg === "..." ? (
+                <span key={`e-${i}`} style={{ padding: "0 6px", color: "#94A3B8", fontSize: 14, userSelect: "none" }}>...</span>
               ) : (
                 <button key={pg} onClick={() => goToPage(pg as number)}
                   style={{ width: 36, height: 36, borderRadius: 8, fontSize: 13, fontWeight: pg === currentPage ? 800 : 600, cursor: "pointer", border: pg === currentPage ? "2px solid #0F766E" : pageCache[pg as number] ? "1.5px solid #A5F3FC" : "1.5px solid #E2E8F0", background: pg === currentPage ? "#0F766E" : pageCache[pg as number] ? "#ECFEFF" : "#fff", color: pg === currentPage ? "#fff" : pageCache[pg as number] ? "#0F766E" : "#374151" }}>

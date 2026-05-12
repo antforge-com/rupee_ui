@@ -330,7 +330,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
     setSaving(false);
 
     if (!backendOk) {
-      // still progress — localStorage is the fallback
+      // still progress - localStorage is the fallback
       console.info("Answers saved to localStorage (backend unavailable).");
     }
 
@@ -415,7 +415,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
               <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
                 <IconSpinner />
               </div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>Loading questions…</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Loading questions...</div>
               <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
           )}
@@ -542,7 +542,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: answers[qKey(currentQ)] && !isValidMobile(answers[qKey(currentQ)]) ? "#EF4444" : "#94A3B8" }}>
                     {answers[qKey(currentQ)] && !isValidMobile(answers[qKey(currentQ)])
-                      ? `Invalid — must be 10 digits starting with 6–9 (${answers[qKey(currentQ)].length}/10)`
+                      ? `Invalid - must be 10 digits starting with 6-9 (${answers[qKey(currentQ)].length}/10)`
                       : "10-digit Indian mobile number starting with 6, 7, 8, or 9"}
                   </div>
                 </div>

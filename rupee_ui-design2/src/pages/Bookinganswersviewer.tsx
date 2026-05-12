@@ -54,7 +54,7 @@ const IconFileText = () => (
 const IconSpinner = () => (
   <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2.5" strokeLinecap="round">
     <circle cx="12" cy="12" r="10" strokeOpacity="0.2" />
-    <path d="M12 2a10 10 0 0 1 10 10" style={{ animation: "spin 0.8s linear infinite" }} />
+    <path d="M12 2a10 10 0 0 1 10 10" style={{ transformOrigin: "12px 12px", animation: "spin 0.8s linear infinite" }} />
   </svg>
 );
 
@@ -509,7 +509,7 @@ export const BookingAnswersViewer: React.FC<Props> = ({ bookingId, specialBookin
       <div style={{ position: "fixed", inset: 0, zIndex: 9100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
         <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 20, padding: 40, maxWidth: 400, width: "100%", textAlign: "center", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}><IconSpinner /></div>
-          <div style={{ fontSize: 14, color: "#64748B", fontWeight: 600 }}>Fetching client profile…</div>
+          <div style={{ fontSize: 14, color: "#64748B", fontWeight: 600 }}>Fetching client profile...</div>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>,
@@ -574,7 +574,7 @@ export const BookingAnswersViewer: React.FC<Props> = ({ bookingId, specialBookin
             <span style={{ fontSize: 12, color: "#92400E", fontWeight: 600 }}>Confidential - for consultant use only</span>
           </div>
 
-          {/* Answer sections — fully dynamic */}
+          {/* Answer sections - fully dynamic */}
           {answers.filter(a => a.answer).map((a, idx) => {
             const isMulti = a.type === "multiselect";
             const values = isMulti ? a.answer.split("|||").filter(Boolean) : [a.answer];

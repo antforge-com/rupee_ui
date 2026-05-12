@@ -1,5 +1,5 @@
 import React from "react";
-import logoImg from "../assests/Meetmasterslogopng.png";
+import logoImg from "../assests/MeetMastersMLogo.png";
 
 interface Props {
   size?: number;

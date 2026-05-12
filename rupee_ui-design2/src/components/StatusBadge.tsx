@@ -10,9 +10,17 @@ export default function StatusBadge({ status }: StatusBadgeProps) {
     CONFIRMED: "#0F766E",
     SCHEDULED: "#0F766E",
     COMPLETED: "#16A34A",
-    PENDING: "#DC2626",
+    PENDING: "#D97706",
     CANCELLED: "#DC2626",
     AVAILABLE: "#16A34A",
+  };
+  const labels: Record<string, string> = {
+    CONFIRMED: "Confirmed",
+    SCHEDULED: "Confirmed",
+    COMPLETED: "Completed",
+    PENDING: "Pending",
+    CANCELLED: "Cancelled",
+    AVAILABLE: "Available",
   };
 
   const badgeColor = colors[normalized] || "#64748B";
@@ -30,7 +38,7 @@ export default function StatusBadge({ status }: StatusBadgeProps) {
       textAlign: 'center',
       minWidth: '85px'
     }}>
-      {normalized.toLowerCase()}
+      {labels[normalized] || normalized.toLowerCase()}
     </span>
   );
 }

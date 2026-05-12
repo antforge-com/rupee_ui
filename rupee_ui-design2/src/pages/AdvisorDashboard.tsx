@@ -1,17 +1,20 @@
-import { AlertTriangle, ArrowLeft, ArrowRight, Calendar, CheckCircle, Clock, ImagePlus, Info, Link2, Lock, Mail, Pencil, Search, Star, Ticket, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Calendar, CheckCircle, Clock, ImagePlus, Info, Link2, Lock, Mail, MessageSquare, Pencil, Search, Star, Ticket as TicketIcon, X, Zap } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import logoImg from '../assests/Meetmasterslogopng.png';
+import headerLogoImg from '../assests/MeetMastersHorizontalLogo.png';
+import logoImg from '../assests/MeetMastersMLogo.png';
 import ConfirmDialog from "../components/ConfirmDialog";
 import ForcePasswordChangeModal from "../components/ForcePasswordChangeModal";
 import { API_BASE_URL, buildApiUrl, buildBackendAssetUrl } from "../config/api";
 import { SUPPORT_EMAIL } from "../config/support";
+import { HourRangeClockPicker as _HourRangeClock, SimpleHourPicker } from "../pages/timeSlotUtils";
 import {
-  emailOnSpecialBookingConfirmedConsultant,
-  emailOnSpecialBookingConfirmedUser,
+  cancelBooking,
+  cancelSpecialBooking,
   emailOnTicketUpdated,
   extractArray,
   getAdvisorById,
+  getAllSkills,
   getBookingsByConsultant,
   getConsultantMasterSlots,
   getCurrentUser,
@@ -35,6 +38,7 @@ import {
   sendTicketEscalatedEmail,
   SLA_HOURS,
   updateAdvisor,
+  updateBooking,
   updateSpecialBooking,
   updateTicketStatus,
 } from '../services/api';
@@ -199,9 +203,9 @@ interface FeedbackItem {
   timeRange?: string;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
    DEEP FIELD EXTRACTORS
-   ═══════════════════════════════════════════════════════════════════════════ */
+   =========================================================================== */
 
 const deepFindStatus = (b: any): string => {
   if (!b || typeof b !== 'object') return '';
@@ -431,10 +435,7 @@ const resolveSpecialBookingMeta = (booking: any): SpecialBookingMeta | null => {
     booking?.preferredTime != null ||
     booking?.preferredTimeRange != null ||
     rawStatus === 'REQUESTED' ||
-    rawStatus === 'SCHEDULED' ||
-    rawStatus === 'CONFIRMED' ||
-    rawStatus === 'COMPLETED' ||
-    rawStatus === 'CANCELLED';
+    rawStatus === 'SCHEDULED';
 
   if (!legacy && !hasSpecialSignal) return null;
 
@@ -516,10 +517,22 @@ const normaliseBookingDateKey = (raw: string): string => {
     return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
   }
 
+  const shortYearDashMatch = value.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+  if (shortYearDashMatch) {
+    const [, dd, mm, yy] = shortYearDashMatch;
+    return `20${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+  }
+
   const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashMatch) {
     const [, dd, mm, yyyy] = slashMatch;
     return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+  }
+
+  const shortYearSlashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (shortYearSlashMatch) {
+    const [, dd, mm, yy] = shortYearSlashMatch;
+    return `20${yy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
   }
 
   const parsed = new Date(value);
@@ -547,7 +560,7 @@ const parseTimeLabelToMinutes = (value: string): number | null => {
 const getSortableBookingStartMinutes = (timeLabel: string): number => {
   const raw = String(timeLabel || '').trim();
   if (!raw) return Number.MAX_SAFE_INTEGER;
-  const rangeStart = raw.split(/[-–]/)[0]?.trim() || '';
+  const rangeStart = raw.split(/[--]/)[0]?.trim() || '';
   return parseTimeLabelToMinutes(rangeStart) ?? parseTimeLabelToMinutes(raw) ?? Number.MAX_SAFE_INTEGER;
 };
 
@@ -611,57 +624,12 @@ const getDedicatedSpecialBookingId = (booking: any): number | null => {
   return null;
 };
 
-const sendSpecialBookingScheduledEmail = async (params: {
-  bookingId: number;
-  userEmail?: string;
-  userName: string;
-  consultantName: string;
-  meetingMode: string;
-  scheduledDate: string;
-  scheduledTimeRange: string;
-  meetingLink: string;
-  userNotes?: string;
-}) => {
-  const bookingConfirmationPayload = {
-    bookingId: params.bookingId,
-    slotDate: params.scheduledDate,
-    timeRange: params.scheduledTimeRange,
-    meetingMode: params.meetingMode,
-    amount: 0,
-    userName: params.userName,
-    userEmail: params.userEmail || '',
-    consultantName: params.consultantName,
-    consultantEmail: '',
-    userNotes: params.userNotes || '',
-    jitsiLink: params.meetingLink,
-  };
-  const body = {
-    to: params.userEmail || '',
-    subject: `Special Booking Scheduled - ${params.scheduledDate} - ${params.scheduledTimeRange}`,
-    body:
-      `Hi ${params.userName},\n\n` +
-      `Your special booking with ${params.consultantName} has been scheduled.\n\n` +
-      `Date: ${params.scheduledDate}\nTime: ${params.scheduledTimeRange}\nMode: ${params.meetingMode}\nJoin: ${params.meetingLink}\n` +
-      (params.userNotes ? `Consultant message: ${params.userNotes}\n` : '') +
-      `\n` +
-      `Thank you,\nMeet The Masters Team`,
-  };
-  if (!body.to) return;
-  try {
-    await apiFetch('/notifications/booking-confirmation', { method: 'POST', body: JSON.stringify(bookingConfirmationPayload) });
-  } catch {
-    try {
-      await apiFetch('/email/send', { method: 'POST', body: JSON.stringify(body) });
-    } catch { }
-  }
-};
-
 const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
-  const dateStr = deepFindDate(b);
+  const dateStr = normaliseBookingDateKey(deepFindDate(b));
   const timeStr = deepFindTime(b);
   if (!dateStr) return false;
   try {
-    const rangeMatch = timeStr.match(/[-–]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
     let endH = -1, endM = 0;
     if (rangeMatch) {
       endH = parseInt(rangeMatch[1]);
@@ -690,9 +658,17 @@ const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
   } catch { return false; }
 };
 
+const isBookingExpiredByChronology = (booking: any, now: Date = new Date()): boolean => {
+  const chronology = getBookingChronologyTarget(booking);
+  const bookingForTime = chronology.date || chronology.time
+    ? { ...booking, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
+    : booking;
+  return isBookingExpired(bookingForTime, now);
+};
+
 // Returns true when current time is within 15 min BEFORE or anytime AFTER the meeting start
 const canJoinMeeting = (b: any, now: Date = new Date()): boolean => {
-  const dateStr = deepFindDate(b);
+  const dateStr = normaliseBookingDateKey(deepFindDate(b));
   const timeStr = deepFindTime(b);
   if (!dateStr || !timeStr) return true; // fallback: allow join if we can't determine time
   try {
@@ -836,8 +812,8 @@ const deepFindClientName = (b: any): string => {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatTimeRange = (timeString: string, durationMins = 60): string => {
-  if (!timeString) return '—';
-  if (/[-–]/.test(timeString) && timeString.length > 5) return timeString;
+  if (!timeString) return '-';
+  if (/[--]/.test(timeString) && timeString.length > 5) return timeString;
   if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(timeString) && !/-/.test(timeString)) {
     const match = timeString.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
     if (match) {
@@ -849,7 +825,7 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
       const start = new Date(); start.setHours(h, m, 0);
       const end = new Date(start.getTime() + durationMins * 60000);
       const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-      return `${fmt(start)} – ${fmt(end)}`;
+      return `${fmt(start)} - ${fmt(end)}`;
     }
     return timeString;
   }
@@ -858,7 +834,7 @@ const formatTimeRange = (timeString: string, durationMins = 60): string => {
     const start = new Date(); start.setHours(parts[0], parts[1], 0);
     const end = new Date(start.getTime() + durationMins * 60000);
     const fmt = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    return `${fmt(start)} – ${fmt(end)}`;
+    return `${fmt(start)} - ${fmt(end)}`;
   }
   return timeString;
 };
@@ -905,7 +881,7 @@ const addHoursToTime = (time: string, hours: number): string => {
 };
 
 const getDurationHoursFromRange = (timeRange: string, fallback = 1): number => {
-  const parts = String(timeRange || '').split(/[-–]/).map(p => p.trim()).filter(Boolean);
+  const parts = String(timeRange || '').split(/[--]/).map(p => p.trim()).filter(Boolean);
   if (parts.length < 2) return fallback;
   const start = parseTimeToMinutes(parts[0]);
   const end = parseTimeToMinutes(parts[1]);
@@ -916,12 +892,12 @@ const getDurationHoursFromRange = (timeRange: string, fallback = 1): number => {
 };
 
 const parseRangeStartKey = (timeRange: string): string => {
-  const firstPart = String(timeRange || '').split(/[-–]/)[0]?.trim() || '';
+  const firstPart = String(timeRange || '').split(/[--]/)[0]?.trim() || '';
   return normaliseTimeKey(firstPart);
 };
 
 const parseRangeEndKey = (timeRange: string): string => {
-  const secondPart = String(timeRange || '').split(/[-–]/)[1]?.trim() || '';
+  const secondPart = String(timeRange || '').split(/[--]/)[1]?.trim() || '';
   return normaliseTimeKey(secondPart);
 };
 
@@ -1134,8 +1110,24 @@ const MaterialTimePicker: React.FC<{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKETS TAB
+// PROFILE HOUR RANGE CLOCK PICKER - thin alias of the shared HourRangeClockPicker
+// Adds auto-set shiftEnd display note; re-uses the clock from timeSlotUtils.
 // ─────────────────────────────────────────────────────────────────────────────
+const ProfileHourRangeClockPicker: React.FC<{
+  isOpen: boolean;
+  initialHour: number | null;
+  initialDuration?: number;
+  onClose: () => void;
+  onSave: (startHour24: number, durationHours: number) => void;
+}> = (props) => (
+  <_HourRangeClock
+    {...props}
+    title="Availability Window"
+    durationOptions={[1, 2, 3]}
+    durationLabel="Availability length"
+    helperText="Pick the availability start. End time is added automatically."
+  />
+);
 const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }) => {
   const ESCALATED_KEY = `fin_escalated_tickets_${consultantId}`;
   const [tickets, setTickets] = useState<any[]>([]);
@@ -1199,7 +1191,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
           <h2 style={{ margin: '0 0 10px', fontSize: 16, fontWeight: 800, color: '#0F172A' }}>My Tickets</h2>
           <div style={{ background: '#ECFEFF', border: '1px solid #A5F3FC', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 11, color: '#115E59', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
             <Mail size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span><strong>Email-to-Ticket:</strong> Users can email <strong>{SUPPORT_EMAIL}</strong> — emails auto-convert to tickets assigned to you.</span>
+            <span><strong>Email-to-Ticket:</strong> Users can email <strong>{SUPPORT_EMAIL}</strong>. Emails are auto-converted into tickets assigned to your queue.</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 12 }}>
             {[
@@ -1241,7 +1233,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
             <div style={{ padding: 20, color: '#B91C1C', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={14} /> {error}</div>
           ) : filtered.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '48px 20px', color: '#94A3B8' }}>
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><Ticket size={32} color="#CBD5E1" strokeWidth={1.7} /></div>
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}><TicketIcon size={32} color="#CBD5E1" strokeWidth={1.7} /></div>
               <p style={{ margin: 0, fontWeight: 600 }}>No tickets match.</p>
             </div>
           ) : filtered.map((t: any) => {
@@ -1304,7 +1296,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADVISOR TICKET DETAIL — Admin-style layout with IST timestamps
+// ADVISOR TICKET DETAIL - Admin-style layout with IST timestamps
 // ─────────────────────────────────────────────────────────────────────────────
 const AdvisorTicketDetail: React.FC<{
   ticket: any;
@@ -1378,7 +1370,7 @@ const AdvisorTicketDetail: React.FC<{
           localStorage.setItem(key, JSON.stringify([newNotif, ...prev].slice(0, 50)));
         } catch { }
       }
-      // Fire email to user — non-fatal
+      // Fire email to user - non-fatal
       const userEmail = ticket.userEmail || ticket.user?.email || ticket.email || '';
       const ticketNum = String(ticket.ticketNumber || ticket.id);
       if (userEmail) {
@@ -1413,7 +1405,7 @@ const AdvisorTicketDetail: React.FC<{
           localStorage.setItem(key, JSON.stringify([newNotif, ...prev].slice(0, 50)));
         } catch { }
       }
-      // Fire status-change email to user — non-fatal
+      // Fire status-change email to user - non-fatal
       const userEmailSt = ticket.userEmail || ticket.user?.email || ticket.email || '';
       const ticketNumSt = String(ticket.ticketNumber || ticket.id);
       if (userEmailSt) {
@@ -1443,8 +1435,8 @@ const AdvisorTicketDetail: React.FC<{
       const adminNotif = {
         id: `note_ticket_${ticket.id}_${Date.now()}`,
         type: 'info',
-        title: `Internal Note — Ticket #${ticket.id}`,
-        message: `Consultant added a note on Ticket #${ticket.id} (${ticket.category || 'Support'}): "${noteContent.substring(0, 100)}${noteContent.length > 100 ? '…' : ''}"`,
+        title: `Internal Note - Ticket #${ticket.id}`,
+        message: `Consultant added a note on Ticket #${ticket.id} (${ticket.category || 'Support'}): "${noteContent.substring(0, 100)}${noteContent.length > 100 ? '...' : ''}"`,
         timestamp: new Date().toISOString(),
         read: false,
         ticketId: ticket.id,
@@ -1481,11 +1473,11 @@ const AdvisorTicketDetail: React.FC<{
         setLocalStatus('ESCALATED');
         onStatusChange(ticket.id, 'ESCALATED');
       } catch {
-        // Backend may not support ESCALATED — signal via __ESCALATED__ for UI only
+        // Backend may not support ESCALATED - signal via __ESCALATED__ for UI only
         onStatusChange(ticket.id, '__ESCALATED__');
       }
       showToast('Escalated. Supervisor notified.');
-      // Fire escalation email to user — non-fatal
+      // Fire escalation email to user - non-fatal
       const userEmailEsc = ticket.userEmail || ticket.user?.email || ticket.email || '';
       const ticketNumEsc = String(ticket.ticketNumber || ticket.id);
       if (userEmailEsc) {
@@ -1531,11 +1523,41 @@ const AdvisorTicketDetail: React.FC<{
         </div>
       )}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 8 }}>Description</div>
-          <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.7, background: '#F8FAFC', padding: '10px 14px', borderRadius: 10, borderLeft: '3px solid #A5F3FC' }}>
-            {ticket.description}
-          </p>
+        <div style={{ padding: '20px 20px', borderBottom: '1px solid #F1F5F9', background: '#FCFDFF' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#0F766E', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 24, height: 24, borderRadius: 6, background: '#ECFEFF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <MessageSquare size={14} color="#0F766E" />
+            </div>
+            Support Communication
+          </div>
+
+          {ticket.emailSubject && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 6, marginLeft: 2 }}>Subject</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#1E3A8A', background: '#ECFEFF', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #A5F3FC', boxShadow: '0 2px 4px rgba(15,118,110,0.04)' }}>
+                {ticket.emailSubject}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', marginBottom: 6, marginLeft: 2 }}>Content / Message Body</div>
+            <p style={{
+              margin: 0,
+              fontSize: 13,
+              color: '#374151',
+              lineHeight: 1.8,
+              background: '#fff',
+              padding: '14px 18px',
+              borderRadius: 14,
+              border: '1.5px solid #F1F5F9',
+              borderLeft: '4px solid #0F766E',
+              whiteSpace: 'pre-wrap',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.02)'
+            }}>
+              {ticket.emailBody || ticket.description}
+            </p>
+          </div>
           {ticket.attachmentUrl && (
             <a href={ticket.attachmentUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 12, color: '#0F766E', fontWeight: 600 }}>
               📎 Attachment
@@ -1561,7 +1583,7 @@ const AdvisorTicketDetail: React.FC<{
           </div>
         </div>
 
-        {/* ── CONVERSATION THREAD — Admin-style layout ── */}
+        {/* ── CONVERSATION THREAD - Admin-style layout ── */}
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9', background: '#F8FAFC' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
             💬 Conversation ({comments.length})
@@ -1653,10 +1675,10 @@ const AdvisorTicketDetail: React.FC<{
                   boxSizing: 'border-box' as any,
                 }}
               >
-                <option value="">⚡ Canned Responses — select to insert…</option>
+                <option value="">⚡ Canned Responses - select to insert...</option>
                 {cannedResponses.map(r => (
                   <option key={r.id} value={r.body || (r as any).content || (r as any).message || ''}>
-                    {r.category ? `[${r.category}] ` : ''}{r.title || '—'}
+                    {r.category ? `[${r.category}] ` : ''}{r.title || '-'}
                   </option>
                 ))}
               </select>
@@ -1677,7 +1699,7 @@ const AdvisorTicketDetail: React.FC<{
                 <input
                   value={cannedSearch}
                   onChange={e => setCannedSearch(e.target.value)}
-                  placeholder="Search…"
+                  placeholder="Search..."
                   style={{
                     flex: 1, padding: '3px 9px', border: '1px solid rgba(255,255,255,0.28)',
                     borderRadius: 7, fontSize: 11, outline: 'none',
@@ -1717,7 +1739,7 @@ const AdvisorTicketDetail: React.FC<{
                           {r.category}
                         </span>
                       )}
-                      {r.title || '—'}
+                      {r.title || '-'}
                     </button>
                   ))}
                 {cannedResponses.filter(r =>
@@ -1741,7 +1763,7 @@ const AdvisorTicketDetail: React.FC<{
               onChange={e => setReply(e.target.value)}
               rows={3}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder="Type reply… (Enter to send)"
+              placeholder="Type reply... (Enter to send)"
               style={{
                 flex: 1, padding: '9px 12px', border: '1.5px solid #A5F3FC',
                 borderRadius: 10, fontSize: 13, resize: 'vertical', fontFamily: 'inherit',
@@ -1784,11 +1806,11 @@ const AdvisorTicketDetail: React.FC<{
           <div style={{ display: 'flex', gap: 8 }}>
             <textarea value={noteText} onChange={e => setNoteText(e.target.value)} rows={2}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleNote(); } }}
-              placeholder="Add private note… (Enter to save)"
+              placeholder="Add private note... (Enter to save)"
               style={{ flex: 1, padding: '9px 12px', border: '1.5px solid #FDE68A', borderRadius: 10, fontSize: 13, resize: 'none', fontFamily: 'inherit', outline: 'none', background: '#fff' }} />
             <button onClick={handleNote} disabled={!noteText.trim() || postingNote}
               style={{ padding: '9px 13px', borderRadius: 10, border: 'none', background: !noteText.trim() ? '#F1F5F9' : '#D97706', color: !noteText.trim() ? '#94A3B8' : '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', alignSelf: 'flex-end' }}>
-              {postingNote ? '…' : 'Save'}
+              {postingNote ? '...' : 'Save'}
             </button>
           </div>
         </div>
@@ -1803,7 +1825,7 @@ const AdvisorTicketDetail: React.FC<{
               </div>
               <button onClick={handleEscalate} disabled={escalating}
                 style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#DC2626', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>
-                {escalating ? '…' : 'Escalate'}
+                {escalating ? '...' : 'Escalate'}
               </button>
             </div>
           )}
@@ -1854,7 +1876,7 @@ const ConsultantNotificationsView: React.FC<{
 
   // ── Merge helper: deduplicate by id, newest first, preserve local read state ──
   const mergeNotifs = (backend: LocalNotif[], local: LocalNotif[]): LocalNotif[] => {
-    // Build a map of IDs that were locally marked as read — never let backend override these
+    // Build a map of IDs that were locally marked as read - never let backend override these
     const localReadIds = new Set(local.filter(n => n.read).map(n => String(n.id)));
     const seen = new Set<string>();
     const merged: LocalNotif[] = [];
@@ -1893,7 +1915,7 @@ const ConsultantNotificationsView: React.FC<{
         ticketId: n.ticketId || n.relatedTicketId || undefined,
         bookingId: n.bookingId || n.relatedBookingId || undefined,
       }));
-    } catch { /* backend unavailable — fall back to localStorage only */ }
+    } catch { /* backend unavailable - fall back to localStorage only */ }
     const clearedAt = Number(localStorage.getItem(CLEARED_AT_KEY) || 0);
     const local: LocalNotif[] = (() => {
       try {
@@ -2084,10 +2106,15 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('ALL');
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [statusChangingId, setStatusChangingId] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
 
-  // AFTER — fetches both regular AND dedicated special bookings in parallel
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // AFTER - fetches both regular AND dedicated special bookings in parallel
   useEffect(() => {
     (async () => {
       setLoading(true); setError(null);
@@ -2108,7 +2135,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
         const token = localStorage.getItem('fin_token');
         const authHeaders = { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 
-        // ✅ Actual enrichment — NOT a placeholder comment
+        // ✅ Actual enrichment - NOT a placeholder comment
         const enriched = await Promise.all(arr.map(async (b: any) => {
           let enrichedBooking = { ...b };
           if (!b.user?.name && !b.user?.fullName && !b.userName && !b.clientName && !b.client?.name && !b.client?.fullName) {
@@ -2185,79 +2212,110 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
       } finally { setLoading(false); }
     })();
   }, [consultantId]);
-  // Separate regular vs special bookings
-  const regularBookings = bookings.filter((b: any) => !resolveSpecialBookingMeta(b));
-  const specialBookingsAll = bookings.filter((b: any) => !!resolveSpecialBookingMeta(b));
 
-  // Scheduled/confirmed special bookings have a confirmed date/time — show them in the main bookings list too
-  const scheduledSpecialBookings = specialBookingsAll.filter(
-    (b: any) => isScheduledSpecialStatus(resolveSpecialBookingMeta(b)?.status)
-  );
+  const patchBookingStatus = (booking: any, nextStatus: string) => {
+    const isSpecial = !!resolveSpecialBookingMeta(booking);
+    const normalId = toPositiveNumber(booking?.id);
+    const specialId = getDedicatedSpecialBookingId(booking) ?? (booking?.isSpecialBooking ? normalId : null);
+    setBookings(prev => prev.map((item: any) => {
+      const itemNormalId = toPositiveNumber(item?.id);
+      const itemSpecialId = getDedicatedSpecialBookingId(item) ?? (item?.isSpecialBooking ? itemNormalId : null);
+      const matches = isSpecial
+        ? itemSpecialId != null && itemSpecialId === specialId
+        : itemNormalId != null && itemNormalId === normalId && !resolveSpecialBookingMeta(item);
+      if (!matches) return item;
+      return {
+        ...item,
+        status: nextStatus,
+        bookingStatus: nextStatus,
+        BookingStatus: nextStatus,
+        ...(isSpecial ? { specialBookingStatus: nextStatus, specialStatus: nextStatus } : {}),
+      };
+    }));
+  };
 
-  const activeBookings = regularBookings.filter((b: any) => {
+  const getBookingStatusActions = (booking: any) => {
+    const status = getBookingLifecycleStatus(booking);
+    const isSpecial = !!resolveSpecialBookingMeta(booking);
+    const specialScheduled = isScheduledSpecialStatus(resolveSpecialBookingMeta(booking)?.status);
+    if (status === 'COMPLETED' || status === 'CANCELLED') return [];
+    const actions = isSpecial && !specialScheduled
+      ? [{ status: 'CANCELLED', label: 'Cancel' }]
+      : [
+        { status: 'PENDING', label: 'Mark Pending' },
+        { status: 'CONFIRMED', label: 'Confirm' },
+        { status: 'COMPLETED', label: 'Complete' },
+        { status: 'CANCELLED', label: 'Cancel' },
+      ];
+    return actions.filter(action => action.status !== status);
+  };
+
+  const handleBookingStatusChange = async (booking: any, nextStatus: string) => {
+    if (!nextStatus) return;
+    const currentStatus = getBookingLifecycleStatus(booking);
+    if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+      setError(`${currentStatus === 'CANCELLED' ? 'Cancelled' : 'Completed'} bookings cannot be changed.`);
+      return;
+    }
+    const isSpecial = !!resolveSpecialBookingMeta(booking);
+    const id = isSpecial
+      ? (getDedicatedSpecialBookingId(booking) ?? (booking?.isSpecialBooking ? toPositiveNumber(booking?.id) : null))
+      : toPositiveNumber(booking?.id);
+    if (!id) {
+      setError('Could not identify this booking for status update.');
+      return;
+    }
+
+    setStatusChangingId(id);
+    setError(null);
+    try {
+      if (nextStatus === 'CANCELLED') {
+        if (isSpecial) await cancelSpecialBooking(id);
+        else await cancelBooking(id);
+      } else if (isSpecial) {
+        await updateSpecialBooking(id, { status: nextStatus, specialBookingStatus: nextStatus });
+      } else {
+        await updateBooking(id, { bookingStatus: nextStatus, status: nextStatus });
+      }
+      patchBookingStatus(booking, nextStatus);
+    } catch (e: any) {
+      setError(e?.message || 'Status update failed.');
+    } finally {
+      setStatusChangingId(null);
+    }
+  };
+
+  const isSpecialBooking = (booking: any) => !!resolveSpecialBookingMeta(booking);
+  const isConfirmedBooking = (booking: any) => {
+    const st = getBookingLifecycleStatus(booking);
+    const meta = resolveSpecialBookingMeta(booking);
+    return ['CONFIRMED', 'BOOKED', 'SCHEDULED'].includes(st) || isScheduledSpecialStatus(meta?.status);
+  };
+
+  const activeBookings = bookings.filter((b: any) => {
     const st = getBookingLifecycleStatus(b);
     if (st === 'COMPLETED' || st === 'CANCELLED') return false;
-    return !isBookingExpired(b, now);
+    return !isBookingExpiredByChronology(b, now);
   });
-  const regularHistoryBookings = regularBookings.filter((b: any) => {
+  const activeBookingsStrict = activeBookings.slice().sort(compareBookingsChronologically);
+  const allBookingsSorted = bookings.slice().sort(compareBookingsChronologically);
+
+  const filtered = allBookingsSorted.filter((b: any) => {
     const st = getBookingLifecycleStatus(b);
-    if (st === 'COMPLETED' || st === 'CANCELLED') return true;
-    return isBookingExpired(b, now);
+    if (filter === 'ALL') return true;
+    if (filter === 'UPCOMING') return activeBookingsStrict.includes(b);
+    if (filter === 'CONFIRMED') return isConfirmedBooking(b);
+    if (filter === 'SPECIAL') return isSpecialBooking(b);
+    return st === filter;
   });
-  const historySpecialBookings = specialBookingsAll.filter((b: any) => {
-    const status = getBookingLifecycleStatus(b);
-    if (status === 'COMPLETED' || status === 'CANCELLED') return true;
-    if (!isScheduledSpecialStatus(resolveSpecialBookingMeta(b)?.status)) return false;
-    const chronology = getBookingChronologyTarget(b);
-    const bookingForTime = chronology.date || chronology.time
-      ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
-      : b;
-    return isBookingExpired(bookingForTime, now);
-  });
-  const historyBookings = [...regularHistoryBookings, ...historySpecialBookings]
-    .slice()
-    .sort(compareBookingsChronologically);
-
-  const activeScheduledSpecialBookings = scheduledSpecialBookings.filter((b: any) => {
-    const chronology = getBookingChronologyTarget(b);
-    const bookingForTime = chronology.date || chronology.time
-      ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
-      : b;
-    return !isBookingExpired(bookingForTime, now);
-  });
-
-  // Combine active regular bookings + scheduled special bookings for the main view
-  const activeBookingsWithScheduled = [
-    ...activeBookings,
-    ...activeScheduledSpecialBookings,
-  ].slice().sort(compareBookingsChronologically);
-
-  // Filter out any bookings for days that have completely passed
-  const activeBookingsStrict = activeBookingsWithScheduled.filter(b => !isBookingExpired(b, now));
-
-  const visibleBookings = filter === 'HISTORY' ? historyBookings : activeBookingsStrict;
-  const filtered = (filter === 'ALL'
-    ? visibleBookings
-    : filter === 'HISTORY'
-      ? historyBookings
-      : visibleBookings.filter((b: any) => {
-        const st = getBookingLifecycleStatus(b);
-        const meta = resolveSpecialBookingMeta(b);
-        // Scheduled special bookings show under CONFIRMED tab
-        if (filter === 'CONFIRMED') return st === 'CONFIRMED' || st === 'BOOKED' || st === 'SCHEDULED' || isScheduledSpecialStatus(meta?.status);
-        return st === filter;
-      })
-  ).slice().sort(compareBookingsChronologically);
 
   const counts: Record<string, number> = {
-    ALL: activeBookingsWithScheduled.length,
-    PENDING: activeBookings.filter((b: any) => getBookingLifecycleStatus(b) === 'PENDING').length,
-    CONFIRMED: activeBookings.filter((b: any) => ['CONFIRMED', 'BOOKED'].includes(getBookingLifecycleStatus(b))).length
-      + activeScheduledSpecialBookings.length,
+    ALL: bookings.length,
+    UPCOMING: activeBookingsStrict.length,
+    PENDING: bookings.filter((b: any) => getBookingLifecycleStatus(b) === 'PENDING').length,
+    CONFIRMED: bookings.filter(isConfirmedBooking).length,
     COMPLETED: bookings.filter((b: any) => getBookingLifecycleStatus(b) === 'COMPLETED').length,
-    CANCELLED: bookings.filter((b: any) => getBookingLifecycleStatus(b) === 'CANCELLED').length,
-    HISTORY: historyBookings.length,
-    SPECIAL: specialBookingsAll.length,
+    SPECIAL: bookings.filter(isSpecialBooking).length,
   };
 
   const totalRevenue = bookings
@@ -2275,31 +2333,18 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 12, color: '#0D9488', fontWeight: 700, padding: '8px 14px', background: '#ECFEFF', border: '1px solid #A5F3FC', borderRadius: 999, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.7)' }}>
-            {activeBookingsWithScheduled.length} session{activeBookingsWithScheduled.length !== 1 ? 's' : ''}
+            {bookings.length} booking{bookings.length !== 1 ? 's' : ''}
           </span>
-          {specialBookingsAll.length > 0 && (
-            <button
-              onClick={() => setFilter('SPECIAL')}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '8px 16px', borderRadius: 999, border: '1.5px solid #F59E0B',
-                background: filter === 'SPECIAL' ? 'linear-gradient(135deg,#D97706,#B45309)' : 'linear-gradient(135deg,#FFF8E1,#FEF3C7)',
-                color: filter === 'SPECIAL' ? '#fff' : '#92400E', fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                boxShadow: '0 2px 10px rgba(245,158,11,0.18)',
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill={filter === 'SPECIAL' ? '#FDE68A' : '#F59E0B'} stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
-              {specialBookingsAll.length} Special{specialBookingsAll.length !== 1 ? 's' : ''}
-            </button>
-          )}
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(130px,1fr))', gap: 12, marginBottom: 22 }}>
         {[
-          { label: 'Upcoming', value: String(counts.ALL), color: '#0F766E' },
+          { label: 'All', value: String(counts.ALL), color: '#0F766E' },
+          { label: 'Upcoming', value: String(counts.UPCOMING), color: '#0F766E' },
           { label: 'Pending', value: String(counts.PENDING), color: '#D97706' },
           { label: 'Confirmed', value: String(counts.CONFIRMED), color: '#0F766E' },
           { label: 'Completed', value: String(counts.COMPLETED), color: '#16A34A' },
+          { label: 'Special', value: String(counts.SPECIAL), color: '#B45309' },
           { label: 'Revenue', value: `₹${totalRevenue.toLocaleString("en-IN")}`, color: '#16A34A' },
         ].map(s => (
           <div key={s.label} style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 18, padding: '16px 16px 14px', boxShadow: '0 18px 36px rgba(15,23,42,0.06)', position: 'relative', overflow: 'hidden' }}>
@@ -2309,35 +2354,23 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
             <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>Live overview</div>
           </div>
         ))}
-        {/* Special Bookings stat card - clickable to show inline */}
-        <div
-          onClick={() => setFilter('SPECIAL')}
-          style={{ background: filter === 'SPECIAL' ? 'linear-gradient(135deg,#D97706,#B45309)' : 'linear-gradient(135deg,#FFFBEB,#FEF3C7)', border: `1.5px solid ${filter === 'SPECIAL' ? '#B45309' : '#F59E0B'}`, borderRadius: 18, padding: '16px 16px 14px', boxShadow: '0 6px 20px rgba(245,158,11,0.15)', position: 'relative', overflow: 'hidden', cursor: 'pointer', transition: 'all 0.18s' }}
-        >
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 4, background: 'linear-gradient(90deg,#F59E0B,#D97706)' }} />
-          <div style={{ fontSize: 11, color: filter === 'SPECIAL' ? '#FDE68A' : '#B45309', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill={filter === 'SPECIAL' ? '#FDE68A' : '#F59E0B'} stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
-            Special
-          </div>
-          <div style={{ fontSize: 26, fontWeight: 800, color: filter === 'SPECIAL' ? '#fff' : '#B45309', letterSpacing: '-0.03em' }}>{counts.SPECIAL}</div>
-          <div style={{ fontSize: 11, color: filter === 'SPECIAL' ? '#FDE68A' : '#D97706', marginTop: 4, fontWeight: 600 }}>{filter === 'SPECIAL' ? '✓ Viewing' : 'Manage →'}</div>
-        </div>
       </div>
       <div style={{ display: 'inline-flex', gap: 8, marginBottom: 22, flexWrap: 'wrap', padding: 6, background: '#F0FDFA', border: '1px solid #CFFAFE', borderRadius: 999, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8)' }}>
         {[
           { key: 'ALL', label: `ALL (${counts.ALL})` },
+          { key: 'UPCOMING', label: `UPCOMING (${counts.UPCOMING})` },
           { key: 'PENDING', label: `PENDING (${counts.PENDING})` },
           { key: 'CONFIRMED', label: `CONFIRMED (${counts.CONFIRMED})` },
-          { key: 'HISTORY', label: `HISTORY (${counts.HISTORY})` },
-          { key: 'SPECIAL', label: `⭐ SPECIAL (${counts.SPECIAL})`, special: true },
+          { key: 'COMPLETED', label: `COMPLETED (${counts.COMPLETED})` },
+          { key: 'SPECIAL', label: `SPECIAL BOOKINGS (${counts.SPECIAL})` },
         ].map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)} style={{
             padding: '8px 16px', borderRadius: 999, border: '1px solid',
-            borderColor: filter === f.key ? (f.special ? '#D97706' : '#0F766E') : '#E2E8F0',
-            background: filter === f.key ? (f.special ? 'linear-gradient(135deg,#D97706,#B45309)' : 'var(--color-primary-gradient)') : 'transparent',
-            color: filter === f.key ? '#fff' : (f.special ? '#92400E' : '#64748B'),
+            borderColor: filter === f.key ? '#0F766E' : '#E2E8F0',
+            background: filter === f.key ? 'var(--color-primary-gradient)' : 'transparent',
+            color: filter === f.key ? '#fff' : '#64748B',
             fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s',
-            boxShadow: filter === f.key ? (f.special ? '0 12px 22px rgba(217,119,6,0.28)' : '0 12px 22px rgba(15,118,110,0.22)') : 'none',
+            boxShadow: filter === f.key ? '0 12px 22px rgba(15,118,110,0.22)' : 'none',
           }}>
             {f.label}
           </button>
@@ -2348,12 +2381,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={14} /> {error}</span>
         </div>
       )}
-      {filter === 'SPECIAL' ? (
-        <div>
-          <SpecialBookingsView consultantId={consultantId} consultantName="" />
-
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 60 }}>
           <img src={logoImg} alt="Meet The Masters" style={{ width: 64, height: 'auto', animation: 'mtmPulse 1.8s ease-in-out infinite' }} />
         </div>
@@ -2380,13 +2408,18 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
             const bookingForTime = chronology.date || chronology.time
               ? { ...booking, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
               : booking;
-            const date = chronology.date || '—';
+            const date = chronology.date || '-';
             const rawTime = chronology.time;
             const durationMinutes = booking.durationMinutes || Math.max(1, Number(specialMeta?.hours || 1)) * 60;
-            const timeDisplay = rawTime ? formatTimeRange(rawTime, durationMinutes) : '—';
+            const timeDisplay = rawTime ? formatTimeRange(rawTime, durationMinutes) : '-';
             const amount = deepFindAmount(booking);
             const isSpecial = !!specialMeta;
             const specialScheduled = isScheduledSpecialStatus(specialMeta?.status);
+            const statusActions = getBookingStatusActions(booking);
+            const actionId = isSpecial
+              ? (getDedicatedSpecialBookingId(booking) ?? (booking?.isSpecialBooking ? toPositiveNumber(booking?.id) : null))
+              : toPositiveNumber(booking?.id);
+            const changingStatus = actionId != null && statusChangingId === actionId;
             return (
               <div key={booking.id || idx} style={{
                 background: isSpecial ? 'linear-gradient(135deg,#FFF8F0 0%,#FEF3C7 60%,#FFFBEB 100%)' : 'linear-gradient(180deg,#FFFFFF 0%,#F0FDFA 100%)',
@@ -2399,7 +2432,7 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
                   <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px', background: 'linear-gradient(90deg,rgba(180,83,9,0.10),rgba(217,119,6,0.06))', borderRadius: 9, border: '1px solid #FCD34D' }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="#B45309" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
                     <span style={{ fontSize: 11, fontWeight: 800, color: '#7C2D12', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                      Special Booking — {status === 'COMPLETED' ? '✓ Completed' : status === 'CANCELLED' ? 'Cancelled' : specialScheduled ? '✓ Scheduled' : 'Awaiting Schedule'}
+                      Special Booking - {status === 'COMPLETED' ? '✓ Completed' : status === 'CANCELLED' ? 'Cancelled' : specialScheduled ? '✓ Scheduled' : 'Awaiting Schedule'}
                     </span>
                   </div>
                 )}
@@ -2424,6 +2457,35 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
                   <span style={{ padding: '5px 14px', borderRadius: 20, background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, fontSize: 12, fontWeight: 700, letterSpacing: '0.04em' }}>
                     {status || 'UNKNOWN'}
                   </span>
+                  {statusActions.length > 0 && (
+                    <select
+                      value=""
+                      disabled={changingStatus}
+                      onChange={e => {
+                        const nextStatus = e.target.value;
+                        e.currentTarget.value = "";
+                        handleBookingStatusChange(booking, nextStatus);
+                      }}
+                      title="Change booking status"
+                      style={{
+                        padding: '7px 28px 7px 12px',
+                        borderRadius: 8,
+                        border: '1.5px solid #A5F3FC',
+                        background: changingStatus ? '#F8FAFC' : '#ECFEFF',
+                        color: changingStatus ? '#94A3B8' : '#0F766E',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: changingStatus ? 'not-allowed' : 'pointer',
+                        outline: 'none',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      <option value="" disabled>{changingStatus ? 'Updating...' : 'Change status'}</option>
+                      {statusActions.map(action => (
+                        <option key={action.status} value={action.status}>{action.label}</option>
+                      ))}
+                    </select>
+                  )}
                   {status !== 'CANCELLED' && status !== 'COMPLETED' && (!isSpecial || specialScheduled) && (() => {
                     const joinable = canJoinMeeting(bookingForTime, now);
                     return joinable ? (
@@ -2465,10 +2527,10 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
                     </button>
                   )}
                   <BookingAnswersButton
-                    bookingId={booking.id}
+                    bookingId={isSpecial ? (getDedicatedSpecialBookingId(booking) ?? booking.id) : booking.id}
                     userId={booking.userId || booking.user?.id || booking.clientId}
                     clientName={clientName}
-                    bookingType="NORMAL"
+                    bookingType={isSpecial ? "SPECIAL" : "NORMAL"}
                   />
                 </div>
               </div>
@@ -2477,66 +2539,6 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
         </div>
       )}
 
-      {/* ── Special Bookings Summary Banner ─────────────────────────────────── */}
-      {filter !== 'SPECIAL' && specialBookingsAll.length > 0 && (
-        <div style={{ marginTop: 24, borderRadius: 20, overflow: 'hidden', border: '1.5px solid #F59E0B', boxShadow: '0 6px 24px rgba(245,158,11,0.14)' }}>
-          <div style={{ background: 'linear-gradient(135deg,#92400E 0%,#B45309 40%,#D97706 80%,#F59E0B 100%)', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="#FDE68A" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
-              <div>
-                <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Special Bookings</div>
-                <div style={{ color: '#FDE68A', fontSize: 12, marginTop: 2 }}>
-                  {specialBookingsAll.length} request{specialBookingsAll.length !== 1 ? 's' : ''} — click to schedule slots inline
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={() => setFilter('SPECIAL')}
-              style={{ padding: '9px 20px', borderRadius: 10, border: '2px solid rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.18)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}
-            >
-              <CalendarIcon size={14} color="#fff" />
-              View & Schedule →
-            </button>
-          </div>
-          <div style={{ background: '#FFFBEB', padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {specialBookingsAll.slice(0, 4).map((booking: any, idx: number) => {
-              const meta = resolveSpecialBookingMeta(booking);
-              if (!meta) return null;
-              const clientName = deepFindClientName(booking);
-              const dateKey = meta.preferredDate || meta.scheduledDate || deepFindDate(booking) || 'TBD';
-              const isScheduled = isScheduledSpecialStatus(meta.status);
-              return (
-                <div key={booking.id || idx} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 12, background: '#fff', border: `1px solid ${isScheduled ? '#86EFAC' : '#FDE68A'}` }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, background: isScheduled ? 'linear-gradient(135deg,#16A34A,#15803D)' : 'linear-gradient(135deg,#D97706,#B45309)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, flexShrink: 0 }}>
-                    {clientName.charAt(0).toUpperCase()}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: '#0F172A', marginBottom: 2 }}>{clientName}</div>
-                    <div style={{ fontSize: 11, color: '#92400E', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <span>{dateKey}</span>
-                      <span>·</span>
-                      <span>{meta.requestedMeetingMode}</span>
-                      <span>·</span>
-                      <span>{meta.hours} hr{Number(meta.hours) !== 1 ? 's' : ''}</span>
-                    </div>
-                  </div>
-                  <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: isScheduled ? '#DCFCE7' : '#FEF3C7', color: isScheduled ? '#166534' : '#B45309', border: `1px solid ${isScheduled ? '#86EFAC' : '#FCD34D'}`, flexShrink: 0 }}>
-                    {isScheduled ? '✓ Scheduled' : 'Requested'}
-                  </span>
-                  <button onClick={() => setFilter('SPECIAL')} style={{ padding: '5px 12px', borderRadius: 7, border: '1px solid #A5F3FC', background: '#ECFEFF', color: '#0F766E', fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                    {isScheduled ? 'View →' : 'Schedule →'}
-                  </button>
-                </div>
-              );
-            })}
-            {specialBookingsAll.length > 4 && (
-              <div style={{ textAlign: 'center', fontSize: 12, color: '#94A3B8', padding: '4px 0' }}>
-                +{specialBookingsAll.length - 4} more — click "View & Schedule" to see all
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -2552,13 +2554,14 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [schedulingBookingId, setSchedulingBookingId] = useState<number | null>(null);
+  const [cancellingSpecialId, setCancellingSpecialId] = useState<number | null>(null);
   const [publishingDateBusy, setPublishingDateBusy] = useState<string | null>(null);
   const [unpublishingDate, setUnpublishingDate] = useState<string | null>(null);
   const [dayOffset, setDayOffset] = useState(0);
   const [form, setForm] = useState({ date: '', time: '', endTime: '' });
   const [timePicker, setTimePicker] = useState<{ open: boolean; field: 'start' | 'end'; value: string }>({ open: false, field: 'start', value: '' });
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
-  // Master time slots no longer needed — time is now picked via clock
+  // Master time slots no longer needed - time is now picked via clock
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -2712,13 +2715,13 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
   const savePublishedSpecialDay = async () => {
     if (!calendarSelectedDate) return;
     if (isDateAlreadyPublished) {
-      showToast('Already published — no changes needed.', false);
+      showToast('Already published - no changes needed.', false);
       return;
     }
     setPublishingDateBusy(calendarSelectedDate);
     try {
       await publishConsultantSpecialDayDate(consultantId, calendarSelectedDate);
-      // Always publish as free-flowing (no fixed duration — time is agreed with the user directly)
+      // Always publish as free-flowing (no fixed duration - time is agreed with the user directly)
       saveStoredSpecialDay({
         consultantId,
         specialDate: calendarSelectedDate,
@@ -2754,6 +2757,56 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
       showToast(e?.message || 'Failed to unpublish special day.', false);
     } finally {
       setUnpublishingDate(null);
+    }
+  };
+
+  const cancelSpecialBookingRequest = async (booking: any) => {
+    const currentStatus = getBookingLifecycleStatus(booking);
+    if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+      showToast(`${currentStatus === 'CANCELLED' ? 'Cancelled' : 'Completed'} special bookings cannot be changed.`, false);
+      return;
+    }
+    const dedicatedSpecialId = getDedicatedSpecialBookingId(booking);
+    const idToCancel = dedicatedSpecialId ?? toPositiveNumber(booking?.id);
+    if (!idToCancel) { showToast('Unable to identify special booking ID.', false); return; }
+    setCancellingSpecialId(idToCancel);
+    try {
+      try {
+        await cancelSpecialBooking(idToCancel);
+      } catch {
+        // Fallback: update status via updateSpecialBooking
+        await updateSpecialBooking(idToCancel, { status: 'CANCELLED' });
+      }
+      // Notify the user
+      const userId = booking.userId || booking.user?.id || booking.clientId;
+      if (userId) {
+        try {
+          // Same key that the rest of the app uses for user‑side notifications
+          const key = `fin_notifs_USER_${userId}`;
+          // Grab any existing notifications (or start with an empty array)
+          const existing = JSON.parse(localStorage.getItem(key) || '[]');
+          // Push a new “error” notification to the front of the list
+          existing.unshift({
+            // A simple unique id – timestamp is fine for our purposes
+            id: `special_cancel_${idToCancel}_${Date.now()}`,
+            type: 'error',
+            title: 'Special Booking Cancelled',
+            message:
+              'Your special booking request has been cancelled by the consultant.',
+            // Store the booking that was cancelled – useful for later look‑ups
+            bookingId: idToCancel,
+            timestamp: new Date().toISOString(),
+            read: false,
+          });
+          localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
+        } catch { }
+      }
+      showToast('Special booking cancelled.');
+      await loadBookings();
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to cancel special booking.', false);
+    } finally {
+      setCancellingSpecialId(null);
     }
   };
 
@@ -2813,7 +2866,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
             throw new Error('Could not confirm the booking with the server. Please try again or contact support.');
           }
         }
-        // If already given — slot is confirmed, continue to send notification
+        // If already given - slot is confirmed, continue to send notification
       }
 
       const requestId = dedicatedSpecialId;
@@ -2833,46 +2886,6 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
           });
           localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
         } catch { }
-      }
-
-      await sendSpecialBookingScheduledEmail({
-        bookingId: requestId,
-        userEmail: booking.user?.email || booking.email || booking.userEmail,
-        userName: deepFindClientName(booking),
-        consultantName,
-        meetingMode: meta.requestedMeetingMode,
-        scheduledDate: requestedDate,
-        scheduledTimeRange,
-        meetingLink,
-        userNotes: consultantMessage,
-      });
-
-      // Also fire EmailService-backed confirmation emails — non-fatal
-      const userEmailSb = booking.user?.email || booking.email || booking.userEmail || '';
-      const consultantEmailSb = booking.consultantEmail || booking.advisor?.email || '';
-      if (userEmailSb) {
-        emailOnSpecialBookingConfirmedUser({
-          to: userEmailSb,
-          bookingId: requestId,
-          date: requestedDate,
-          time: scheduledTimeRange,
-          hours: computedHours,
-          meetingMode: meta.requestedMeetingMode,
-          meetingLink,
-          consultantEmail: consultantEmailSb,
-        }).catch(() => null);
-      }
-      if (consultantEmailSb) {
-        emailOnSpecialBookingConfirmedConsultant({
-          to: consultantEmailSb,
-          bookingId: requestId,
-          date: requestedDate,
-          time: scheduledTimeRange,
-          hours: computedHours,
-          meetingMode: meta.requestedMeetingMode,
-          meetingLink,
-          clientEmail: userEmailSb,
-        }).catch(() => null);
       }
 
       setSchedulingBookingId(null);
@@ -2933,7 +2946,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
               Special Booking Dates
             </div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#475569' }}>
-              Mark a date as a Special Day — users can request a booking for that date, and you confirm the time directly with them.
+              Mark a date as a Special Day - users can request a booking for that date, and you confirm the time directly with them.
             </div>
           </div>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 999, background: '#FFF7ED', border: '1px solid #FCD34D', fontSize: 12, fontWeight: 700, color: '#B45309' }}>
@@ -3050,18 +3063,29 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                     <span>{scheduled ? '✓ Scheduled' : 'Requested'}</span>
                   </span>
                   {!scheduled && (
-                    <button
-                      onClick={() => {
-                        setSchedulingBookingId(booking.id);
-                        setForm({ date: meta.scheduledDate || meta.preferredDate || '', time: '', endTime: '' });
-                        setTimePicker({ open: false, field: 'start', value: '' });
-                      }}
-                      title="Schedule a time slot for this booking"
-                      style={{ padding: '6px 14px', borderRadius: 8, border: '1.5px solid #A5F3FC', background: '#ECFEFF', color: '#0F766E', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                      Schedule
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => {
+                          setSchedulingBookingId(booking.id);
+                          setForm({ date: meta.scheduledDate || meta.preferredDate || '', time: '', endTime: '' });
+                          setTimePicker({ open: false, field: 'start', value: '' });
+                        }}
+                        title="Schedule a time slot for this booking"
+                        style={{ padding: '6px 14px', borderRadius: 8, border: '1.5px solid #A5F3FC', background: '#ECFEFF', color: '#0F766E', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                        Schedule
+                      </button>
+                      <button
+                        onClick={() => cancelSpecialBookingRequest(booking)}
+                        disabled={cancellingSpecialId === (getDedicatedSpecialBookingId(booking) ?? booking?.id)}
+                        title="Cancel this special booking request"
+                        style={{ padding: '6px 14px', borderRadius: 8, border: '1.5px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', opacity: cancellingSpecialId === (getDedicatedSpecialBookingId(booking) ?? booking?.id) ? 0.6 : 1 }}
+                      >
+                        <X size={13} />
+                        {cancellingSpecialId === (getDedicatedSpecialBookingId(booking) ?? booking?.id) ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div style={{ marginTop: 12, fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
@@ -3072,7 +3096,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                   const isRealRange = rawTime && /AM|PM|:/i.test(rawTime);
                   return (
                     <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 14, background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: 13, color: '#334155', display: 'grid', gap: 8 }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Calendar size={14} /> <strong>Requested Date:</strong> <span>{meta.preferredDate || '—'}</span></div>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Calendar size={14} /> <strong>Requested Date:</strong> <span>{meta.preferredDate || '-'}</span></div>
                       {isRealRange && (
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Clock size={14} /> <strong>Preferred Time:</strong> <span>{rawTime}</span></div>
                       )}
@@ -3099,7 +3123,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                   <div style={{ marginTop: 16 }}>
                     {schedulingBookingId === booking.id ? (
                       <>
-                        {/* ── Date picker — constrained to published special days ── */}
+                        {/* ── Date picker - constrained to published special days ── */}
                         <div style={{ marginBottom: 14 }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 }}>
                             <Calendar size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 5 }} />
@@ -3189,7 +3213,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                                 }}
                               >
                                 <Clock size={15} color={form.time ? '#0F766E' : '#94A3B8'} />
-                                <span>{form.time ? to12HourLabel(form.time) : 'Start…'}</span>
+                                <span>{form.time ? to12HourLabel(form.time) : 'Start...'}</span>
                               </button>
                             </div>
                             {/* TO */}
@@ -3209,7 +3233,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
                                 }}
                               >
                                 <Clock size={15} color={form.endTime ? '#0F766E' : '#94A3B8'} />
-                                <span>{form.endTime ? to12HourLabel(form.endTime) : 'End…'}</span>
+                                <span>{form.endTime ? to12HourLabel(form.endTime) : 'End...'}</span>
                               </button>
                             </div>
                           </div>
@@ -3406,7 +3430,7 @@ const MySlotsView: React.FC<{
     try {
       await publishConsultantSpecialDayDate(consultantId, dateStr);
       saveStoredSpecialDay({ consultantId, specialDate: dateStr, durationHours: 0, status: 'SPECIAL' });
-      showSlotToast('Date published as Special Day — users can now request bookings.');
+      showSlotToast('Date published as Special Day - users can now request bookings.');
       await loadSpecialDays();
     } catch (e: any) {
       showSlotToast(e?.message || 'Failed to publish special day.', false);
@@ -3432,11 +3456,6 @@ const MySlotsView: React.FC<{
     const startTime24 = schedForm.time || meta?.preferredTime || meta?.scheduledTime || '';
     const endTime24 = schedForm.endTime || '';
     if (!meta || !requestedDate || !startTime24 || !endTime24) return;
-    const [sh, sm] = startTime24.split(':').map(Number);
-    const [eh, em] = endTime24.split(':').map(Number);
-    let diffMins = (eh * 60 + em) - (sh * 60 + sm);
-    if (diffMins <= 0) diffMins += 24 * 60;
-    const computedHours = Math.max(1, Math.round(diffMins / 60));
     const dedicatedSpecialId = getDedicatedSpecialBookingId(booking) ?? toPositiveNumber(booking?.specialBookingId) ?? (booking?.isSpecialBooking ? toPositiveNumber(booking?.id) : null);
     if (!dedicatedSpecialId) { showSlotToast('Special booking id missing. Refresh and try again.', false); return; }
     const meetingId = `meetthemasters-special-${dedicatedSpecialId}-${Date.now()}`;
@@ -3468,7 +3487,7 @@ const MySlotsView: React.FC<{
       setSchedForm({ date: '', time: '', endTime: '' });
       showSlotToast('Special booking confirmed! User will be notified.');
 
-      // Fire email + reload in background — UI is already updated above
+      // Fire email + reload in background - UI is already updated above
       const userId = booking.userId || booking.user?.id || booking.clientId;
       if (userId) {
         try {
@@ -3477,36 +3496,6 @@ const MySlotsView: React.FC<{
           existing.unshift({ id: `special_booking_${dedicatedSpecialId}_${Date.now()}`, type: 'success', title: 'Special Booking Confirmed', message: consultantMessage, bookingId: dedicatedSpecialId, timestamp: new Date().toISOString(), read: false });
           localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
         } catch { }
-      }
-      try {
-        await sendSpecialBookingScheduledEmail({ bookingId: dedicatedSpecialId, userEmail: booking.user?.email || booking.email || booking.userEmail, userName: deepFindClientName(booking), consultantName: '', meetingMode: meta.requestedMeetingMode, scheduledDate: requestedDate, scheduledTimeRange, meetingLink, userNotes: consultantMessage });
-      } catch { /* email failure is non-fatal — booking is already confirmed */ }
-      // Also fire EmailService-backed confirmation emails — non-fatal
-      const userEmailSb2 = booking.user?.email || booking.email || booking.userEmail || '';
-      const consultantEmailSb2 = booking.consultantEmail || booking.advisor?.email || '';
-      if (userEmailSb2) {
-        emailOnSpecialBookingConfirmedUser({
-          to: userEmailSb2,
-          bookingId: dedicatedSpecialId,
-          date: requestedDate,
-          time: scheduledTimeRange,
-          hours: computedHours,
-          meetingMode: meta.requestedMeetingMode,
-          meetingLink,
-          consultantEmail: consultantEmailSb2,
-        }).catch(() => null);
-      }
-      if (consultantEmailSb2) {
-        emailOnSpecialBookingConfirmedConsultant({
-          to: consultantEmailSb2,
-          bookingId: dedicatedSpecialId,
-          date: requestedDate,
-          time: scheduledTimeRange,
-          hours: computedHours,
-          meetingMode: meta.requestedMeetingMode,
-          meetingLink,
-          clientEmail: userEmailSb2,
-        }).catch(() => null);
       }
       await loadSpecialDays(); // sync fresh data from backend
     } catch (e: any) {
@@ -3534,7 +3523,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== slotDate) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         return normTR === slotStart;
       });
       if (existing) {
@@ -3571,7 +3560,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== slotDate) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         return normTR === slotStart;
       });
       if (existing) {
@@ -3666,7 +3655,7 @@ const MySlotsView: React.FC<{
   }, [consultantId]);
 
   const fmtTime = (t: string) => {
-    if (!t) return '—';
+    if (!t) return '-';
     const parts = t.split(':').map(Number);
     const h = parts[0]; const m = isNaN(parts[1]) ? 0 : parts[1];
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
@@ -3699,7 +3688,7 @@ const MySlotsView: React.FC<{
   });
 
   // Only show slots that the admin has explicitly created as master time slots.
-  // If no master slots exist yet, show nothing — never generate slots automatically
+  // If no master slots exist yet, show nothing - never generate slots automatically
   // from shift times, as that produces random/static slots the admin didn't configure.
   const hourlySlotTimes = (
     masterSlots.length > 0
@@ -3780,6 +3769,11 @@ const MySlotsView: React.FC<{
 
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    // Avoid carrying a previous date's selected slots into the current date.
+    setSelectedSlots(new Set());
+  }, [activeDateKey]);
+
   let totalCount = 0, availableCount = 0, bookedCount = 0;
   if (hasShift) {
     visibleDays.forEach(d => {
@@ -3794,15 +3788,29 @@ const MySlotsView: React.FC<{
 
   const handleBulkStatusChange = async (targetStatus: 'AVAILABLE' | 'UNAVAILABLE') => {
     if (selectedSlots.size === 0) return;
+    const selectedKeys = Array.from(selectedSlots);
+    const actionableKeys = selectedKeys.filter((key) => {
+      const isCurrentlyUnavailable = unavailSlotSet.has(key) || manuallyDisabledSet.has(key);
+      return targetStatus === 'AVAILABLE' ? isCurrentlyUnavailable : !isCurrentlyUnavailable;
+    });
+    if (actionableKeys.length === 0) {
+      showSlotToast(
+        targetStatus === 'AVAILABLE'
+          ? 'All selected slots are already available.'
+          : 'All selected slots are already blocked.'
+      );
+      return;
+    }
+
     setLoading(true);
     try {
-      const slotsToUpdate = Array.from(selectedSlots).map(key => {
+      const slotsToUpdate = actionableKeys.map(key => {
         const [date, time] = key.split('|');
         const existing = dbSlots.find(s => {
           if (s.slotDate !== date) return false;
           const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
           if (dbSlotTime && dbSlotTime === time) return true;
-          const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+          const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
           if (normTR && normTR === time) return true;
           return false;
         });
@@ -3813,6 +3821,7 @@ const MySlotsView: React.FC<{
         if (item.existing) {
           await apiFetch(`/timeslots/${item.existing.id}`, { method: 'PUT', body: JSON.stringify({ ...item.existing, status: targetStatus }) });
         } else {
+          if (targetStatus === 'AVAILABLE') continue;
           const masterSlot = masterSlotsByStart[item.time];
           if (masterSlot?.id) {
             await apiFetch('/timeslots', {
@@ -3828,7 +3837,7 @@ const MySlotsView: React.FC<{
           }
         }
       }
-      showSlotToast(`Updated ${selectedSlots.size} slots to ${targetStatus.toLowerCase()}.`);
+      showSlotToast(`Updated ${actionableKeys.length} slots to ${targetStatus.toLowerCase()}.`);
       setSelectedSlots(new Set());
       await loadData();
     } catch (e: any) {
@@ -3852,7 +3861,7 @@ const MySlotsView: React.FC<{
         if (s.slotDate !== activeDateKey) return false;
         const dbSlotTime = (s as any).slotTime ? String((s as any).slotTime).substring(0, 5) : '';
         if (dbSlotTime && dbSlotTime === slotStart) return true;
-        const normTR = normaliseTimeKey((s.timeRange || '').split(/[-–]/)[0].trim());
+        const normTR = normaliseTimeKey((s.timeRange || '').split(/[--]/)[0].trim());
         if (normTR && normTR === slotStart) return true;
         return false;
       });
@@ -3882,6 +3891,9 @@ const MySlotsView: React.FC<{
   };
 
   const allSlotTimes = [...hourlySlotTimes];
+  const selectedKeys = Array.from(selectedSlots);
+  const selectedUnavailableCount = selectedKeys.filter((key) => unavailSlotSet.has(key) || manuallyDisabledSet.has(key)).length;
+  const selectedAvailableCount = selectedKeys.length - selectedUnavailableCount;
 
   const renderSlotButton = (slotDate: string, slotStart: string) => {
     const key = `${slotDate}|${slotStart}`;
@@ -3908,7 +3920,7 @@ const MySlotsView: React.FC<{
             <span style={{ fontSize: 8, fontWeight: 800, color: '#DC2626', letterSpacing: '0.08em' }}>UNAVAILABLE</span>
           </div>
           <button onClick={() => handleMarkAvailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #86EFAC', background: '#F0FDF4', color: '#15803D', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
-            {isLoading ? '…' : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle size={11} /> Restore</span>}
+            {isLoading ? '...' : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><CheckCircle size={11} /> Restore</span>}
           </button>
         </div>
       );
@@ -3919,7 +3931,7 @@ const MySlotsView: React.FC<{
           <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>{label}</span>
         </div>
         <button onClick={() => handleMarkUnavailable(slotDate, slotStart)} disabled={isLoading} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #FBBF24', background: '#FFFBEB', color: '#92400E', fontSize: 9, fontWeight: 700, cursor: isLoading ? 'default' : 'pointer', fontFamily: 'inherit', width: '100%', opacity: isLoading ? 0.6 : 1 }}>
-          {isLoading ? '…' : 'Block'}
+          {isLoading ? '...' : 'Block'}
         </button>
       </div>
     );
@@ -3977,7 +3989,7 @@ const MySlotsView: React.FC<{
 
             {/* ── Step 1: Date Selection ── */}
             <div style={{ padding: '20px 24px', borderBottom: '1px solid #F1F5F9' }}>
-              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 — Select Date</p>
+              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 12px' }}>Step 1 - Select Date</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button disabled={dayOffset === 0} onClick={() => setDayOffset(o => Math.max(0, o - 1))} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${dayOffset === 0 ? '#F1F5F9' : '#A5F3FC'}`, background: '#fff', cursor: dayOffset === 0 ? 'default' : 'pointer', color: dayOffset === 0 ? '#CBD5E1' : '#0F766E', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ArrowLeft size={16} /></button>
                 <div style={{ display: 'flex', gap: 6, flex: 1 }}>
@@ -4028,7 +4040,7 @@ const MySlotsView: React.FC<{
                     <div style={{ fontSize: 11, color: '#64748B' }}>
                       {isSelectedDateSpecial
                         ? 'Users can request a booking for this date. All regular slots are suspended.'
-                        : 'Mark this date as a Special Day — users can request bookings and you confirm the time directly.'}
+                        : 'Mark this date as a Special Day - users can request bookings and you confirm the time directly.'}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -4042,7 +4054,7 @@ const MySlotsView: React.FC<{
                           disabled={unpublishingSpecial}
                           style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid #FECACA', background: '#fff', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: unpublishingSpecial ? 0.6 : 1 }}
                         >
-                          {unpublishingSpecial ? '…' : 'Unpublish'}
+                          {unpublishingSpecial ? '...' : 'Unpublish'}
                         </button>
                       </>
                     ) : (
@@ -4052,7 +4064,7 @@ const MySlotsView: React.FC<{
                         style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: publishingSpecial ? '#E2E8F0' : 'linear-gradient(135deg,#D97706,#B45309)', color: publishingSpecial ? '#94A3B8' : '#fff', fontSize: 13, fontWeight: 700, cursor: publishingSpecial ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                       >
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
-                        {publishingSpecial ? 'Publishing…' : 'Publish as Special Day'}
+                        {publishingSpecial ? 'Publishing...' : 'Publish as Special Day'}
                       </button>
                     )}
                   </div>
@@ -4062,7 +4074,7 @@ const MySlotsView: React.FC<{
 
             {/* ── Step 2: Time Slots ── */}
             <div style={{ padding: '20px 24px' }}>
-              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 — Select Time</p>
+              <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#64748B', margin: '0 0 10px' }}>Step 2 - Select Time</p>
               {isSelectedDateSpecial ? (
                 /* ── Special day: all slots suspended, show requests panel ── */
                 <div>
@@ -4118,7 +4130,7 @@ const MySlotsView: React.FC<{
                                       </div>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                         <span style={{ fontSize: 12, background: '#fff', color: '#166534', border: '1px solid #86EFAC', borderRadius: 8, padding: '4px 12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                                          📅 {meta.scheduledDate || booking.scheduledDate || '—'}
+                                          📅 {meta.scheduledDate || booking.scheduledDate || '-'}
                                         </span>
                                         {(meta.scheduledTimeRange || booking.scheduledTimeRange || booking.scheduledTime) && (
                                           <span style={{ fontSize: 12, background: '#fff', color: '#0F766E', border: '1px solid #A5F3FC', borderRadius: 8, padding: '4px 12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -4221,8 +4233,38 @@ const MySlotsView: React.FC<{
                       </button>
                       {selectedSlots.size > 0 && (
                         <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => handleBulkStatusChange('AVAILABLE')} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: '#16A34A', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Make Available</button>
-                          <button onClick={() => handleBulkStatusChange('UNAVAILABLE')} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: '#DC2626', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Block All</button>
+                          <button
+                            onClick={() => handleBulkStatusChange('AVAILABLE')}
+                            disabled={selectedUnavailableCount === 0}
+                            style={{
+                              padding: '6px 12px',
+                              borderRadius: 8,
+                              border: 'none',
+                              background: selectedUnavailableCount === 0 ? '#E2E8F0' : '#16A34A',
+                              color: selectedUnavailableCount === 0 ? '#94A3B8' : '#fff',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: selectedUnavailableCount === 0 ? 'default' : 'pointer'
+                            }}
+                          >
+                            Make Available
+                          </button>
+                          <button
+                            onClick={() => handleBulkStatusChange('UNAVAILABLE')}
+                            disabled={selectedAvailableCount === 0}
+                            style={{
+                              padding: '6px 12px',
+                              borderRadius: 8,
+                              border: 'none',
+                              background: selectedAvailableCount === 0 ? '#E2E8F0' : '#DC2626',
+                              color: selectedAvailableCount === 0 ? '#94A3B8' : '#fff',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: selectedAvailableCount === 0 ? 'default' : 'pointer'
+                            }}
+                          >
+                            Block All
+                          </button>
                         </div>
                       )}
                     </div>
@@ -4378,7 +4420,7 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
     return matchesRating && matchesType;
   });
 
-  const avgRating = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '—';
+  const avgRating = feedbacks.length > 0 ? (feedbacks.reduce((s, f) => s + f.rating, 0) / feedbacks.length).toFixed(1) : '-';
   const ratingCounts = [5, 4, 3, 2, 1].map(r => ({ r, count: feedbacks.filter(f => Math.round(f.rating) === r).length }));
 
   return (
@@ -4492,15 +4534,6 @@ const FeedbacksView: React.FC<{ consultantId: number }> = ({ consultantId }) => 
 // PROFILE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }> = ({ profile, onUpdate }) => {
-  const SKILL_OPTIONS = [
-    "Income Tax", "GST", "Tax Planning", "Tax Filing", "Corporate Tax", "International Tax", "Audit & Compliance",
-    "Equity", "Mutual Funds", "SIP", "Portfolio Management", "Stock Analysis", "Bonds & Debentures", "Derivatives",
-    "Wealth Management", "Retirement Planning", "Pension", "Estate Planning", "Trust Management",
-    "Life Insurance", "Health Insurance", "Term Plans", "Risk Assessment", "ULIP",
-    "Real Estate Investment", "Home Loans", "NRI Investment", "Property Tax", "Mortgage Planning",
-    "Business Planning", "Startup Finance", "Cash Flow", "Accounting", "MSME Advisory", "Valuation"
-  ];
-
   const profileRating = useMemo(() => profile?.rating || 0, [profile]);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -4512,14 +4545,39 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
   const [formError, setFormError] = useState<string>('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [newSkill, setNewSkill] = useState("");
-  const [timePickerConfig, setTimePickerConfig] = useState<{ isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string }>({ isOpen: false, field: null, value: '' });
+  const [skillOptions, setSkillOptions] = useState<string[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [timePickerConfig, setTimePickerConfig] = useState<{ isOpen: boolean; field: 'shiftStart' | 'shiftEnd' | null; value: string; durationHours?: number }>({ isOpen: false, field: null, value: '', durationHours: 1 });
+
+  useEffect(() => {
+    let active = true;
+    setSkillsLoading(true);
+    getAllSkills()
+      .then((items: any[]) => {
+        if (!active) return;
+        const names = Array.from(new Set(
+          (Array.isArray(items) ? items : [])
+            .map((s: any) => String(s?.skillName || s?.name || s?.title || "").trim())
+            .filter(Boolean)
+        )).sort((a, b) => a.localeCompare(b));
+        setSkillOptions(names);
+      })
+      .catch(() => {
+        if (active) setSkillOptions([]);
+      })
+      .finally(() => {
+        if (active) setSkillsLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   const validateForm = () => {
     const errors: Record<string, string> = {};
     if (!formData.name?.trim()) errors.name = "Name is required.";
     if (!formData.email?.trim() || !/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/.test(formData.email)) errors.email = "Valid email is required.";
-    if (formData.experience === undefined || formData.experience === null || String(formData.experience) === "0") {
-      errors.experience = "Experience must be greater than 0.";
+    const expRaw = Number(formData.experience);
+    if (!Number.isFinite(expRaw) || expRaw <= 0 || !Number.isInteger(expRaw)) {
+      errors.experience = "Experience must be a whole number greater than 0.";
     }
     if (Number(formData.charges) <= 0) errors.charges = "Charges must be greater than 0.";
     setFieldErrors(errors);
@@ -4578,6 +4636,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
 
   const handleSave = async () => {
     if (!profile) return;
+    if (!validateForm()) { setFormError('Please fix the highlighted profile fields.'); return; }
     if (!formData.name?.trim()) { setFormError('Name required.'); return; }
     if (!formData.charges) { setFormError('Fee required.'); return; }
     if (!formData.shiftStart) { setFormError('Shift start required.'); return; }
@@ -4587,6 +4646,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     try {
       const skillsList: string[] = typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : (formData.skills || []);
       const toLocalTime = (t: string) => t.length === 5 ? `${t}:00` : t;
+      const experienceYears = Number.parseInt(String(formData.experience || ''), 10);
       await updateAdvisor(profile.id, {
         name: formData.name.trim(),
         designation: profile.designation || '',
@@ -4599,7 +4659,9 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         shiftStartTime: toLocalTime(formData.shiftStart),
         shiftEndTime: toLocalTime(formData.shiftEnd),
         slotsDuration: durationHoursToMinutes(formData.durationHours, 1),
-        yearsOfExperience: parseFloat(formData.experience) || (profile as any).yearsOfExperience || profile.experience || 0,
+        yearsOfExperience: Number.isFinite(experienceYears) && experienceYears > 0
+          ? experienceYears
+          : ((profile as any).yearsOfExperience || profile.experience || 0),
       }, photoFile ?? undefined);
       await onUpdate();
       // Set 1-month session duration lock after any save
@@ -4625,6 +4687,15 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
     const [h, m] = t.split(':').map(Number);
     return `${String(h % 12 || 12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
   };
+  const getAvailabilityWindowHours = () => {
+    if (!formData.shiftStart || !formData.shiftEnd) return 8;
+    const [sh, sm] = formData.shiftStart.split(':').map(Number);
+    const [eh, em] = formData.shiftEnd.split(':').map(Number);
+    if ([sh, sm, eh, em].some(Number.isNaN)) return 8;
+    let diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff <= 0) diff += 24 * 60;
+    return Math.max(1, Math.min(12, Math.round(diff / 60)));
+  };
   const detailCards = [
     { label: 'Email', value: profile.email, bg: '#ECFEFF', border: '#A5F3FC', labelColor: '#0F766E' },
     { label: 'Fee', value: profile.charges ? `₹${Number(profile.charges).toLocaleString("en-IN")}` : null, bg: '#ECFDF5', border: '#A7F3D0', labelColor: '#059669' },
@@ -4649,7 +4720,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         ) : (
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => { setIsEditing(false); setFormError(''); }} disabled={saving} style={{ padding: '8px 16px', background: '#F1F5F9', color: '#64748B', border: '1px solid #E2E8F0', borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-            <button onClick={handleSave} disabled={saving} style={{ padding: '8px 16px', background: 'var(--color-primary-gradient)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 10px 24px rgba(15,118,110,0.18)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{saving ? 'Saving…' : <><CheckCircle size={13} /> Save</>}</button>
+            <button onClick={handleSave} disabled={saving} style={{ padding: '8px 16px', background: 'var(--color-primary-gradient)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 10px 24px rgba(15,118,110,0.18)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{saving ? 'Saving...' : <><CheckCircle size={13} /> Save</>}</button>
           </div>
         )}
       </div>
@@ -4663,8 +4734,8 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               <div style={{ width: 104, height: 104, borderRadius: '50%', flexShrink: 0, background: (profile as any).profilePhoto ? 'transparent' : 'rgba(255,255,255,0.15)', border: '3px solid rgba(255,255,255,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', boxShadow: '0 10px 28px rgba(15,23,42,0.25)' }}>
                 {(profile as any).profilePhoto ? <img src={resolvePhotoUrl((profile as any).profilePhoto)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <span style={{ fontSize: 34, fontWeight: 700, color: '#fff' }}>{avatarInitials}</span>}
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 4 }}>{profile.name}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 4, wordBreak: 'break-word', overflowWrap: 'break-word' }}>{profile.name}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {[1, 2, 3, 4, 5].map(i => <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill={i <= Math.round(profileRating) ? '#F59E0B' : 'rgba(255,255,255,0.25)'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 21 12 17.77 5.82 21 7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>)}
                   {profileRating ? <span style={{ fontSize: 13, fontWeight: 700, color: '#FCD34D' }}>{(profileRating).toFixed(1)} <span style={{ fontSize: 10, fontWeight: 500, color: '#CCFBF1', marginLeft: 4 }}>(Read-only)</span></span> : <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>No rating</span>}
@@ -4719,19 +4790,27 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
           </div>
           <div style={{ gridColumn: 'span 2' }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Full Name *</label>
-            <input name="name" value={formData.name || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.name ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
+            <input name="name" value={formData.name || ''} onChange={e => { const val = e.target.value; if (val.length === 1 && /[^a-zA-Z]/.test(val)) return; handleChange({ ...e, target: { ...e.target, value: val } } as any); }} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.name ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
             {fieldErrors.name && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.name}</div>}
           </div>
           <div>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Email Address *</label>
-            <input name="email" value={formData.email || ''} onChange={handleChange} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.email ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
+            <input
+              name="email"
+              value={formData.email || ''}
+              readOnly
+              disabled
+              style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.email ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none', background: '#F8FAFC', color: '#64748B', cursor: 'not-allowed' }}
+            />
+            <div style={{ marginTop: 4, fontSize: 10, color: '#94A3B8', fontWeight: 600 }}>
+              Email updates are locked to protect existing bookings and communication history.
+            </div>
             {fieldErrors.email && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.email}</div>}
           </div>
           <div>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Fee (₹) *</label>
             <input name="charges" type="number" value={formData.charges || ''} onChange={e => { handleChange(e); const base = parseFloat(e.target.value) || 0; setFormData((prev: any) => ({ ...prev, charges: e.target.value, displayPrice: String(base + 200) })); if (fieldErrors.charges) setFieldErrors({ ...fieldErrors, charges: '' }); }} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.charges ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} />
             {fieldErrors.charges && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.charges}</div>}
-            {formData.charges && !fieldErrors.charges && <div style={{ marginTop: 4, fontSize: 11, color: '#16A34A', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}><CheckCircle size={11} /> Customer sees: ₹{(parseFloat(formData.charges || '0') + 200).toLocaleString("en-IN")}</div>}
           </div>
           <div>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Rating</label>
@@ -4739,10 +4818,32 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               <Star size={13} fill="#CBD5E1" stroke="none" /> {profileRating.toFixed(1)} <span style={{ fontSize: 10, fontWeight: 500, fontStyle: 'italic' }}>(Read-only)</span>
             </div>
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability Start *</label>
-            <div onClick={() => !saving && setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart })} style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}>
-              <span>{displayTime(formData.shiftStart)}</span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability Start *</label>
+              <div
+                onClick={() => {
+                  if (saving) return;
+                  setTimePickerConfig({ isOpen: true, field: 'shiftStart', value: formData.shiftStart, durationHours: Number(formData.durationHours || 1) });
+                }}
+                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftStart ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftStart ? '#0F172A' : '#94A3B8' }}
+              >
+                <span>{formData.shiftStart ? fmt24to12(formData.shiftStart) : `Start time`}</span>
+                <Clock size={14} color="#64748B" />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Availability End *</label>
+              <div
+                onClick={() => {
+                  if (saving) return;
+                  setTimePickerConfig({ isOpen: true, field: 'shiftEnd', value: formData.shiftEnd, durationHours: Number(formData.durationHours || 1) });
+                }}
+                style={{ width: '100%', padding: '8px 12px', border: `1px solid ${!formData.shiftEnd ? '#FCA5A5' : '#CBD5E1'}`, borderRadius: 6, fontSize: 13, boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: saving ? 'not-allowed' : 'pointer', background: '#fff', color: formData.shiftEnd ? '#0F172A' : '#94A3B8' }}
+              >
+                <span>{formData.shiftEnd ? fmt24to12(formData.shiftEnd) : `End time`}</span>
+                <Clock size={14} color="#64748B" />
+              </div>
             </div>
           </div>
           <div>
@@ -4756,7 +4857,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             </label>
             {isSessionDurationLocked ? (
               <div style={{ padding: '10px 14px', borderRadius: 8, background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 13, color: '#92400E', fontWeight: 700 }}>
-                {formData.durationHours} hr — Session duration is locked for 1 month after each change to ensure booking consistency.
+                {formData.durationHours} hr - Session duration is locked for 1 month after each change to ensure booking consistency.
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
@@ -4787,14 +4888,27 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
           </div>
           <div>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Experience (years) *</label>
-            <input type="number" min="0" value={formData.experience ?? ''} onChange={e => { setFormData((p: any) => ({ ...p, experience: e.target.value })); if (fieldErrors.experience) setFieldErrors({ ...fieldErrors, experience: '' }); }} style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.experience ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }} placeholder="e.g. 5" />
+            <input
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              value={formData.experience ?? ''}
+              onChange={e => {
+                const digitsOnly = e.target.value.replace(/\D/g, '');
+                setFormData((p: any) => ({ ...p, experience: digitsOnly }));
+                if (fieldErrors.experience) setFieldErrors({ ...fieldErrors, experience: '' });
+              }}
+              style={{ width: '100%', padding: '8px 12px', border: `1.5px solid ${fieldErrors.experience ? '#EF4444' : '#CBD5E1'}`, borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }}
+              placeholder="e.g. 5"
+            />
             {fieldErrors.experience && <div style={{ color: '#EF4444', fontSize: 10, marginTop: 4, fontWeight: 600 }}>{fieldErrors.experience}</div>}
           </div>
           <div style={{ gridColumn: '1/-1' }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Skills</label>
             <div style={{ background: '#F8FAFC', border: '1.5px solid #E2E8F0', borderRadius: 14, padding: '16px 18px', marginBottom: 12 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px 16px', maxHeight: 200, overflowY: 'auto', paddingRight: 8 }}>
-                {SKILL_OPTIONS.map(skill => {
+                {skillOptions.map(skill => {
                   const currentSkills = Array.isArray(formData.skills) ? formData.skills : (typeof formData.skills === 'string' ? formData.skills.split(',').map((s: string) => s.trim()).filter(Boolean) : []);
                   const isChecked = currentSkills.includes(skill);
                   return (
@@ -4811,6 +4925,11 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
                     </label>
                   );
                 })}
+                {!skillsLoading && skillOptions.length === 0 && (
+                  <div style={{ gridColumn: '1 / -1', fontSize: 12, color: '#94A3B8' }}>
+                    No skills configured in Skills & Questions yet.
+                  </div>
+                )}
               </div>
               <div style={{ height: 1, background: '#E2E8F0', margin: '14px 0' }} />
               <div style={{ display: 'flex', gap: 10 }}>
@@ -4858,7 +4977,24 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             <textarea name="description" value={formData.description || ''} onChange={handleChange} rows={3} style={{ width: '100%', padding: '8px 12px', border: '1px solid #CBD5E1', borderRadius: 6, fontSize: 13, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', outline: 'none' }} />
           </div>
         </div>
-          <MaterialTimePicker isOpen={timePickerConfig.isOpen} initialTime={timePickerConfig.value} onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })} onSave={t => { if (timePickerConfig.field) { setFormData({ ...formData, [timePickerConfig.field]: t }); setFormError(''); } setTimePickerConfig({ ...timePickerConfig, isOpen: false }); }} />
+          <SimpleHourPicker
+            isOpen={timePickerConfig.isOpen}
+            title={timePickerConfig.field === 'shiftStart' ? "Availability Start" : "Availability End"}
+            initialHour={timePickerConfig.value ? parseInt(timePickerConfig.value.split(':')[0], 10) : null}
+            durationHours={timePickerConfig.durationHours}
+            isEnd={timePickerConfig.field === 'shiftEnd'}
+            onClose={() => setTimePickerConfig({ ...timePickerConfig, isOpen: false })}
+            onSave={(h24) => {
+              const hh = String(h24).padStart(2, '0');
+              if (timePickerConfig.field === 'shiftStart') {
+                setFormData((prev: any) => ({ ...prev, shiftStart: `${hh}:00` }));
+              } else {
+                setFormData((prev: any) => ({ ...prev, shiftEnd: `${hh}:00` }));
+              }
+              setFormError('');
+              setTimePickerConfig({ ...timePickerConfig, isOpen: false });
+            }}
+          />
         </>
       )}
     </div>
@@ -4892,13 +5028,25 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
   const [form, setForm] = React.useState<ConsultantOffer>({ title: '', description: '', discount: '', validFrom: '', validTo: '', isActive: true });
   const [showForm, setShowForm] = React.useState(false);
   const [offerError, setOfferError] = React.useState<string | null>(null);
+  const todayIso = React.useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }, []);
 
   const validateOfferForm = () => {
-    if (!form.title.trim()) return "Title is required.";
+    const title = form.title.trim();
+    if (!title) return "Title is required.";
     if (!form.discount.trim()) return "Discount label is required.";
 
     const d = form.discount.trim();
     const compact = d.replace(/\s+/g, "");
+    const isPercentPattern = /^\d+(\.\d+)?%$/.test(compact);
+    const isFlatAmountPattern = /^\d+(\.\d+)?$/.test(compact);
+
+    if (!isPercentPattern && !isFlatAmountPattern) {
+      return "Discount label must be a percentage (e.g., 20%) or a flat amount (e.g., 500).";
+    }
+
     const isPercent = compact.endsWith('%');
     const numericMatch = compact.match(/\d+(\.\d+)?/);
     const val = numericMatch ? parseFloat(numericMatch[0]) : NaN;
@@ -4912,6 +5060,27 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
     } else if (d.length < 3) {
       return "Discount label must be at least 3 characters.";
     }
+
+    const parseDateOnly = (value: string): Date | null => {
+      if (!value) return null;
+      const parsed = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return null;
+      parsed.setHours(0, 0, 0, 0);
+      return parsed;
+    };
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const validFromDate = parseDateOnly(form.validFrom);
+    const validToDate = parseDateOnly(form.validTo);
+
+    if (form.validFrom && !validFromDate) return "Valid From date is invalid.";
+    if (form.validTo && !validToDate) return "Valid Until date is invalid.";
+    if (validFromDate && validFromDate < today) return "Valid From cannot be in the past.";
+    if (validToDate && validToDate < today) return "Valid Until cannot be in the past.";
+    if (validFromDate && validToDate && validToDate < validFromDate) {
+      return "Valid Until must be same as or after Valid From.";
+    }
+
     return null;
   };
 
@@ -4937,6 +5106,8 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
 
     return {
       ...o,
+      consultantId: Number(o.consultantId || o.consultant_id || o.advisorId || o.advisor_id || 0) || undefined,
+      consultantName: o.consultantName || o.consultant_name || o.advisorName || o.advisor_name,
       isActive,
       approvalStatus: ['APPROVED', 'REJECTED', 'PENDING'].includes(approvalStatus as string)
         ? approvalStatus as 'APPROVED' | 'REJECTED' | 'PENDING'
@@ -4953,13 +5124,35 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
       try {
         const data = await apiFetch(`/offers/my-offers`);
         const raw = Array.isArray(data) ? data : extractArray(data);
-        loaded = raw.map(normalizeOffer);
+        loaded = raw
+          .map(normalizeOffer)
+          .filter((offer: ConsultantOffer) => {
+            const ownerId = Number(
+              offer.consultantId ||
+              (offer as any).consultant_id ||
+              (offer as any).advisorId ||
+              (offer as any).advisor_id ||
+              0
+            );
+            const role = String(
+              (offer as any).createdByRole ||
+              (offer as any).created_by_role ||
+              (offer as any).ownerRole ||
+              (offer as any).sourceRole ||
+              ''
+            ).toUpperCase();
+            const isAdminOwned =
+              role === 'ADMIN' ||
+              (offer as any).adminCreated === true ||
+              (offer as any).createdByAdmin === true ||
+              ownerId === 0;
+            if (ownerId > 0) return ownerId === Number(consultantId);
+            if (isAdminOwned) return false;
+            return String(offer.consultantName || '').trim().toLowerCase() === consultantName.trim().toLowerCase();
+          });
       } catch {
-        try {
-          const data = await apiFetch('/offers/admin');
-          const arr = Array.isArray(data) ? data : extractArray(data);
-          loaded = arr.filter((o: any) => o.consultantId === consultantId).map(normalizeOffer);
-        } catch { loaded = []; }
+        // Only load own offers - do not fall back to admin endpoint
+        loaded = [];
       }
       setOffers(loaded);
     } finally { setLoading(false); }
@@ -4985,53 +5178,31 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
     setOfferError(null);
     setSaving(true);
 
-    const fmtDate = (d: string) => d ? d : undefined;
-    const fmtDatetime = (d: string) => d ? `${d}T00:00:00` : undefined;
+    const isEdit = Boolean(editing?.id);
+    const endpoint = isEdit ? `/offers/${editing!.id}` : `/offers`;
 
-    const buildPayload = (useDatetime: boolean, includeConsultantId: boolean) => {
-      const p: Record<string, any> = {
-        title: form.title.trim(),
-        description: form.description?.trim() || '',
-        discount: form.discount?.trim() || '',
-        isActive: Boolean(form.isActive),
-        active: Boolean(form.isActive), // backend alias
-      };
-      if (includeConsultantId) p.consultantId = consultantId;
-      const fmt = useDatetime ? fmtDatetime : fmtDate;
-      const vf = fmt(form.validFrom);
-      const vt = fmt(form.validTo);
-      if (vf) p.validFrom = vf;
-      if (vt) p.validTo = vt;
-      return p;
+    const payload: Record<string, any> = {
+      title: form.title.trim(),
+      description: form.description?.trim() || '',
+      discount: form.discount?.trim() || '',
+      isActive: Boolean(form.isActive),
+      active: Boolean(form.isActive),
+      consultantId: consultantId
     };
 
-    const isEdit = Boolean(editing?.id);
-    const strategies = [
-      buildPayload(false, true),
-      buildPayload(true, true),
-      buildPayload(false, false),
-      buildPayload(true, false),
-      { title: form.title.trim(), description: form.description?.trim() || '', discount: form.discount?.trim() || '', isActive: Boolean(form.isActive), active: Boolean(form.isActive), consultantId },
-    ];
+    const toLocalDateTime = (dt: string) => {
+      if (!dt) return undefined;
+      return dt.length === 10 ? `${dt}T00:00:00` : dt;
+    };
+
+    const vf = toLocalDateTime(form.validFrom);
+    const vt = toLocalDateTime(form.validTo);
+    if (vf) payload.validFrom = vf;
+    if (vt) payload.validTo = vt;
 
     let savedOffer: any = null;
-    let lastError = '';
-    for (let i = 0; i < strategies.length; i++) {
-      const noIdInBody = i === 2 || i === 3;
-      const endpoint = isEdit
-        ? `/offers/${editing!.id}${noIdInBody ? `?consultantId=${consultantId}` : ''}`
-        : `/offers${noIdInBody ? `?consultantId=${consultantId}` : ''}`;
-      try {
-        savedOffer = await apiFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(strategies[i]) });
-        break;
-      } catch (e: any) {
-        lastError = e?.message || 'Failed';
-        if (!lastError.includes('500') && !lastError.includes('deserializ') && !lastError.includes('parse')) break;
-      }
-    }
-
     try {
-      if (savedOffer == null) throw new Error(lastError || 'Failed to save offer');
+      savedOffer = await apiFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(payload) });
       const normalizedSaved = normalizeOffer({ ...form, ...savedOffer });
       if (isEdit) {
         setOffers(prev => prev.map(o => o.id === editing!.id
@@ -5139,18 +5310,27 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
             )}
             <div style={{ gridColumn: '1/-1' }}>
               <label style={labelStyle}>Title *</label>
-              <input value={form.title} onChange={e => { setForm(f => ({ ...f, title: e.target.value })); if (offerError) setOfferError(null); }} placeholder="e.g. First Session Free" style={{ ...inputStyle, borderColor: offerError && !form.title.trim() ? '#EF4444' : '#E2E8F0' }} />
+              <input
+                value={form.title}
+                onChange={e => {
+                  // Allow any characters in offer title (numbers, special chars allowed)
+                  setForm(f => ({ ...f, title: e.target.value }));
+                  if (offerError) setOfferError(null);
+                }}
+                placeholder="e.g. First Session Free"
+                style={{ ...inputStyle, borderColor: offerError && !form.title.trim() ? '#EF4444' : '#E2E8F0' }}
+              />
             </div>
             <div style={{ gridColumn: '1/-1' }}>
               <label style={labelStyle}>Description</label>
-              <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="Describe the offer…" style={{ ...inputStyle, height: 80, resize: 'none' as any }} />
+              <textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="Describe the offer..." style={{ ...inputStyle, height: 80, resize: 'none' as any }} />
             </div>
             <div>
               <label style={labelStyle}>Discount Label *</label>
-              <input value={form.discount} onChange={e => { setForm(f => ({ ...f, discount: e.target.value })); if (offerError) setOfferError(null); }} placeholder="e.g. 20%, 500, or FLAT200" style={{ ...inputStyle, borderColor: offerError && offerError.includes('Discount') ? '#EF4444' : '#E2E8F0' }} />
+              <input value={form.discount} onChange={e => { setForm(f => ({ ...f, discount: e.target.value })); if (offerError) setOfferError(null); }} placeholder="e.g. 20% or 500" style={{ ...inputStyle, borderColor: offerError && offerError.includes('Discount') ? '#EF4444' : '#E2E8F0' }} />
               <div style={{ marginTop: 4, fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'flex-start', gap: 4 }}>
                 <Info size={11} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span>Use a value like <strong>20%</strong>, <strong>500</strong>, or a free-form label like <strong>FLAT200</strong>.</span>
+                <span>Use a value like <strong>20%</strong> or <strong>500</strong>.</span>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 22 }}>
@@ -5159,17 +5339,29 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
             </div>
             <div>
               <label style={labelStyle}>Valid From</label>
-              <input type="date" value={form.validFrom} onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))} style={inputStyle} />
+              <input
+                type="date"
+                value={form.validFrom}
+                min={todayIso}
+                onChange={e => setForm(f => ({ ...f, validFrom: e.target.value }))}
+                style={inputStyle}
+              />
             </div>
             <div>
               <label style={labelStyle}>Valid Until</label>
-              <input type="date" value={form.validTo} onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))} style={inputStyle} />
+              <input
+                type="date"
+                value={form.validTo}
+                min={todayIso}
+                onChange={e => setForm(f => ({ ...f, validTo: e.target.value }))}
+                style={inputStyle}
+              />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
             <button onClick={() => setShowForm(false)} style={{ padding: '9px 20px', borderRadius: 9, border: '1.5px solid #E2E8F0', background: '#fff', color: '#64748B', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
             <button onClick={handleSave} disabled={saving} style={{ padding: '9px 22px', borderRadius: 9, border: 'none', background: saving ? '#99F6E4' : '#0F766E', color: '#fff', fontSize: 13, fontWeight: 700, cursor: saving ? 'default' : 'pointer' }}>
-              {saving ? 'Saving…' : editing ? 'Update Offer' : 'Create Offer'}
+              {saving ? 'Saving...' : editing ? 'Update Offer' : 'Create Offer'}
             </button>
           </div>
         </div>
@@ -5238,7 +5430,7 @@ const ConsultantOffersView: React.FC<{ consultantId: number; consultantName: str
                 <div className="offers-card-actions" style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                   <button onClick={() => openEdit(offer)} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #A5F3FC', background: '#ECFEFF', color: '#0F766E', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                   <button onClick={() => offer.id && setDeleteOfferConfirmId(offer.id)} disabled={deleting === offer.id} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #FECACA', background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: deleting === offer.id ? 0.6 : 1 }}>
-                    {deleting === offer.id ? '…' : 'Delete'}
+                    {deleting === offer.id ? '...' : 'Delete'}
                   </button>
                 </div>
               </div>
@@ -5451,7 +5643,7 @@ export default function AdvisorDashboard() {
             tickets.filter((t: any) => ['NEW', 'OPEN'].includes(t.status)).forEach((t: any) => {
               const notifId = `ticket_open_${t.id}`;
               if (!existingIds.has(notifId)) {
-                newNotifs.push({ id: notifId, type: 'warning', title: `Open Ticket${t.title ? ` — ${t.title}` : ""}`, message: `"${t.title || t.description || 'Support ticket'}" is awaiting your response. Priority: ${t.priority || 'MEDIUM'}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
+                newNotifs.push({ id: notifId, type: 'warning', title: `Open Ticket${t.title ? ` - ${t.title}` : ""}`, message: `"${t.title || t.description || 'Support ticket'}" is awaiting your response. Priority: ${t.priority || 'MEDIUM'}.`, timestamp: t.createdAt || new Date().toISOString(), read: false, ticketId: t.id });
               }
             });
             if (newNotifs.length > 0) {
@@ -5642,8 +5834,10 @@ export default function AdvisorDashboard() {
       <header className="advisor-navbar">
 
         <div className="nav-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => navigate('/')}>
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 8, padding: '4px 8px', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+            <img src={headerLogoImg} alt="Meet The Masters" style={{ height: 34, width: 'auto', maxWidth: 210, objectFit: 'contain', display: 'block' }} />
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
-            <span className="brand-text" style={{ color: '#fff', letterSpacing: '0.06em' }}>MEET THE MASTERS</span>
             <span className="brand-sub" style={{ color: 'rgba(255,255,255,0.65)' }}>CONSULTANT PORTAL</span>
           </div>
         </div>
@@ -5653,9 +5847,9 @@ export default function AdvisorDashboard() {
               <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(255,255,255,0.26)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: '#fff', flexShrink: 0 }}>
                 {profileData.name?.charAt(0).toUpperCase() ?? 'C'}
               </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{profileData.name}</div>
-                {profileData.designation && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.72)', lineHeight: 1.1 }}>{profileData.designation}</div>}
+              <div className="advisor-navbar-profile-text">
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#fff', lineHeight: 1.2, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profileData.name}</div>
+                {profileData.designation && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.72)', lineHeight: 1.1, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profileData.designation}</div>}
               </div>
             </div>
           )}
@@ -5710,7 +5904,7 @@ export default function AdvisorDashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
                 <span style={{ fontWeight: 700, color: '#92400E', fontSize: 13 }}>
-                  {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} — please review and respond.
+                  {ticketCounts.open} active ticket{ticketCounts.open !== 1 ? 's' : ''} - please review and respond.
                   {ticketCounts.slaRisk > 0 && <span style={{ marginLeft: 8, color: '#DC2626' }}>{ticketCounts.slaRisk} at SLA risk</span>}
                 </span>
               </div>
@@ -5764,7 +5958,7 @@ export default function AdvisorDashboard() {
           );
         })}
 
-        {/* ── Sign Out button — mobile only ── */}
+        {/* ── Sign Out button - mobile only ── */}
         <button
           className="tab-btn tab-btn-signout"
           onClick={handleLogout}

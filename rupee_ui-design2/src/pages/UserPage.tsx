@@ -21,7 +21,7 @@ import {
   Search,
   Settings,
   Star,
-  Ticket,
+  Ticket as TicketIcon,
   User,
   X,
   XCircle,
@@ -29,19 +29,19 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import logoImg from "../assests/Meetmasterslogopng.png";
+import headerLogoImg from "../assests/MeetMastersHorizontalLogo.png";
+import logoImg from "../assests/MeetMastersMLogo.png";
 import StatusBadge from "../components/StatusBadge.tsx";
 import { API_BASE_URL, buildBackendAssetUrl } from "../config/api.ts";
 import { SUPPORT_EMAIL } from "../config/support";
 import {
+  cancelBooking,
+  cancelSpecialBooking,
   createBooking,
+  createBulkBooking,
   createSpecialBooking,
   createTicket,
   createTimeslot,
-  emailOnBookingAlertConsultant,
-  emailOnBookingConfirmedUser,
-  emailOnSpecialBookingRequestConsultant,
-  emailOnSpecialBookingRequestUser,
   emailOnTicketCreated,
   emailOnTicketUpdated,
   extractArray,
@@ -60,6 +60,7 @@ import {
   getOffersByConsultant,
   getPriorityStyle,
   getSlaInfo,
+  getSpecialBookingsByConsultant,
   getSpecialDaysByConsultant,
   getStatusStyle,
   getTermsAndConditions,
@@ -71,6 +72,7 @@ import {
   updateTicketStatus,
 } from "../services/api";
 import { decryptLocal, encryptLocal } from "../services/crypto";
+import { openRazorpayOrder, verifyBookingPayment, verifySpecialBookingPayment } from "../services/razorpay";
 import { UserNotificationMonitor, markNotificationReadOnBackend } from "./NotificationSystem";
 import { PostBookingQuestionnaire } from "./Postbookingquestionnaire";
 
@@ -136,7 +138,7 @@ const getJoinMeetingStatus = (b: any, now: Date = new Date()): "active" | "too_e
     if (startAp === "AM" && startH === 12) startH = 0;
 
     // ── Parse end time (from range "X AM - Y PM" or default +1 h) ────────────
-    const rangeMatch = timeStr.match(/[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
     let endH = startH + 1;
     let endM = startM;
     if (rangeMatch) {
@@ -167,7 +169,7 @@ const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
   const timeStr = b?.timeRange || b?.slotTime || "";
   if (!dateStr) return false;
   try {
-    const rangeMatch = timeStr.match(/[-–]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
     let endH = -1, endM = 0;
     if (rangeMatch) {
       endH = parseInt(rangeMatch[1]);
@@ -208,7 +210,7 @@ interface Consultant {
   slotsDuration?: number;
   slotDurationHours?: number;
 }
-interface TimeSlotRecord { id: number; slotDate: string; slotTime: string; status: string; masterTimeSlotId?: number; }
+interface TimeSlotRecord { id: number; slotDate: string; slotTime: string; status: string; masterTimeSlotId?: number; timeRange?: string; }
 type AvailableSpecialSlot = TimeSlotRecord & { timeRange?: string };
 interface Booking {
   id: number; consultantId: number; timeSlotId: number; amount: number;
@@ -238,6 +240,18 @@ interface ConsultantSpecialDayRecord {
   durationHours?: number;
   note?: string;
 }
+
+const getTimeslotStartKey = (slot: any): string => {
+  const rawTime = slot?.slotTime || slot?.slot_time || "";
+  if (typeof rawTime === "object" && rawTime?.hour !== undefined) {
+    return `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`;
+  }
+  if (typeof rawTime === "string" && rawTime.length >= 5) return rawTime.substring(0, 5);
+  return normalise24(slot?.timeRange || slot?.time_range || "");
+};
+
+const isTimeslotAvailable = (slot: any): boolean =>
+  String(slot?.status || "AVAILABLE").toUpperCase() === "AVAILABLE";
 
 type TicketStatus = "NEW" | "OPEN" | "IN_PROGRESS" | "PENDING" | "RESOLVED" | "CLOSED" | "ESCALATED";
 type TicketPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT" | "CRITICAL";
@@ -270,6 +284,8 @@ interface Ticket {
   attachmentUrl?: string; agentName?: string;
   feedbackRating?: number; feedbackText?: string;
   isSlaBreached?: boolean; slaRespondBy?: string;
+  emailSubject?: string;
+  emailBody?: string;
 }
 
 interface IncomeItem { incomeType: string; incomeAmount: number }
@@ -410,7 +426,7 @@ interface SpecialBookingMeta {
   kind: "SPECIAL_BOOKING";
   version: 1;
   hours: number;
-  slotNumber?: number;   // which slot (1, 2, 3…) the user selected
+  slotNumber?: number;   // which slot (1, 2, 3...) the user selected
   requestNotes: string;
   requestedMeetingMode: "ONLINE" | "PHYSICAL" | "PHONE";
   status: SpecialBookingStatus;
@@ -490,10 +506,10 @@ const parseTimeLabelToMinutes = (value: string): number | null => {
   return hour * 60 + minute;
 };
 
-/** Sort key for a slot — prefers the AM/PM-aware start from timeRange, falls back to slotTime. */
+/** Sort key for a slot - prefers the AM/PM-aware start from timeRange, falls back to slotTime. */
 const slotStartMinutes = (slot: { slotTime?: string; timeRange?: string }): number => {
   const fromRange = parseTimeLabelToMinutes(
-    (slot.timeRange || "").split(/[-–]/)[0]?.trim() || ""
+    (slot.timeRange || "").split(/[--]/)[0]?.trim() || ""
   );
   if (fromRange !== null) return fromRange;
   return parseTimeLabelToMinutes(slot.slotTime || "") ?? 0;
@@ -512,10 +528,22 @@ const normaliseBookingDateKey = (raw: string): string => {
     return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   }
 
+  const shortYearDashMatch = value.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);
+  if (shortYearDashMatch) {
+    const [, dd, mm, yy] = shortYearDashMatch;
+    return `20${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
   const slashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashMatch) {
     const [, dd, mm, yyyy] = slashMatch;
     return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
+  const shortYearSlashMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (shortYearSlashMatch) {
+    const [, dd, mm, yy] = shortYearSlashMatch;
+    return `20${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
   }
 
   const parsed = new Date(value);
@@ -525,7 +553,7 @@ const normaliseBookingDateKey = (raw: string): string => {
 };
 
 const getRangeDurationHours = (range: string, fallback = 1): number => {
-  const parts = String(range || "").split(/[-–]/).map(p => p.trim()).filter(Boolean);
+  const parts = String(range || "").split(/[--]/).map(p => p.trim()).filter(Boolean);
   if (parts.length < 2) return fallback;
   const start = parseTimeLabelToMinutes(parts[0]);
   const end = parseTimeLabelToMinutes(parts[1]);
@@ -557,7 +585,7 @@ const formatSlotCountLabel = (count: number): string => {
 const formatSlotCountSummary = (count: number, slotMinutes: number): string => {
   const safeCount = Math.max(1, Number(count || 1));
   const totalMinutes = safeCount * Math.max(30, Number(slotMinutes || 0) || 120);
-  return `${safeCount} slot${safeCount !== 1 ? "s" : ""} • ${formatDurationFromMinutes(totalMinutes)}`;
+  return `${safeCount} slot${safeCount !== 1 ? "s" : ""} * ${formatDurationFromMinutes(totalMinutes)}`;
 };
 
 const normaliseSpecialBookingStatus = (rawStatus: any): SpecialBookingStatus => {
@@ -738,7 +766,7 @@ const getBookingChronologyTarget = (booking: any): { date: string; time: string 
 const getSortableBookingStartMinutes = (timeLabel: string): number => {
   const raw = String(timeLabel || "").trim();
   if (!raw) return Number.MAX_SAFE_INTEGER;
-  const rangeStart = raw.split(/[-–]/)[0]?.trim() || "";
+  const rangeStart = raw.split(/[--]/)[0]?.trim() || "";
   return parseTimeLabelToMinutes(rangeStart) ?? parseTimeLabelToMinutes(raw) ?? Number.MAX_SAFE_INTEGER;
 };
 
@@ -874,7 +902,7 @@ const getCatSvgIcon = (cat: string): React.ReactNode => {
   // Default fallback
   return <svg style={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>;
 };
-// (nothing — or a comment: // Questionnaire now shown after first booking)
+// (nothing - or a comment: // Questionnaire now shown after first booking)
 
 // ── Title Case helper with exceptions ─────────────────────────────────────────
 const LOWERCASE_EXCEPTIONS = new Set(["is", "was", "are", "in", "and", "the", "this", "to", "a", "an", "of", "at", "by", "for", "with", "on"]);
@@ -888,39 +916,7 @@ const toTitleCase = (str: string): string => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMAIL NOTIFICATION HELPER
-// ─────────────────────────────────────────────────────────────────────────────
-const sendBookingEmails = async (params: {
-  bookingId: number; slotDate: string; timeRange: string; meetingMode: string; amount: number;
-  userName: string; userEmail: string; consultantName: string; consultantEmail: string; userNotes: string;
-}): Promise<void> => {
-  const jitsiLink = params.meetingMode === "ONLINE" ? JITSI_URL(params.bookingId) : undefined;
-  try {
-    await apiFetch(`${BASE_URL}/notifications/booking-confirmation`, {
-      method: "POST",
-      body: JSON.stringify({ ...params, jitsiLink }),
-    });
-  } catch {
-    try {
-      const body = (recipient: "user" | "consultant") => ({
-        to: recipient === "user" ? params.userEmail : params.consultantEmail,
-        subject: `Booking Confirmed — ${params.slotDate} · ${params.timeRange}`,
-        body:
-          `Hi ${recipient === "user" ? params.userName : params.consultantName},\n\n` +
-          `Your session has been confirmed.\n\nDate: ${params.slotDate}\nTime: ${params.timeRange}\nMode: ${params.meetingMode}` +
-          (jitsiLink ? `\nJoin: ${jitsiLink}\n` : "\n") +
-          (params.userNotes ? `Notes: ${params.userNotes}\n` : "") + `\nThank you,\nMeet The Masters Team`,
-      });
-      await Promise.allSettled([
-        apiFetch(`${BASE_URL}/email/send`, { method: "POST", body: JSON.stringify(body("user")) }),
-        apiFetch(`${BASE_URL}/email/send`, { method: "POST", body: JSON.stringify(body("consultant")) }),
-      ]);
-    } catch { }
-  }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LOCAL NOTIFICATION HELPER — Adds notification to user's localStorage
+// LOCAL NOTIFICATION HELPER - Adds notification to user's localStorage
 // ─────────────────────────────────────────────────────────────────────────────
 const addLocalNotification = (
   userId: number | null,
@@ -950,9 +946,9 @@ const addLocalNotification = (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GUEST TRIAL HELPER — Guest users get 2 months free ticket access
+// GUEST TRIAL HELPER - Guest users get 2 months free ticket access
 // ─────────────────────────────────────────────────────────────────────────────
-// ── Guest trial helpers — uses actual account createdAt from backend ──────────
+// ── Guest trial helpers - uses actual account createdAt from backend ──────────
 // fin_user_created_at is set from getCurrentUser() response (user.createdAt)
 // Falls back to fin_guest_trial_start localStorage if backend date unavailable.
 const getGuestAccountStart = (): Date | null => {
@@ -975,7 +971,7 @@ const isGuestInTrial = (): boolean => {
   const role = (getLocalRole()).toUpperCase().replace(/^ROLE_/, "");
   if (role !== "GUEST") return false;
   const start = getGuestAccountStart();
-  if (!start) return true; // createdAt not loaded yet — optimistically allow
+  if (!start) return true; // createdAt not loaded yet - optimistically allow
   const twoMonthsLater = new Date(start);
   twoMonthsLater.setMonth(twoMonthsLater.getMonth() + 2);
   return new Date() < twoMonthsLater;
@@ -986,17 +982,17 @@ const getGuestTrialDaysRemaining = (): number => {
   if (!start) return 60;
   const twoMonthsLater = new Date(start);
   twoMonthsLater.setMonth(twoMonthsLater.getMonth() + 2);
-  // Use floor so day 1 shows 59, day 2 shows 58 — each elapsed calendar day decrements
+  // Use floor so day 1 shows 59, day 2 shows 58 - each elapsed calendar day decrements
   const diff = twoMonthsLater.getTime() - Date.now();
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SAFE DATE-TIME FORMATTER — handles missing time gracefully
+// SAFE DATE-TIME FORMATTER - handles missing time gracefully
 // ─────────────────────────────────────────────────────────────────────────────
-// ── IST time formatter — matches AdvisorDashboard fmtISTTime exactly ──────────
+// ── IST time formatter - matches AdvisorDashboard fmtISTTime exactly ──────────
 const fmtIST = (iso: string | null | undefined): string => {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     const normalised = (iso.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(iso))
       ? iso : iso + "Z";
@@ -1010,7 +1006,7 @@ const fmtIST = (iso: string | null | undefined): string => {
 };
 
 const formatTicketDate = (dateStr: string): string => {
-  if (!dateStr) return "—";
+  if (!dateStr) return "-";
   try {
     const normalised = (dateStr.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(dateStr))
       ? dateStr : dateStr + "Z";
@@ -1026,7 +1022,7 @@ const formatTicketDate = (dateStr: string): string => {
 // ─────────────────────────────────────────────────────────────────────────────
 const TICKET_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: React.ReactNode }> = {
   NEW: { label: "New", color: "#6366F1", bg: "#EEF2FF", border: "#C7D2FE", icon: <FileText size={12} /> },
-  OPEN: { label: "Open", color: "#2563EB", bg: "#EFF6FF", border: "#93C5FD", icon: <Ticket size={12} /> },
+  OPEN: { label: "Open", color: "#2563EB", bg: "#EFF6FF", border: "#93C5FD", icon: <TicketIcon size={12} /> },
   IN_PROGRESS: { label: "In Progress", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", icon: <Clock size={12} /> },
   PENDING: { label: "Pending", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D", icon: <Clock size={12} /> },
   RESOLVED: { label: "Resolved", color: "#16A34A", bg: "#F0FDF4", border: "#86EFAC", icon: <CheckCircle size={12} /> },
@@ -1125,14 +1121,14 @@ const CreateTicketModal: React.FC<{
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // ── Dynamic categories from backend — single source: /admin/config/categories ──
+  // ── Dynamic categories from backend - single source: /admin/config/categories ──
   const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(true);
 
   useEffect(() => {
     setLoadingCategories(true);
     // getActiveTicketCategories() fetches exclusively from /admin/config/categories
-    // and already returns normalised { id, name } objects — no extra mapping needed.
+    // and already returns normalised { id, name } objects - no extra mapping needed.
     getActiveTicketCategories()
       .then(items => setCategories(items))
       .catch(() => setCategories([]))
@@ -1158,7 +1154,7 @@ const CreateTicketModal: React.FC<{
     // still in-flight (backend ticket creation can be slow due to server-side
     // email / notification work running synchronously).
     const slowHintTimer = setTimeout(() => {
-      setError("Still submitting — the server is taking a moment, please wait…");
+      setError("Still submitting - the server is taking a moment, please wait...");
     }, 15_000);
     try {
       // FIX: resolve categoryId from the loaded categories list so the backend
@@ -1173,7 +1169,7 @@ const CreateTicketModal: React.FC<{
       setError(""); // clear patience hint if it appeared
 
       // ── FAIL-SAFE NOTIFICATION TRIGGERS ──────────────────────────────────
-      // Mirrors TicketService.createTicket() — each trigger has its own
+      // Mirrors TicketService.createTicket() - each trigger has its own
       // try/catch so one failure never blocks the other or the onCreated callback.
 
       // Trigger 1: notifyNewAssignment
@@ -1190,17 +1186,17 @@ const CreateTicketModal: React.FC<{
           localStorage.setItem(consultantKey, JSON.stringify([{
             id: `assign_${(saved as any).id}_${Date.now()}`,
             type: "warning",
-            title: `New Ticket Assigned — #${ticketNum}`,
+            title: `New Ticket Assigned - #${ticketNum}`,
             message: `You have been assigned a new ${saved.priority || "MEDIUM"} priority ticket in ${categoryLabel}.`,
             timestamp: new Date().toISOString(),
             read: false,
             ticketId: (saved as any).id,
           }, ...prev].slice(0, 50)));
         }
-      } catch { /* non-fatal — localStorage may be unavailable */ }
+      } catch { /* non-fatal - localStorage may be unavailable */ }
 
       // Trigger 2: notifyTicketCreated
-      // Always fires — confirms submission to the user immediately via their
+      // Always fires - confirms submission to the user immediately via their
       // notification bell, before the backend email even goes out.
       try {
         const ticketNum = (saved as any).ticketNumber || String((saved as any).id);
@@ -1226,7 +1222,7 @@ const CreateTicketModal: React.FC<{
       <div style={{ background: "#fff", borderRadius: 20, width: 500, maxWidth: "95vw", boxShadow: "0 24px 80px rgba(0,0,0,0.3)", overflow: "hidden" }} onClick={e => e.stopPropagation()}>
         <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "22px 24px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" as const }}>
-            <h3 style={{ margin: 0, color: "#fff", fontSize: 17, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}><Ticket size={18} /> Raise a Support Ticket</h3>
+            <h3 style={{ margin: 0, color: "#fff", fontSize: 17, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}><TicketIcon size={18} /> Raise a Support Ticket</h3>
             <div style={{ display: "flex", alignItems: "center", borderRadius: 999, overflow: "hidden", border: "1px solid rgba(255,255,255,0.22)", background: "rgba(255,255,255,0.12)" }}>
               <button
                 type="button"
@@ -1269,7 +1265,7 @@ const CreateTicketModal: React.FC<{
                 onChange={e => setForm({ ...form, category: e.target.value })}
                 style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer", boxSizing: "border-box" }}
               >
-                <option value="">— Select category —</option>
+                <option value="">- Select category -</option>
                 {categories.map(c => (
                   <option key={c.name} value={c.name}>{c.name}</option>
                 ))}
@@ -1286,7 +1282,7 @@ const CreateTicketModal: React.FC<{
               value={form.description}
               onChange={e => setForm({ ...form, description: e.target.value })}
               rows={5}
-              placeholder="Please describe your issue in detail…"
+              placeholder="Please describe your issue in detail..."
               style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, resize: "vertical", fontFamily: "inherit", outline: "none", lineHeight: 1.6, boxSizing: "border-box" }}
             />
             <div style={{ fontSize: 11, color: "#94A3B8", textAlign: "right", marginTop: 4 }}>
@@ -1303,10 +1299,10 @@ const CreateTicketModal: React.FC<{
                 style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: "#fff", fontFamily: "inherit", outline: "none", cursor: "pointer", boxSizing: "border-box" }}
               >
                 {[
-                  { v: "LOW", l: "Low — within 72h" },
-                  { v: "MEDIUM", l: "Medium — within 24h" },
-                  { v: "HIGH", l: "High — within 8h" },
-                  { v: "URGENT", l: "Urgent — within 4h" },
+                  { v: "LOW", l: "Low - within 72h" },
+                  { v: "MEDIUM", l: "Medium - within 24h" },
+                  { v: "HIGH", l: "High - within 8h" },
+                  { v: "URGENT", l: "Urgent - within 4h" },
                 ].map(p => <option key={p.v} value={p.v}>{p.l}</option>)}
               </select>
             </div>
@@ -1330,7 +1326,7 @@ const CreateTicketModal: React.FC<{
               disabled={saving || loadingCategories}
               style={{ padding: "10px 28px", borderRadius: 10, border: "none", background: (saving || loadingCategories) ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (saving || loadingCategories) ? "default" : "pointer", boxShadow: "0 2px 8px rgba(37,99,235,0.3)" }}
             >
-              {saving ? "Submitting…" : "Submit Ticket"}
+              {saving ? "Submitting..." : "Submit Ticket"}
             </button>
           </div>
         </div>
@@ -1515,7 +1511,7 @@ const TicketDetailModal: React.FC<{
       setComments(p => [...p, (saved as TicketComment) || optimistic]);
       setMessage("");
       if (ticket.status === "NEW") onStatusChange(ticket.id, "OPEN");
-      // Fire email to consultant (ticket owner) — non-fatal
+      // Fire email to consultant (ticket owner) - non-fatal
       const consultantEmailTc = (ticket as any).consultantEmail || (ticket as any).assignedToEmail || '';
       const ticketNumCmt = String((ticket as any).ticketNumber || ticket.id);
       if (consultantEmailTc) {
@@ -1562,7 +1558,7 @@ const TicketDetailModal: React.FC<{
           <div style={{ padding: "9px 20px", background: sla.breached ? "#FEF2F2" : "#F0FDF4", borderBottom: `1px solid ${sla.breached ? "#FECACA" : "#BBF7D0"}`, flexShrink: 0 }}>
             <div style={{ fontSize: 12, color: sla.breached ? "#B91C1C" : "#15803D", fontWeight: 600 }}>
               {sla.breached
-                ? <><Clock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />Our team is working on your ticket — response time exceeded, we apologise.</>
+                ? <><Clock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />Our team is working on your ticket - response time exceeded, we apologise.</>
                 : <><CheckCircle size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />Expected resolution by {sla.deadlineStr}</>}
             </div>
           </div>
@@ -1573,11 +1569,41 @@ const TicketDetailModal: React.FC<{
         </div>
 
         <div style={{ flex: 1, overflowY: "auto" }}>
-          <div style={{ padding: "16px 24px", borderBottom: "1px solid #F1F5F9" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 8 }}>Your Issue</div>
-            <p style={{ margin: 0, fontSize: 13, color: "#374151", lineHeight: 1.7, background: "#F8FAFC", padding: "10px 14px", borderRadius: 10, borderLeft: "3px solid #BFDBFE" }}>
-              {ticket.description}
-            </p>
+          <div style={{ padding: "20px 24px", borderBottom: "1px solid #F1F5F9", background: "#FCFDFF" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#1E40AF", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 24, height: 24, borderRadius: 6, background: "#DBEAFE", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <MessageSquare size={14} color="#2563EB" />
+              </div>
+              Support Communication
+            </div>
+
+            {ticket.emailSubject && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 6, marginLeft: 2 }}>Subject</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1E3A8A", background: "#EFF6FF", padding: "10px 14px", borderRadius: 12, border: "1.5px solid #DBEAFE", boxShadow: "0 2px 4px rgba(37,99,235,0.04)" }}>
+                  {ticket.emailSubject}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 6, marginLeft: 2 }}>Content / Message Body</div>
+              <p style={{
+                margin: 0,
+                fontSize: 13,
+                color: "#374151",
+                lineHeight: 1.8,
+                background: "#fff",
+                padding: "14px 18px",
+                borderRadius: 14,
+                border: "1.5px solid #F1F5F9",
+                borderLeft: "4px solid #3B82F6",
+                whiteSpace: "pre-wrap",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.02)"
+              }}>
+                {ticket.emailBody || ticket.description}
+              </p>
+            </div>
             {ticket.attachmentUrl && (
               <a href={ticket.attachmentUrl} target="_blank" rel="noreferrer"
                 style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 10, fontSize: 12, color: "#2563EB", fontWeight: 600 }}>
@@ -1653,11 +1679,11 @@ const TicketDetailModal: React.FC<{
               <div style={{ display: "flex", gap: 8 }}>
                 <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-                  placeholder="Type your message… (Enter to send)"
+                  placeholder="Type your message... (Enter to send)"
                   style={{ flex: 1, padding: "10px 12px", border: "1.5px solid #BFDBFE", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", background: "#fff" }} />
                 <button onClick={handleSend} disabled={!message.trim() || sending}
                   style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: !message.trim() ? "#E2E8F0" : "#2563EB", color: !message.trim() ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !message.trim() ? "default" : "pointer", alignSelf: "flex-end", flexShrink: 0 }}>
-                  {sending ? "…" : "Send"}
+                  {sending ? "..." : "Send"}
                 </button>
               </div>
             </div>
@@ -1674,14 +1700,14 @@ const TicketDetailModal: React.FC<{
                 style={{ width: "100%", marginTop: 12, padding: "10px 12px", border: "1.5px solid #FDE68A", borderRadius: 10, fontSize: 13, resize: "none", fontFamily: "inherit", outline: "none", boxSizing: "border-box", background: "#fff" }} />
               <button onClick={handleFeedback} disabled={!feedbackRating || submittingFb}
                 style={{ marginTop: 12, padding: "10px 24px", borderRadius: 10, border: "none", background: !feedbackRating ? "#E2E8F0" : "#D97706", color: !feedbackRating ? "#94A3B8" : "#fff", fontSize: 13, fontWeight: 700, cursor: !feedbackRating ? "default" : "pointer" }}>
-                {submittingFb ? "Submitting…" : "Submit Feedback"}
+                {submittingFb ? "Submitting..." : "Submit Feedback"}
               </button>
             </div>
           )}
           {fbDone && ticket.feedbackRating && (
             <div style={{ padding: "14px 24px", background: "#F0FDF4", borderTop: "1px solid #BBF7D0" }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#15803D", display: "flex", alignItems: "center", gap: 6 }}>
-                <CheckCircle size={14} /> Feedback submitted — thank you! You rated this {ticket.feedbackRating}/5.
+                <CheckCircle size={14} /> Feedback submitted - thank you! You rated this {ticket.feedbackRating}/5.
               </div>
             </div>
           )}
@@ -1692,7 +1718,7 @@ const TicketDetailModal: React.FC<{
                 try {
                   await updateTicketStatus(ticket.id, "CLOSED");
                   onStatusChange(ticket.id, "CLOSED");
-                  // Fire status email to user — non-fatal
+                  // Fire status email to user - non-fatal
                   const userEmailCl = currentUser?.email || '';
                   const ticketNumCl = String((ticket as any).ticketNumber || ticket.id);
                   if (userEmailCl) {
@@ -1855,7 +1881,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     try {
       const token = localStorage.getItem("fin_token");
       const headers: Record<string, string> = { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-      // Use the onboarding PUT endpoint with subscriptionPlanId — matches backend UpdateUserRegistrationRequest
+      // Use the onboarding PUT endpoint with subscriptionPlanId - matches backend UpdateUserRegistrationRequest
       const payload = { subscriptionPlanId: planId, phoneNumber: phoneDigitsForRequests };
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
@@ -1885,15 +1911,15 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
   if (!profile) return <div style={{ textAlign: "center", padding: 48, color: "#94A3B8" }}>Could not load profile.</div>;
 
-  // MEMBER = admin-created user with full access (booking, tickets, etc.) — treat as premium
+  // MEMBER = admin-created user with full access (booking, tickets, etc.) - treat as premium
   const isPremium = profile.subscribed === true || ["SUBSCRIBER", "SUBSCRIBED", "PREMIUM", "MEMBER"].includes((profile.role || "").toUpperCase());
-  // Admin-added MEMBER users get completely free access — no charges for bookings or tickets
+  // Admin-added MEMBER users get completely free access - no charges for bookings or tickets
   const isAdminMember = (profile.role || "").toUpperCase() === "MEMBER";
   const currentPlanName = profile.subscriptionPlanName || (isAdminMember ? "Premium (Free)" : isPremium ? "Premium" : "Guest");
   const initials = (profile.name || "U").split(" ").map((w: string) => w[0]).slice(0, 2).join("").toUpperCase();
   const totalIncome = (profile.incomes || []).reduce((s, i) => s + (Number(i.incomeAmount) || 0), 0);
   const totalExpense = (profile.expenses || []).reduce((s, e) => s + (Number(e.expenseAmount) || 0), 0);
-  const fmtDate = (d?: string) => { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
+  const fmtDate = (d?: string) => { if (!d) return "-"; try { return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
   const inputStyle: React.CSSProperties = { width: "100%", padding: "9px 12px", border: "1.5px solid #BFDBFE", borderRadius: 8, fontSize: 13, fontFamily: "inherit", outline: "none", background: "#F8FBFF", color: "#1E293B", boxSizing: "border-box" };
   const phoneDigitsForRequests = (form.phone || "").replace(/\D/g, "").slice(0, 10);
   const phoneIsValid = phoneDigitsForRequests.length === 10;
@@ -1921,7 +1947,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           ? <button onClick={() => setEditing(true)} style={{ padding: "8px 18px", borderRadius: 8, border: "1.5px solid #2563EB", background: "#EFF6FF", color: "#2563EB", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Edit</button>
           : <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setEditing(false)} disabled={saving} style={{ padding: "8px 16px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={handleSave} disabled={!canSaveProfile} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: !canSaveProfile ? "#E2E8F0" : (saving ? "#93C5FD" : "#2563EB"), color: !canSaveProfile ? "#94A3B8" : "#fff", fontWeight: 700, fontSize: 13, cursor: !canSaveProfile ? "not-allowed" : "pointer" }}>{saving ? "Saving…" : "Save"}</button>
+            <button onClick={handleSave} disabled={!canSaveProfile} style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: !canSaveProfile ? "#E2E8F0" : (saving ? "#93C5FD" : "#2563EB"), color: !canSaveProfile ? "#94A3B8" : "#fff", fontWeight: 700, fontSize: 13, cursor: !canSaveProfile ? "not-allowed" : "pointer" }}>{saving ? "Saving..." : "Save"}</button>
           </div>
         }
       </div>
@@ -1938,7 +1964,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         </div>
       )}
 
-      {/* ── PROFILE HEADER — always blue ── */}
+      {/* ── PROFILE HEADER - always blue ── */}
       <div style={{ borderRadius: 20, padding: "28px 24px 24px", marginBottom: 16, background: "linear-gradient(135deg,#1E3A5F,#2563EB)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
           <div style={{ position: "relative", flexShrink: 0 }}>
@@ -1995,6 +2021,11 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                       if (field.key === "phone") {
                         const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
                         setForm(p => ({ ...p, phone: digits }));
+                      } else if (field.key === "name") {
+                        const val = e.target.value;
+                        // Block numbers and special characters as the very first character
+                        if (val.length === 1 && /[^a-zA-Z]/.test(val)) return;
+                        setForm(p => ({ ...p, name: val }));
                       } else {
                         setForm(p => ({ ...p, [field.key]: e.target.value }));
                       }
@@ -2024,11 +2055,11 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
             {[
-              { label: "Email", value: profile.email || "—" },
-              { label: "Location", value: profile.location || "—" },
-              { label: "Phone", value: profile.phone || "—" },
-              { label: "Plan", value: currentPlanName || "—" },
-              { label: "Member Since", value: (profile as any).memberSince ? new Date((profile as any).memberSince).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "—" },
+              { label: "Email", value: profile.email || "-" },
+              { label: "Location", value: profile.location || "-" },
+              { label: "Phone", value: profile.phone || "-" },
+              { label: "Plan", value: currentPlanName || "-" },
+              { label: "Member Since", value: (profile as any).memberSince ? new Date((profile as any).memberSince).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "-" },
             ].map(d => (
               <div key={d.label} style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", borderRight: "1px solid #F1F5F9" }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 5 }}>{d.label}</div>
@@ -2039,7 +2070,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── SUBSCRIPTION PLAN — styled like register page ── */}
+      {/* ── SUBSCRIPTION PLAN - styled like register page ── */}
       <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16 }}>
         <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #F1F5F9" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -2050,11 +2081,11 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           <div style={{ display: "flex", gap: 8 }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isSubscribedType ? "#EFF6FF" : "#F8FAFC", border: `1.5px solid ${isSubscribedType ? "#2563EB" : "#CBD5E1"}`, color: isSubscribedType ? "#2563EB" : "#94A3B8" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-              SUBSCRIBED – FULL ACCESS
+              SUBSCRIBED - FULL ACCESS
             </div>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !isSubscribedType ? "#FEF2F2" : "#F8FAFC", border: `1.5px solid ${!isSubscribedType ? "#EF4444" : "#CBD5E1"}`, color: !isSubscribedType ? "#EF4444" : "#94A3B8" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-              GUEST – LIMITED ACCESS
+              GUEST - LIMITED ACCESS
             </div>
           </div>
         </div>
@@ -2096,7 +2127,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 onClick={() => { const plan = [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId); if (!plan || currentPlanName?.toLowerCase() === plan.name.toLowerCase()) return; setSaveMsg("INFO::Plan change requires backend subscription plan IDs. Please contact support."); setTimeout(() => setSaveMsg(""), 5000); }}
                 disabled={planSaving || !selectedPlanId || currentPlanName?.toLowerCase() === [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId)?.name?.toLowerCase()}
                 style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: planSaving ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1 }}>
-                {planSaving ? "Updating…" : "Change Plan"}
+                {planSaving ? "Updating..." : "Change Plan"}
               </button>
             </div>
           ) : (
@@ -2140,7 +2171,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
                 disabled={planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()}
                 style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
-                {planSaving ? "Updating…" : "Change Plan"}
+                {planSaving ? "Updating..." : "Change Plan"}
               </button>
             </div>
           )}
@@ -2186,7 +2217,7 @@ const CardAbout: React.FC<{ about: string }> = ({ about }) => {
   const line1 = clean.substring(0, cut1).trimEnd();
   const line2 = rest1.substring(0, cut2).trimEnd();
   const hasMore = clean.length > cut1 + cut2;
-  const preview = expanded ? clean : (hasMore ? `${line1}\n${line2}…` : clean);
+  const preview = expanded ? clean : (hasMore ? `${line1}\n${line2}...` : clean);
   return (
     <div style={{ margin: "4px 0 4px", padding: 0, background: "transparent", border: "none", width: "100%", textAlign: "left" }}>
       <p style={{ margin: 0, fontSize: 12, color: "#64748B", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "Georgia, serif", textAlign: "left" }}>{preview}</p>
@@ -2199,7 +2230,7 @@ const ProfileAbout: React.FC<{ about: string }> = ({ about }) => {
   const [expanded, setExpanded] = useState(false);
   const words = about.split(" ");
   const isLong = words.length > 28;
-  const preview = isLong && !expanded ? words.slice(0, 28).join(" ") + "…" : about;
+  const preview = isLong && !expanded ? words.slice(0, 28).join(" ") + "..." : about;
   return (
     <div style={{ marginBottom: 20 }}>
       <h3 style={{ fontSize: 12, fontWeight: 700, color: "#1E293B", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>About</h3>
@@ -2215,7 +2246,7 @@ const ProfileAbout: React.FC<{ about: string }> = ({ about }) => {
 export default function UserPage() {
   const navigate = useNavigate();
 
-  // Admin-added MEMBER users get completely free access — no charges for bookings or tickets
+  // Admin-added MEMBER users get completely free access - no charges for bookings or tickets
   const isAdminMember = getLocalRole().toUpperCase().replace(/^ROLE_/, "") === "MEMBER";
 
   const [tab, setTab] = useState<"consultants" | "bookings" | "tickets" | "notifications" | "settings">("consultants");
@@ -2333,6 +2364,7 @@ export default function UserPage() {
   const [specialEndTime, setSpecialEndTime] = useState("");     // HH:MM 24h
   // Special booking slot choices mirror the consultant's normal daily slot count.
   const [consultantSpecialSlotCounts, setConsultantSpecialSlotCounts] = useState<number[]>([]);
+  const [bookedSpecialSlotNumbersByDate, setBookedSpecialSlotNumbersByDate] = useState<Record<string, number[]>>({});
   const [meetingMode, setMeetingMode] = useState<"ONLINE" | "PHYSICAL" | "PHONE">("ONLINE");
   const [userNotes, setUserNotes] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -2406,11 +2438,11 @@ export default function UserPage() {
   const [dynamicSkillCategories, setDynamicSkillCategories] = useState<string[]>([]);
   // Map of skillName (lowercase) → skillId
   const [backendSkillMap, setBackendSkillMap] = useState<Record<string, number>>({});
-  // Onboarding validation errors — shown inline, no skipping allowed
+  // Onboarding validation errors - shown inline, no skipping allowed
   const [onboardingCatError, setOnboardingCatError] = useState("");
   const [onboardingQError, setOnboardingQError] = useState("");
 
-  // ── Terms & Conditions step state — MUST be top-level hooks (Rules of Hooks) ──
+  // ── Terms & Conditions step state - MUST be top-level hooks (Rules of Hooks) ──
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsContent, setTermsContent] = useState<string | null>(null);
   const [termsLoading, setTermsLoading] = useState(false);
@@ -2439,7 +2471,7 @@ export default function UserPage() {
       questions: [
         {
           q: "What is your annual income range?", key: "incomeRange", type: "radio",
-          options: ["Below ₹5L", "₹5L – ₹10L", "₹10L – ₹25L", "₹25L – ₹50L", "Above ₹50L"]
+          options: ["Below ₹5L", "₹5L - ₹10L", "₹10L - ₹25L", "₹25L - ₹50L", "Above ₹50L"]
         },
         {
           q: "Do you have any existing investments?", key: "hasInvestments", type: "radio",
@@ -2468,7 +2500,7 @@ export default function UserPage() {
         },
         {
           q: "What is your investment horizon?", key: "investmentHorizon", type: "radio",
-          options: ["< 1 Year (Short term)", "1–3 Years", "3–5 Years", "5–10 Years", "10+ Years"]
+          options: ["< 1 Year (Short term)", "1-3 Years", "3-5 Years", "5-10 Years", "10+ Years"]
         },
         {
           q: "Which financial instruments interest you?", key: "financialInstruments", type: "multiselect",
@@ -2482,7 +2514,7 @@ export default function UserPage() {
       questions: [
         {
           q: "Do you currently have any insurance coverage?", key: "hasInsurance", type: "radio",
-          options: ["Yes – adequate coverage", "Yes – but need more", "No – looking to start", "Not sure"]
+          options: ["Yes - adequate coverage", "Yes - but need more", "No - looking to start", "Not sure"]
         },
         {
           q: "How many dependents do you have?", key: "dependents", type: "radio",
@@ -2490,7 +2522,7 @@ export default function UserPage() {
         },
         {
           q: "What coverage amount are you looking for?", key: "coverageAmount", type: "radio",
-          options: ["₹10L – ₹25L", "₹25L – ₹50L", "₹50L – ₹1Cr", "₹1Cr – ₹2Cr", "₹2Cr+"]
+          options: ["₹10L - ₹25L", "₹25L - ₹50L", "₹50L - ₹1Cr", "₹1Cr - ₹2Cr", "₹2Cr+"]
         },
         {
           q: "Which insurance types interest you?", key: "insuranceTypes", type: "multiselect",
@@ -2503,11 +2535,11 @@ export default function UserPage() {
       questions: [
         {
           q: "How long have you been investing?", key: "investingExperience", type: "radio",
-          options: ["Never invested before", "< 1 Year", "1–3 Years", "3–5 Years", "5+ Years"]
+          options: ["Never invested before", "< 1 Year", "1-3 Years", "3-5 Years", "5+ Years"]
         },
         {
           q: "What is your monthly investment budget?", key: "monthlyBudget", type: "radio",
-          options: ["< ₹5,000", "₹5,000 – ₹10,000", "₹10,000 – ₹25,000", "₹25,000 – ₹50,000", "₹50,000+"]
+          options: ["< ₹5,000", "₹5,000 - ₹10,000", "₹10,000 - ₹25,000", "₹25,000 - ₹50,000", "₹50,000+"]
         },
         {
           q: "Do you prefer direct or managed funds?", key: "fundPreference", type: "radio",
@@ -2531,7 +2563,7 @@ export default function UserPage() {
       q: "What best describes your current life stage?",
       key: "lifeStage",
       type: "radio",
-      options: ["Student / Early career", "Working professional", "Business owner / Self-employed", "Mid-career (30–45)", "Pre-retirement (45–60)", "Retired"]
+      options: ["Student / Early career", "Working professional", "Business owner / Self-employed", "Mid-career (30-45)", "Pre-retirement (45-60)", "Retired"]
     },
     {
       q: "Your primary financial goal right now?",
@@ -2547,13 +2579,13 @@ export default function UserPage() {
       q: "What is your approximate monthly income?",
       key: "monthlyIncome",
       type: "radio",
-      options: ["Below ₹30,000", "₹30,000 – ₹60,000", "₹60,000 – ₹1,00,000", "₹1,00,000 – ₹2,00,000", "₹2,00,000+"]
+      options: ["Below ₹30,000", "₹30,000 - ₹60,000", "₹60,000 - ₹1,00,000", "₹1,00,000 - ₹2,00,000", "₹2,00,000+"]
     },
     {
       q: "What is your employment type?",
       key: "employmentType",
       type: "radio",
-      options: ["Salaried (private sector)", "Salaried (government / PSU)", "Self-employed / Freelancer", "Business owner", "Professional (CA, Doctor, Lawyer…)", "Not currently employed"]
+      options: ["Salaried (private sector)", "Salaried (government / PSU)", "Self-employed / Freelancer", "Business owner", "Professional (CA, Doctor, Lawyer...)", "Not currently employed"]
     },
     {
       q: "Have you worked with a financial consultant before?",
@@ -2565,13 +2597,13 @@ export default function UserPage() {
       q: "How comfortable are you with financial decisions?",
       key: "financialConfidence",
       type: "radio",
-      options: ["Not at all — I need full guidance", "Somewhat — I know the basics", "Fairly confident — I need occasional help", "Very confident — I want expert validation only"]
+      options: ["Not at all - I need full guidance", "Somewhat - I know the basics", "Fairly confident - I need occasional help", "Very confident - I want expert validation only"]
     },
     {
       q: "Any specific financial concerns? (optional)",
       key: "concerns",
       type: "text",
-      placeholder: "e.g. planning for children's education, dealing with debt, succession planning…"
+      placeholder: "e.g. planning for children's education, dealing with debt, succession planning..."
     },
   ];
 
@@ -2624,7 +2656,7 @@ export default function UserPage() {
       return [...prev, { category: selectedCategory, subOption: selectedSubOption, answers }];
     });
     // Save categories to localStorage (backend endpoint may not exist yet)
-    // Silently attempt backend save — never block UI on this
+    // Silently attempt backend save - never block UI on this
     const userId = localStorage.getItem("fin_user_id");
     try {
       const key = `fin_user_categories_${userId || "guest"}`;
@@ -2633,7 +2665,7 @@ export default function UserPage() {
       localStorage.setItem(key, JSON.stringify([...updated, { category: selectedCategory, subOption: selectedSubOption, answers }]));
     } catch { }
     if (userId) {
-      // Best-effort backend save — errors are fully suppressed
+      // Best-effort backend save - errors are fully suppressed
       fetch(`${BASE_URL}/users/${userId}/categories`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${localStorage.getItem("fin_token") || ""}` },
@@ -2655,7 +2687,7 @@ export default function UserPage() {
       const key = `fin_user_categories_${userId || "guest"}`;
       localStorage.setItem(key, JSON.stringify(newEntries));
     } catch { }
-    // Best-effort backend save — suppress 500 errors completely
+    // Best-effort backend save - suppress 500 errors completely
     if (userId) {
       fetch(`${BASE_URL}/users/${userId}/categories`, {
         method: "POST",
@@ -2756,7 +2788,7 @@ export default function UserPage() {
             resolvedSkillMap = built;
             setBackendSkillMap(built); // cache for future calls
           }
-        } catch { /* fall through — will produce empty questions */ }
+        } catch { /* fall through - will produce empty questions */ }
       }
 
       // Step 2: Map each selected category name to its skill ID (exact case-insensitive match)
@@ -2771,7 +2803,7 @@ export default function UserPage() {
       });
 
       if (matchingIds.length === 0) {
-        // No skills matched — show no questions and move on
+        // No skills matched - show no questions and move on
         setSkillQuestions([]);
         return;
       }
@@ -2793,7 +2825,7 @@ export default function UserPage() {
       const qData = await qRes.json();
       const qArr: any[] = Array.isArray(qData) ? qData : qData?.content || [];
 
-      // Step 4: Client-side safety filter — only keep questions whose skillId is
+      // Step 4: Client-side safety filter - only keep questions whose skillId is
       // in our matched set. Guards against backend returning extra questions.
       const matchingIdSet = new Set(matchingIds);
       const filtered = qArr.filter((q: any) => matchingIdSet.has(Number(q.skillId)));
@@ -2807,10 +2839,10 @@ export default function UserPage() {
           updatedAt: q.updatedAt,
         }))
       );
-    } catch { setSkillQuestions([]); /* non-fatal — user can skip */ }
+    } catch { setSkillQuestions([]); /* non-fatal - user can skip */ }
   };
 
-  // Load T&C content from backend — called when user reaches terms step
+  // Load T&C content from backend - called when user reaches terms step
   const loadTermsContent = async () => {
     if (termsContent !== null) return; // already loaded
     setTermsLoading(true);
@@ -2836,6 +2868,8 @@ export default function UserPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstLoginStep]);
+
+  const resolvedTermsContent = termsContent?.trim() || "";
 
   // Handle first-login questionnaire completion
   const handleFirstLoginComplete = () => {
@@ -2920,14 +2954,30 @@ export default function UserPage() {
   const bookingCalendarDays = ALL_DAYS;
   const visibleBookingDays = bookingCalendarDays.slice(dayOffset, dayOffset + VISIBLE_DAYS);
   const maxDayOffset = Math.max(0, bookingCalendarDays.length - VISIBLE_DAYS);
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 4000); };
+  const showToast = (msg: string, durationMs = 4000) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), durationMs);
+  };
+  const formatBookingFailure = (message?: string) => {
+    const cleanMessage = String(message || "").trim();
+    if (!cleanMessage) return "Please try again.";
+    if (/razorpay key id is missing/i.test(cleanMessage)) {
+      return "Payment setup is incomplete: Razorpay key id is missing.";
+    }
+    if (/payment cancelled/i.test(cleanMessage)) {
+      return "Payment was cancelled. No booking was created.";
+    }
+    if (/time slot|no longer available|already booked/i.test(cleanMessage)) {
+      return "That time slot is no longer available. Please choose another slot.";
+    }
+    return cleanMessage;
+  };
   const upcomingBookings = bookings
     .filter(b => {
       const status = getBookingLifecycleStatus(b);
       const specialMeta = resolveSpecialBookingMeta(b);
       const hasAssignedSpecialSlot = specialBookingHasAssignedSlot(specialMeta);
       if (status === "COMPLETED" || status === "CANCELLED") return false;
-      if (specialMeta && !hasAssignedSpecialSlot) return true;
       const chronology = getBookingChronologyTarget(b);
       const bookingForTime = chronology.date || chronology.time
         ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
@@ -2942,7 +2992,6 @@ export default function UserPage() {
       const specialMeta = resolveSpecialBookingMeta(b);
       const hasAssignedSpecialSlot = specialBookingHasAssignedSlot(specialMeta);
       if (status === "COMPLETED" || status === "CANCELLED") return true;
-      if (specialMeta && !hasAssignedSpecialSlot) return false;
       const chronology = getBookingChronologyTarget(b);
       const bookingForTime = chronology.date || chronology.time
         ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
@@ -2974,7 +3023,7 @@ export default function UserPage() {
   const mapConsultant = (d: any): Consultant => {
     let avatar = resolvePhotoUrl(d.profilePhoto || d.photo || d.avatarUrl || "");
     if (!avatar) avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name || "C")}&background=2563EB&color=fff&bold=true`;
-    // Store raw base charges — total is computed dynamically using live feeConfig from backend
+    // Store raw base charges - total is computed dynamically using live feeConfig from backend
     const baseCharges = Number(d.charges || d.baseAmount || 0);
     const slotsDuration = Number(d.slotsDuration ?? d.slotDurationMinutes ?? d.durationMinutes ?? d.duration ?? 60) || 60;
     return {
@@ -3024,7 +3073,7 @@ export default function UserPage() {
       } catch { /* review count is non-fatal */ }
 
       // Build dynamic category list:
-      // 1. Backend skills from /api/skills (admin-configured categories — most authoritative)
+      // 1. Backend skills from /api/skills (admin-configured categories - most authoritative)
       const allSkills = new Set<string>();
       const backendSkillArr = Array.isArray(skillsRaw) ? skillsRaw : [];
       backendSkillArr.forEach((s: any) => {
@@ -3170,7 +3219,7 @@ export default function UserPage() {
 
         return {
           ...b,
-          consultantName: consultantName || "Loading…",
+          consultantName: consultantName || "Loading...",
           slotDate,
           slotTime,
           timeRange,
@@ -3220,7 +3269,7 @@ export default function UserPage() {
           id: Number(b.id),
           specialBookingId: Number(b.id),
           isSpecialBooking: true,
-          consultantName: consultantName || "Loading…",
+          consultantName: consultantName || "Loading...",
           amount: Number(b.totalAmount ?? b.total_amount ?? 0),
           slotDate: scheduledDate,
           slotTime: scheduledTime || preferredTime,
@@ -3280,7 +3329,7 @@ export default function UserPage() {
 
       // ── 7. Back-fill missing consultant names asynchronously ──────────────────
       const needsName = mapped.filter(
-        (b: any) => b.consultantName === "Loading…" && b.consultantId
+        (b: any) => b.consultantName === "Loading..." && b.consultantId
       );
       if (needsName.length > 0) {
         const ids = [
@@ -3298,7 +3347,7 @@ export default function UserPage() {
 
         setBookings(prev =>
           prev.map((b: any) => {
-            if (b.consultantName !== "Loading…") return b;
+            if (b.consultantName !== "Loading...") return b;
             const d = cMap[b.consultantId];
             if (!d) return { ...b, consultantName: "Consultant" };
             return {
@@ -3373,7 +3422,7 @@ export default function UserPage() {
     // Check first-login flag BEFORE any async calls so modal shows immediately
     const isFirstLogin = localStorage.getItem("fin_first_login") === "true";
     const isGuest = (getLocalRole()).toUpperCase().replace(/^ROLE_/, "") === "GUEST";
-    // Per-user PERMANENT done key — once set via `fin_pw_changed_{userId}`,
+    // Per-user PERMANENT done key - once set via `fin_pw_changed_{userId}`,
     // the password modal is suppressed forever, regardless of backend response.
     const userId = localStorage.getItem("fin_user_id");
     const pwDoneKey = userId ? `fin_pw_changed_${userId}` : null;
@@ -3396,15 +3445,15 @@ export default function UserPage() {
       const saved = JSON.parse(localStorage.getItem(catKey) || "[]");
       if (Array.isArray(saved) && saved.length > 0) setUserCategories(saved);
     } catch { }
-    // Per-user PERMANENT onboarding done key — once set, wizard never shows again for this user
+    // Per-user PERMANENT onboarding done key - once set, wizard never shows again for this user
     const onboardingDoneKey = userId ? `fin_onboarding_done_${userId}` : null;
     const alreadyDoneOnboarding = onboardingDoneKey ? localStorage.getItem(onboardingDoneKey) === "true" : false;
     // If password change was already flagged from a previous session or login response,
-    // show it FIRST immediately — before any async call
+    // show it FIRST immediately - before any async call
     if (alreadyRequiresPwChange) {
       setShowPasswordChangeModal(true);
       // Questionnaire will show AFTER password is changed (handled in handlePasswordChangeDone)
-    } // (nothing — or a comment: // Questionnaire now shown after first booking)
+    } // (nothing - or a comment: // Questionnaire now shown after first booking)
 
     // Fetch consultants (this also populates dynamicSkillCategories)
     fetchConsultants();
@@ -3444,16 +3493,16 @@ export default function UserPage() {
         const permDoneKey = uidStr ? `fin_pw_changed_${uidStr}` : null;
         const permAlreadyDone = permDoneKey ? localStorage.getItem(permDoneKey) === "true" : false;
 
-        // permAlreadyDone is a PERMANENT flag per user — once set, ALWAYS overrides backend
+        // permAlreadyDone is a PERMANENT flag per user - once set, ALWAYS overrides backend
         // This handles the case where the backend still returns requiresPasswordChange=true
         // even after the user has already changed their password (a known backend behavior)
         if (permAlreadyDone) {
-          // Already done — clean up any stale flag and NEVER show modal again
+          // Already done - clean up any stale flag and NEVER show modal again
           localStorage.removeItem("fin_requires_pw_change");
-          // Do NOT set showPasswordChangeModal — modal stays hidden permanently
+          // Do NOT set showPasswordChangeModal - modal stays hidden permanently
         } else {
           // Any user (including GUEST/MEMBER) who has a token and requiresPasswordChange=true
-          // must change their password — they were admin-created with a temp password.
+          // must change their password - they were admin-created with a temp password.
           // Only truly anonymous guests (no token, no account) are exempt.
           const currentRole = String(
             user?.role || getLocalRole()
@@ -3491,7 +3540,7 @@ export default function UserPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── User analytics fetch — fires when currentUserId is available ──────────
+  // ── User analytics fetch - fires when currentUserId is available ──────────
   useEffect(() => {
     if (!currentUserId) return;
     (async () => {
@@ -3508,7 +3557,7 @@ export default function UserPage() {
     })();
   }, [currentUserId]);
 
-  // ── Guest trial expiry check — fires once on mount, shows popup if trial ended ──
+  // ── Guest trial expiry check - fires once on mount, shows popup if trial ended ──
   useEffect(() => {
     const role = getLocalRole().toUpperCase().replace(/^ROLE_/, "");
     if (role !== "GUEST") return;
@@ -3524,12 +3573,20 @@ export default function UserPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // If user clicked "Claim Offer" on HomePage, this retrieves the offer info and shows toast
+  // If the user is NOT logged in yet, redirect to /login (offer stays in localStorage so it
+  // is picked up again after the user logs in and lands back on this page).
   useEffect(() => {
     const pendingOfferStr = localStorage.getItem("fin_pending_offer");
     if (pendingOfferStr) {
       try {
         const offer = JSON.parse(pendingOfferStr);
         if (offer?.id) {
+          const hasToken = !!localStorage.getItem("fin_token");
+          if (!hasToken) {
+            // Keep the offer in localStorage - it will be applied after login redirects here
+            navigate("/login", { replace: true });
+            return;
+          }
           setPendingOffer(offer);
           // Show toast to inform user about the pending offer
           showToast(`Offer "${offer.title}" selected! Choose a consultant to apply it.`);
@@ -3674,11 +3731,14 @@ export default function UserPage() {
     // Get booking info before deleting for notification
     const bookingToDelete = bookings.find(b => b.id === bookingId);
     try {
-      const token = getToken();
-      const res = await fetch(`${BASE_URL}/bookings/${bookingId}`, { method: "DELETE", headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
-      if (res.ok || res.status === 204) {
-        setBookings(prev => prev.filter(b => b.id !== bookingId));
-        showToast("Booking deleted.");
+      if (bookingToDelete?.isSpecialBooking || bookingToDelete?.specialBookingId) {
+        await cancelSpecialBooking(Number(bookingToDelete.specialBookingId || bookingId));
+      } else {
+        await cancelBooking(bookingId);
+      }
+      {
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, BookingStatus: "CANCELLED", specialBookingStatus: "CANCELLED" } : b));
+        showToast("Booking cancelled.");
         // Add cancellation notification
         const consultantName = bookingToDelete?.consultantName || "Consultant";
         const slotDate = (bookingToDelete as any)?.slotDate || (bookingToDelete as any)?.bookingDate || "";
@@ -3702,7 +3762,6 @@ export default function UserPage() {
           return [newNotif, ...prev].slice(0, 50);
         });
       }
-      else showToast("Could not delete booking.");
     } catch { showToast("Network error."); }
     finally { setDeletingBookingId(null); }
   };
@@ -3717,10 +3776,10 @@ export default function UserPage() {
     let existingFeedback: any = null;
     try {
       existingFeedback = await getFeedbackByBooking(b.id);
-    } catch { /* no feedback yet — normal */ }
+    } catch { /* no feedback yet - normal */ }
 
     if (existingFeedback?.id) {
-      // Feedback already exists on backend — mark locally and don't reopen modal
+      // Feedback already exists on backend - mark locally and don't reopen modal
       setSubmittedFeedbacks(prev => new Set([...prev, b.id]));
       showToast("Feedback already submitted for this session.");
       return;
@@ -3757,7 +3816,7 @@ export default function UserPage() {
 
   const handleOpenModal = async (c: Consultant) => {
     setSelectedConsultant(c); setDbTimeslots([]);
-    setBookedSlotSet(new Set()); setSpecialAvailabilitySlots([]); setConsultantSpecialDays([]); setDayOffset(0); setSelectedDay(DEFAULT_DAY);
+    setBookedSlotSet(new Set()); setBookedSpecialSlotNumbersByDate({}); setSpecialAvailabilitySlots([]); setConsultantSpecialDays([]); setDayOffset(0); setSelectedDay(DEFAULT_DAY);
     setSelectedSlot(null); setSelectedSlots([]); setBookingMode("STANDARD"); setBookingMultiple(false); setSpecialBookingHours(1); setConsultantSpecialSlotCounts([]); setSpecialStartTime(""); setSpecialEndTime("");
     setMeetingMode("ONLINE"); setUserNotes("");
     // Reset offer selection each time modal opens
@@ -3797,14 +3856,14 @@ export default function UserPage() {
           const status = String(o.approvalStatus ?? o.status ?? "APPROVED").toUpperCase();
           if (status === "REJECTED" || status === "PENDING") return false;
 
-          // Check validFrom — offer not yet started
+          // Check validFrom - offer not yet started
           if (o.validFrom) {
             const from = new Date(o.validFrom);
             from.setHours(0, 0, 0, 0);
             if (!isNaN(from.getTime()) && from > today) return false;
           }
 
-          // Check validTo — offer expired
+          // Check validTo - offer expired
           if (o.validTo || o.validUntil) {
             const d = new Date(o.validTo || o.validUntil);
             d.setHours(23, 59, 59, 999);
@@ -3850,11 +3909,12 @@ export default function UserPage() {
     fetchOffers();
     try {
       const consultantSlotDurationHours = Math.max(1, Math.min(3, Number(c.slotDurationHours || durationMinutesToHours(c.slotsDuration ?? 60, 1)) || 1));
-      const [bookingsRaw, availabilityRaw, specialDaysRaw, consultantMasterSlotsRaw] = await Promise.all([
+      const [bookingsRaw, availabilityRaw, specialDaysRaw, consultantMasterSlotsRaw, consultantSpecialBookingsRaw] = await Promise.all([
         apiFetch(`${BASE_URL}/bookings/consultant/${c.id}`).catch(() => []),
         getAvailableTimeslotsByConsultant(c.id).catch(() => [] as any[]),
         getSpecialDaysByConsultant(c.id).catch(() => [] as any[]),
         getConsultantMasterSlots(c.id).catch(() => [] as any[]),
+        getSpecialBookingsByConsultant(c.id).catch(() => [] as any[]),
       ]);
       const consultantMasterSlots = (Array.isArray(consultantMasterSlotsRaw) ? consultantMasterSlotsRaw : extractArray(consultantMasterSlotsRaw))
         .map((slot: any) => ({
@@ -3915,17 +3975,12 @@ export default function UserPage() {
       });
 
       // --- Add Consultant's blocked/booked timeslots ---
-      // Only BOOKED records (actively taken by a real booking) block slot generation.
-      // UNAVAILABLE records are the consultant's own schedule management and should
-      // not completely hide a day — the booking API will reject unavailable slots server-side.
+      // The booking API accepts only AVAILABLE timeslots. Treat every other
+      // backend status as blocked so the UI cannot offer slots the server rejects.
       tsRecords.forEach(s => {
         const st = (s.status || "").toUpperCase();
-        if (st === "AVAILABLE" || st === "UNAVAILABLE") return; // only block on BOOKED
-        const rawTime = (s as any).slotTime || (s as any).slot_time || "";
-        let timeKey = "";
-        if (typeof rawTime === "object" && rawTime?.hour !== undefined) { timeKey = `${String(rawTime.hour).padStart(2, "0")}:${String(rawTime.minute ?? 0).padStart(2, "0")}`; }
-        else if (typeof rawTime === "string" && rawTime.length >= 5) { timeKey = rawTime.substring(0, 5); }
-        if (!timeKey) timeKey = normalise24((s as any).timeRange || "");
+        if (st === "AVAILABLE") return;
+        const timeKey = getTimeslotStartKey(s);
         if (s.slotDate && timeKey) bSet.add(`${s.slotDate}|${timeKey}`);
       });
       setBookedSlotSet(bSet);
@@ -3982,7 +4037,7 @@ export default function UserPage() {
         .sort((a, b) => a.specialDate.localeCompare(b.specialDate));
 
       // ── CORE FIX: Generate virtual AVAILABLE slots from master time slots ──────
-      // The backend never stores explicit AVAILABLE DB records — consultants only
+      // The backend never stores explicit AVAILABLE DB records - consultants only
       // produce BOOKED / UNAVAILABLE entries.  We derive availability by taking
       // every upcoming day × every master slot and filtering out anything in bSet.
       let finalAvailability = normalisedAvailability; // default: real DB records
@@ -3997,7 +4052,7 @@ export default function UserPage() {
           if (specialDayIsoSet.has(day.iso)) return; // gold/special days are handled separately
           consultantMasterSlots.forEach((master) => {
             // Parse start time from e.g. "12:00 AM - 2:00 AM"
-            const rangeParts = master.timeRange.split(/[-–]/);
+            const rangeParts = master.timeRange.split(/[--]/);
             if (rangeParts.length < 2) return;
             const start24 = normalise24(rangeParts[0].trim());
             if (!start24) return;
@@ -4029,6 +4084,42 @@ export default function UserPage() {
       }
       setSpecialAvailabilitySlots(finalAvailability);
       setConsultantSpecialDays(normalisedSpecialDays);
+
+      const bookedSpecialNumbersByDate: Record<string, Set<number>> = {};
+      extractArray(consultantSpecialBookingsRaw).forEach((booking: any) => {
+        const status = String(booking?.specialBookingStatus || booking?.status || "").toUpperCase();
+        if (status === "CANCELLED" || status === "COMPLETED" || status === "REJECTED") return;
+        const meta = resolveSpecialBookingMeta(booking);
+        const bookingDate = String(
+          meta?.preferredDate ||
+          booking?.preferredDate ||
+          booking?.preferred_date ||
+          booking?.slotDate ||
+          booking?.scheduledDate ||
+          booking?.bookingDate ||
+          booking?.date ||
+          ""
+        ).substring(0, 10);
+        if (!bookingDate) return;
+        const slotNumber = Number(
+          meta?.slotNumber ??
+          booking?.slotNumber ??
+          booking?.slot_number ??
+          booking?.requestedSlotNumber ??
+          booking?.preferredSlotNumber ??
+          booking?.numberOfSlots ??
+          0
+        );
+        if (slotNumber > 0) {
+          if (!bookedSpecialNumbersByDate[bookingDate]) bookedSpecialNumbersByDate[bookingDate] = new Set<number>();
+          bookedSpecialNumbersByDate[bookingDate].add(slotNumber);
+        }
+      });
+      setBookedSpecialSlotNumbersByDate(
+        Object.fromEntries(
+          Object.entries(bookedSpecialNumbersByDate).map(([date, values]) => [date, Array.from(values)])
+        )
+      );
 
       // Use the merged availability (includes virtual slots) for first-bookable-day logic
       const availabilityByDate = finalAvailability.reduce((acc, slot) => {
@@ -4065,6 +4156,70 @@ export default function UserPage() {
       }
     } catch (e) { console.error("Modal data load failed:", e); }
     finally { setLoading(p => ({ ...p, slots: false })); }
+  };
+
+  const completeBackendPayment = async (
+    created: any,
+    kind: "NORMAL" | "SPECIAL",
+    description: string,
+    notes?: Record<string, string | number | boolean | null | undefined>
+  ) => {
+    const orderId = String(created?.razorpayOrderId ?? created?.razorpay_order_id ?? "").trim();
+    if (!orderId) return created;
+
+    const id = Number(
+      created?.id ??
+      created?.bookingId ??
+      created?.specialBookingId ??
+      created?.special_booking_id ??
+      0
+    );
+    if (!(id > 0)) throw new Error("Payment order was created, but the booking id is missing.");
+
+    const amount = Number(created?.totalAmount ?? created?.amount ?? selectedConsultant?.fee ?? 0);
+    try {
+      const checkoutResult = await openRazorpayOrder({
+        keyId: created?.razorpayKeyId ?? created?.razorpay_key_id,
+        orderId,
+        amount,
+        description,
+        notes,
+        prefill: {
+          name: currentUser?.name || "",
+          email: currentUser?.email || "",
+        },
+      });
+
+      return kind === "SPECIAL"
+        ? verifySpecialBookingPayment(id, checkoutResult)
+        : verifyBookingPayment(id, checkoutResult);
+    } catch (err) {
+      try {
+        if (kind === "SPECIAL") await cancelSpecialBooking(id);
+        else await cancelBooking(id);
+      } catch {
+        // Best effort cleanup. The backend can still reconcile stale pending bookings.
+      }
+      throw err;
+    }
+  };
+
+  const markSlotUnavailable = (dayIso: string, slot24: string, status: "BOOKED" | "UNAVAILABLE" = "BOOKED") => {
+    const slotKey = `${dayIso}|${slot24}`;
+    setBookedSlotSet(prev => {
+      const next = new Set(prev);
+      next.add(slotKey);
+      return next;
+    });
+    setSpecialAvailabilitySlots(prev =>
+      prev.map(slot =>
+        slot.slotDate === dayIso && slot.slotTime === slot24
+          ? { ...slot, status }
+          : slot
+      )
+    );
+    setSelectedSlot(prev => prev?.start24h === slot24 ? null : prev);
+    setSelectedSlots(prev => prev.filter(slot => `${slot.dayIso}|${slot.start24h}` !== slotKey));
   };
 
   const handleConfirm = async () => {
@@ -4104,7 +4259,7 @@ export default function UserPage() {
           kind: "SPECIAL_BOOKING",
           version: 1,
           hours: Math.max(1, Math.round(consultantSlotMinutes / 60)), // per-slot duration, not multiplied
-          slotNumber: slotCount,   // which slot number was selected (1, 2, 3…)
+          slotNumber: slotCount,   // which slot number was selected (1, 2, 3...)
           requestNotes: notes,
           requestedMeetingMode: meetingMode,
           status: "REQUESTED",
@@ -4118,11 +4273,26 @@ export default function UserPage() {
           durationInHours: slotCount,         // backend: SpecialBookingRequest.durationInHours
           sessionAmount: combinedBaseAmount,   // backend: SpecialBookingRequest.sessionAmount (flat fee)
           meetingMode,
-          userNotes: buildSpecialBookingNotes(specialMeta),
+          userNotes: notes || "Special booking request",
+          requestNotes: notes || "Special booking request",
+          preferredDate: selectedDay.iso,
+          preferredTime,
+          preferredTimeRange,
           offerId: selectedOfferId ?? undefined,
         };
         const created = await createSpecialBooking(specialPayload);
-        const dedicatedSpecialBookingId = Number(created?.id ?? created?.specialBookingId ?? 0);
+        const finalSpecialBooking = await completeBackendPayment(
+          created,
+          "SPECIAL",
+          `Special booking with ${consultant.name}`,
+          {
+            bookingType: "SPECIAL",
+            consultantId: consultant.id,
+            durationInHours: slotCount,
+            meetingMode,
+          }
+        );
+        const dedicatedSpecialBookingId = Number(finalSpecialBooking?.id ?? created?.id ?? created?.specialBookingId ?? 0);
         if (!(dedicatedSpecialBookingId > 0)) {
           throw new Error("Special booking request was not created.");
         }
@@ -4154,16 +4324,6 @@ export default function UserPage() {
           timestamp: new Date().toISOString(),
           read: false,
         }, ...prev].slice(0, 50));
-        // Fire special booking request emails — non-fatal
-        const userEmailSp = currentUser?.email || '';
-        const consultantEmailSp = consultant.email || '';
-        const hoursReq = specialMeta?.hours ?? 1;
-        if (userEmailSp) {
-          emailOnSpecialBookingRequestUser({ to: userEmailSp, bookingId, hours: hoursReq, consultantEmail: consultantEmailSp, meetingMode }).catch(() => null);
-        }
-        if (consultantEmailSp) {
-          emailOnSpecialBookingRequestConsultant({ to: consultantEmailSp, bookingId, hours: hoursReq, clientEmail: userEmailSp, meetingMode, userNotes: buildSpecialBookingNotes(specialMeta) }).catch(() => null);
-        }
         setTab("bookings");
         await fetchBookings();
         setTimeout(() => {
@@ -4186,38 +4346,46 @@ export default function UserPage() {
       return;
     }
 
-    // ── Helper: book a single slot ──────────────────────────────────────────
-    const bookOneSlot = async (slotEntry: SelectedSlotWithDate): Promise<{ bookingId: number; ok: boolean; error?: string }> => {
+    const resolveTimeslotForBooking = async (slotEntry: SelectedSlotWithDate): Promise<
+      { ok: true; slot: SelectedSlotWithDate; timeSlotId: number } |
+      { ok: false; slot: SelectedSlotWithDate; error: string }
+    > => {
       const slot24 = slotEntry.start24h;
       const dayIso = slotEntry.dayIso;
 
-      const fetchTimeslotId = async (): Promise<number | null> => {
+      const isSameTimeslotRecord = (s: any): boolean => {
+        if (s?.slotDate !== dayIso) return false;
+        const sameId = Number(slotEntry.timeslotId || 0) > 0 && Number(s.id || 0) === Number(slotEntry.timeslotId || 0);
+        const sameMaster = Number(slotEntry.masterId || 0) > 0 && Number((s as any).masterTimeSlotId || 0) === Number(slotEntry.masterId || 0);
+        const sameStart = getTimeslotStartKey(s) === slot24;
+        return sameId || sameMaster || sameStart;
+      };
+
+      const fetchTimeslotRecord = async (): Promise<TimeSlotRecord | null> => {
         try {
           const data = await apiFetch(`${BASE_URL}/timeslots/consultant/${selectedConsultant!.id}`);
           const arr: TimeSlotRecord[] = Array.isArray(data) ? data : (data?.content || []);
-          const match = arr.find(s => {
-            if (s.slotDate !== dayIso) return false;
-            const sameId = Number(slotEntry.timeslotId || 0) > 0 && Number(s.id || 0) === Number(slotEntry.timeslotId || 0);
-            const sameMaster = Number(slotEntry.masterId || 0) > 0 && Number((s as any).masterTimeSlotId || 0) === Number(slotEntry.masterId || 0);
-            const sameStart = ((s as any).slotTime || "").substring(0, 5) === slot24 || normalise24((s as any).timeRange || "") === slot24;
-            return sameId || sameMaster || sameStart;
-          });
-          return match?.id ?? null;
+          return arr.find(isSameTimeslotRecord) ?? null;
         } catch { return null; }
       };
 
-      // Resolve timeslot ID — reject synthetic negative IDs from virtual slots
-      let realTimeslotId: number | null = (Number(slotEntry.timeslotId) > 0) ? slotEntry.timeslotId! : null;
-      if (!realTimeslotId) {
-        const localMatch = dbTimeslots.find((slot: any) => {
-          if (slot?.slotDate !== dayIso) return false;
-          const sameMaster = Number(slotEntry.masterId || 0) > 0 && Number(slot?.masterTimeSlotId || 0) === Number(slotEntry.masterId || 0);
-          const sameStart = ((slot?.slotTime || "").substring(0, 5) === slot24) || normalise24(slot?.timeRange || "") === slot24;
-          return sameMaster || sameStart;
-        });
-        realTimeslotId = Number(localMatch?.id || 0) || null;
+      const localMatch = dbTimeslots.find(isSameTimeslotRecord);
+      if (localMatch && !isTimeslotAvailable(localMatch)) {
+        markSlotUnavailable(dayIso, slot24, String(localMatch.status || "").toUpperCase() === "UNAVAILABLE" ? "UNAVAILABLE" : "BOOKED");
+        return { ok: false, slot: slotEntry, error: "The selected time slot is no longer available" };
       }
-      if (!realTimeslotId) realTimeslotId = await fetchTimeslotId();
+
+      // Resolve timeslot ID - reject synthetic negative IDs from virtual slots
+      const localMatchId = Number(localMatch?.id || 0);
+      let realTimeslotId: number | null = localMatchId > 0 ? localMatchId : null;
+      if (!realTimeslotId) {
+        const remoteMatch = await fetchTimeslotRecord();
+        if (remoteMatch && !isTimeslotAvailable(remoteMatch)) {
+          markSlotUnavailable(dayIso, slot24, String(remoteMatch.status || "").toUpperCase() === "UNAVAILABLE" ? "UNAVAILABLE" : "BOOKED");
+          return { ok: false, slot: slotEntry, error: "The selected time slot is no longer available" };
+        }
+        realTimeslotId = Number(remoteMatch?.id || 0) || null;
+      }
 
       // ── Auto-create the timeslot if it's a virtual slot (no DB record yet) ──
       // The backend only stores BOOKED/UNAVAILABLE records. Virtual AVAILABLE slots
@@ -4238,47 +4406,143 @@ export default function UserPage() {
           });
           realTimeslotId = Number(created?.id || 0) || null;
         } catch {
-          // Another concurrent request may have just created it — try fetching once more
-          realTimeslotId = await fetchTimeslotId();
+          // Another concurrent request may have just created or booked it - check once more.
+          const remoteMatch = await fetchTimeslotRecord();
+          if (remoteMatch && !isTimeslotAvailable(remoteMatch)) {
+            markSlotUnavailable(dayIso, slot24, String(remoteMatch.status || "").toUpperCase() === "UNAVAILABLE" ? "UNAVAILABLE" : "BOOKED");
+            return { ok: false, slot: slotEntry, error: "The selected time slot is no longer available" };
+          }
+          realTimeslotId = Number(remoteMatch?.id || 0) || null;
         }
       }
 
-      if (!realTimeslotId) return { bookingId: 0, ok: false, error: "Could not resolve or create a time slot record. Please refresh and try again." };
+      if (!realTimeslotId) {
+        return { ok: false, slot: slotEntry, error: "Could not resolve or create a time slot record. Please refresh and try again." };
+      }
 
-      // Book it — apply offer discount to baseAmount sent to backend
-      const selectedOffer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
-      const offerDiscountAmt = selectedOffer ? parseDiscountAmount(selectedOffer.discount || "0", selectedConsultant!.fee, selectedOffer) : 0;
-      const discountedBaseAmount = isAdminMember ? 0 : Math.max(selectedConsultant!.fee - offerDiscountAmt, 0);
+      return { ok: true, slot: slotEntry, timeSlotId: realTimeslotId };
+    };
+
+    // ── Helper: book a single slot ──────────────────────────────────────────
+    const bookOneSlot = async (slotEntry: SelectedSlotWithDate): Promise<{ bookingId: number; ok: boolean; error?: string }> => {
+      const resolved = await resolveTimeslotForBooking(slotEntry);
+      if (!resolved.ok) return { bookingId: 0, ok: false, error: resolved.error };
+
+      const realTimeslotId = resolved.timeSlotId;
+      const slot24 = resolved.slot.start24h;
+      const dayIso = resolved.slot.dayIso;
+
+      // Book it. Send the original base fee; the backend applies the offer and platform fee.
       const payload: any = {
         consultantId: selectedConsultant!.id,
         timeSlotId: realTimeslotId,
-        baseAmount: isAdminMember ? 0 : discountedBaseAmount,
+        baseAmount: isAdminMember ? 0 : selectedConsultant!.fee,
         originalAmount: isAdminMember ? 0 : selectedConsultant!.fee,
         meetingMode,
         userNotes: userNotes || "Booked via app",
       };
       if (!isAdminMember && selectedOfferId != null) payload.offerId = selectedOfferId;
-      if (!isAdminMember && offerDiscountAmt > 0) payload.discountAmount = offerDiscountAmt;
 
       try {
         const bookingResult = await createBooking(payload);
-        const newBookingId: number = bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
+        const finalBooking = await completeBackendPayment(
+          bookingResult,
+          "NORMAL",
+          `Session with ${selectedConsultant!.name}`,
+          {
+            bookingType: "NORMAL",
+            consultantId: selectedConsultant!.id,
+            timeSlotId: realTimeslotId,
+            meetingMode,
+          }
+        );
+        const newBookingId: number = finalBooking?.id ?? bookingResult?.id ?? bookingResult?.bookingId ?? Date.now();
 
         // Update local booked-slot set
         setBookedSlotSet(prev => { const next = new Set(prev); next.add(`${dayIso}|${slot24}`); return next; });
 
         return { bookingId: newBookingId, ok: true };
       } catch (err: any) {
-        return { bookingId: 0, ok: false, error: err.message };
+        const errorMessage = err?.message || "Booking failed.";
+        if (/time slot|no longer available|already booked/i.test(errorMessage)) {
+          markSlotUnavailable(dayIso, slot24);
+        }
+        return { bookingId: 0, ok: false, error: errorMessage };
+      }
+    };
+
+    const bookBulkSlots = async (
+      slotEntries: SelectedSlotWithDate[]
+    ): Promise<{ slot: SelectedSlotWithDate; bookingId: number; ok: boolean; error?: string }[]> => {
+      const resolvedSlots: Array<{ slot: SelectedSlotWithDate; timeSlotId: number }> = [];
+      const failed: { slot: SelectedSlotWithDate; bookingId: number; ok: boolean; error?: string }[] = [];
+
+      for (const slotEntry of slotEntries) {
+        const resolved = await resolveTimeslotForBooking(slotEntry);
+        if (resolved.ok) {
+          resolvedSlots.push({ slot: resolved.slot, timeSlotId: resolved.timeSlotId });
+        } else {
+          failed.push({ slot: resolved.slot, bookingId: 0, ok: false, error: resolved.error });
+        }
+      }
+
+      if (failed.length > 0) return failed;
+
+      const payload: any = {
+        consultantId: selectedConsultant!.id,
+        timeSlotIds: resolvedSlots.map(s => s.timeSlotId),
+        baseAmountPerSlot: isAdminMember ? 0 : selectedConsultant!.fee,
+        meetingMode,
+        userNotes: userNotes || "Booked via app",
+      };
+      if (!isAdminMember && selectedOfferId != null) payload.offerId = selectedOfferId;
+
+      try {
+        const bookingResult = await createBulkBooking(payload);
+        const finalBooking = await completeBackendPayment(
+          bookingResult,
+          "NORMAL",
+          `${resolvedSlots.length} sessions with ${selectedConsultant!.name}`,
+          {
+            bookingType: "NORMAL",
+            bulk: true,
+            consultantId: selectedConsultant!.id,
+            timeSlotIds: resolvedSlots.map(s => s.timeSlotId).join(","),
+            meetingMode,
+          }
+        );
+        const newBookingId: number = finalBooking?.id ?? finalBooking?.bookingId ?? bookingResult?.bookingId ?? Date.now();
+
+        resolvedSlots.forEach(({ slot }) => {
+          setBookedSlotSet(prev => {
+            const next = new Set(prev);
+            next.add(`${slot.dayIso}|${slot.start24h}`);
+            return next;
+          });
+        });
+
+        return resolvedSlots.map(({ slot }) => ({ slot, bookingId: newBookingId, ok: true }));
+      } catch (err: any) {
+        const errorMessage = err?.message || "Bulk booking failed.";
+        if (/time slot|no longer available|already booked/i.test(errorMessage)) {
+          resolvedSlots.forEach(({ slot }) => markSlotUnavailable(slot.dayIso, slot.start24h));
+        }
+        return slotEntries.map(slot => ({ slot, bookingId: 0, ok: false, error: errorMessage }));
       }
     };
 
     // ── Book all slots sequentially ─────────────────────────────────────────
     try {
-      const results: { slot: SelectedSlotWithDate; bookingId: number; ok: boolean; error?: string }[] = [];
-      for (const slot of slotsToBook) {
-        const res = await bookOneSlot(slot);
-        results.push({ slot, ...res });
+      const canUseBulkEndpoint = slotsToBook.length >= 2 && slotsToBook.length <= 4;
+      const results: { slot: SelectedSlotWithDate; bookingId: number; ok: boolean; error?: string }[] = canUseBulkEndpoint
+        ? await bookBulkSlots(slotsToBook)
+        : [];
+
+      if (!canUseBulkEndpoint) {
+        for (const slot of slotsToBook) {
+          const res = await bookOneSlot(slot);
+          results.push({ slot, ...res });
+        }
       }
 
       const succeeded = results.filter(r => r.ok);
@@ -4287,7 +4551,11 @@ export default function UserPage() {
       setShowModal(false);
 
       if (succeeded.length === 0) {
-        showToast(`All bookings failed. Please try again.`);
+        console.warn("[UserPage] All booking attempts failed", failed.map(({ slot, error }) => ({
+          slot: `${slot.dayLabel} ${slot.label}`,
+          error,
+        })));
+        showToast(`Booking failed: ${formatBookingFailure(failed[0]?.error)}`, 7000);
         return;
       }
 
@@ -4353,24 +4621,6 @@ export default function UserPage() {
           setShowPostBookingQuestionnaire(true);
         }, 400);
       }
-
-      // Send emails for each booking
-      let consultantEmail = selectedConsultant!.email || "";
-      if (!consultantEmail) {
-        try { const cData = await getConsultantById(selectedConsultant!.id); consultantEmail = cData?.email || cData?.emailId || cData?.emailAddress || ""; } catch { }
-      }
-      succeeded.forEach(({ slot, bookingId }) => {
-        sendBookingEmails({ bookingId, slotDate: slot.dayIso, timeRange: slot.label, meetingMode, amount: selectedConsultant!.fee, userName: currentUser?.name || "User", userEmail: currentUser?.email || "", consultantName: selectedConsultant!.name, consultantEmail, userNotes: userNotes || "" }).catch(() => { });
-        // Also fire EmailService-backed confirmation emails — non-fatal
-        const userEmailBk = currentUser?.email || '';
-        const amountStr = String(selectedConsultant!.fee ?? 0);
-        if (userEmailBk) {
-          emailOnBookingConfirmedUser({ to: userEmailBk, bookingId, meetingMode, amount: amountStr, discountAmount: '0', meetingLink: '' }).catch(() => null);
-        }
-        if (consultantEmail) {
-          emailOnBookingAlertConsultant({ to: consultantEmail, bookingId, meetingMode, clientEmail: userEmailBk, meetingLink: '' }).catch(() => null);
-        }
-      });
 
     } catch (err: any) {
       const msg = (err.message || "").toLowerCase();
@@ -4460,20 +4710,44 @@ export default function UserPage() {
 
   // Slots the user has already booked for this consultant on this day
   const bookedSpecialSlotCounts = new Set<number>(
-    bookings
-      .filter((b: any) =>
-        b.isSpecialBooking &&
-        b.BookingStatus !== "CANCELLED" &&
-        b.BookingStatus !== "COMPLETED" &&
-        Number(b.consultantId || b.consultant?.id) === selectedConsultant?.id &&
-        (b.slotDate === selectedDay?.iso || b.scheduledDate === selectedDay?.iso ||
-          (parseSpecialBookingMeta(b.userNotes)?.preferredDate ?? "") === selectedDay?.iso)
-      )
-      .map((b: any) => {
-        const parsedMeta = parseSpecialBookingMeta(b.userNotes);
-        // Prefer slotNumber stored in meta (accurate), fall back to raw fields
-        return Math.max(1, Number(parsedMeta?.slotNumber ?? b.numberOfSlots ?? b.hours ?? 1));
-      })
+    [
+      ...(bookedSpecialSlotNumbersByDate[selectedDay?.iso] || []),
+      ...bookings
+        .filter((b: any) => {
+          if (!b.isSpecialBooking) return false;
+          const lifecycle = getBookingLifecycleStatus(b);
+          if (lifecycle === "CANCELLED" || lifecycle === "COMPLETED") return false;
+          if (Number(b.consultantId || b.consultant?.id) !== selectedConsultant?.id) return false;
+          const meta = resolveSpecialBookingMeta(b);
+          const bookingDate =
+            meta?.preferredDate ||
+            b.preferredDate ||
+            b.preferred_date ||
+            b.slotDate ||
+            b.scheduledDate ||
+            b.bookingDate ||
+            b.date ||
+            "";
+          return String(bookingDate).substring(0, 10) === selectedDay?.iso;
+        })
+        .map((b: any) => {
+          const meta = resolveSpecialBookingMeta(b);
+          return Math.max(
+            1,
+            Number(
+              meta?.slotNumber ??
+              b.slotNumber ??
+              b.slot_number ??
+              b.requestedSlotNumber ??
+              b.preferredSlotNumber ??
+              b.numberOfSlots ??
+              b.durationInHours ??
+              b.hours ??
+              1
+            )
+          );
+        })
+    ]
   );
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -4505,7 +4779,11 @@ export default function UserPage() {
       )}
       <header className="up-header">
         <div className="up-logo-section" style={{ cursor: "pointer" }} onClick={() => navigate("/")}>
-          <div className="up-logo-text">MEET THE MASTERS</div>
+          <img
+            src={headerLogoImg}
+            alt="Meet The Masters"
+            style={{ height: 42, width: "auto", maxWidth: 250, objectFit: "contain", display: "block" }}
+          />
           <div className="up-logo-sub">CONNECT · CONSULT · GROW</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -4618,7 +4896,7 @@ export default function UserPage() {
         </div>
       )}
 
-      {/* ══ BOOKING CONFIRMATION BANNER ══ */}
+      {/* == BOOKING CONFIRMATION BANNER == */}
       {bookingBanner && (
         <div style={{
           position: "sticky",
@@ -4634,7 +4912,7 @@ export default function UserPage() {
           <CheckCircle size={22} color="#A7F3D0" style={{ flexShrink: 0 }} />
           <div style={{ flex: 1, minWidth: 220 }}>
             <div style={{ fontWeight: 800, fontSize: 14 }}>
-              Special Booking Requested — {bookingBanner.consultantName}
+              Special Booking Requested - {bookingBanner.consultantName}
             </div>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 2, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -4656,7 +4934,7 @@ export default function UserPage() {
 
       <main className="up-content">
 
-        {/* ════ CONSULTANTS ════ */}
+        {/* ==== CONSULTANTS ==== */}
         {tab === "consultants" && (
           <div className="up-tab-padding">
             <div className="up-search-wrapper">
@@ -4671,6 +4949,7 @@ export default function UserPage() {
                 flexWrap: "nowrap",
                 paddingBottom: 4,
                 scrollbarWidth: "none",
+                minHeight: 40,
               }}
             >
               {categories.map(c => <button key={c} onClick={() => setCategory(c)} className={`up-category-btn ${category === c ? "up-category-btn-active" : ""}`}>{c}</button>)}
@@ -4712,7 +4991,7 @@ export default function UserPage() {
                         (e.currentTarget as HTMLDivElement).style.borderColor = "#E2E8F0";
                       }}
                     >
-                      {/* Photo — Square profile with rounded corners for neat professional look */}
+                      {/* Photo - Square profile with rounded corners for neat professional look */}
                       <div style={{ padding: "20px 20px 0", display: "flex", justifyContent: "center" }}>
                         <div style={{
                           width: 130,
@@ -4739,7 +5018,7 @@ export default function UserPage() {
 
                       {/* Card body: Name → Specialisation → Exp → Location → Rating → Description */}
                       <div style={{ padding: "14px 18px 0", flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
-                        {/* Name — Title Case */}
+                        {/* Name - Title Case */}
                         <div style={{ fontSize: 15, fontWeight: 800, color: "#0F172A", textAlign: "center" }}>
                           {toTitleCase(c.name)}
                         </div>
@@ -4779,7 +5058,7 @@ export default function UserPage() {
                             {c.reviews > 0 && <span style={{ color: "#94A3B8" }}>({c.reviews})</span>}
                           </div>
                         )}
-                        {/* Description — Init Cap applied inside CardAbout, Georgia serif */}
+                        {/* Description - Init Cap applied inside CardAbout, Georgia serif */}
                         {c.about && (
                           <div style={{ marginTop: 2 }}>
                             <CardAbout about={c.about} />
@@ -4788,7 +5067,7 @@ export default function UserPage() {
                       </div>
 
                       {/* Footer: fee + view profile (left) + book now (right) */}
-                      {/* NOTE: No booking fee badge removed — all users (including subscribers) pay for sessions */}
+                      {/* NOTE: No booking fee badge removed - all users (including subscribers) pay for sessions */}
                       <div style={{ padding: "14px 18px 18px", borderTop: "1px solid #F1F5F9", marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>
@@ -4826,7 +5105,7 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ BOOKINGS ════ */}
+        {/* ==== BOOKINGS ==== */}
         {tab === "bookings" && (
           <div className="up-tab-padding">
             <div className="up-title-section">
@@ -4960,8 +5239,8 @@ export default function UserPage() {
                           const status = getBookingLifecycleStatus(b);
                           const displayTime = special.isSpecial
                             ? (hasAssignedSpecialSlot ? special.time : (special.time || `${special.meta?.hours || 1} hour${(special.meta?.hours || 1) > 1 ? "s" : ""}`))
-                            : (b.timeRange || (b.slotTime ? toAmPm(b.slotTime) : "—"));
-                          const displayMode = special.meetingMode || b.meetingMode || "—";
+                            : (b.timeRange || (b.slotTime ? toAmPm(b.slotTime) : "-"));
+                          const displayMode = special.meetingMode || b.meetingMode || "-";
                           return (
                             <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", marginBottom: 8 }}>
                               <div style={{ width: 8, height: 8, borderRadius: "50%", background: getStatusColor(status), flexShrink: 0 }} />
@@ -5012,11 +5291,12 @@ export default function UserPage() {
                   const isCompleted = status === "COMPLETED";
                   const isCancelled = status === "CANCELLED";
                   const isExpiredConfirmed = !isCancelled && !isCompleted && isBookingExpired(bookingForTime, now);
+                  const canCancelBooking = !isCancelled && !isCompleted && !isExpiredConfirmed && !(special.isSpecial && !hasAssignedSpecialSlot);
                   const canLeaveFeedback = isCompleted || isExpiredConfirmed;
                   const hasFeedback = submittedFeedbacks.has(b.id);
                   const resolvedDisplayDate = special.isSpecial
                     ? (hasAssignedSpecialSlot ? special.date || "Date to be shared" : (special.date || "Date to be shared by consultant"))
-                    : (bAny.slotDate || bAny.bookingDate || "—");
+                    : (bAny.slotDate || bAny.bookingDate || "-");
                   const resolvedDisplayTime = special.isSpecial
                     ? (hasAssignedSpecialSlot ? special.time : (special.time || `${special.meta?.hours || 1} hour${(special.meta?.hours || 1) > 1 ? "s" : ""}`))
                     : (bAny.timeRange || (bAny.slotTime ? toAmPm(bAny.slotTime) : ""));
@@ -5033,7 +5313,7 @@ export default function UserPage() {
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 10px", background: "rgba(37,99,235,0.08)", borderRadius: 8, border: "1px solid #BFDBFE" }}>
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="#2563EB" stroke="none"><path d="M12 2l2.7 5.47L21 8.38l-4.5 4.39 1.06 6.23L12 16.9 6.44 19l1.06-6.23L3 8.38l6.3-.91L12 2z" /></svg>
                           <span style={{ fontSize: 11, fontWeight: 800, color: "#1D4ED8", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                            Special Booking — {isCompleted ? "✓ Completed" : hasAssignedSpecialSlot ? "✓ Scheduled" : "Awaiting Confirmation"}
+                            Special Booking - {isCompleted ? "✓ Completed" : hasAssignedSpecialSlot ? "✓ Scheduled" : "Awaiting Confirmation"}
                           </span>
                         </div>
                       )}
@@ -5055,6 +5335,29 @@ export default function UserPage() {
                         <div className="up-status-badge-wrapper"><StatusBadge status={status as any} /></div>
                       </div>
                       <div className="up-card-actions">
+                        {/* ── Cancel Booking ── */}
+                        {canCancelBooking && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm("Are you sure you want to cancel this booking?")) {
+                                handleDeleteBooking(b.id);
+                              }
+                            }}
+                            disabled={deletingBookingId === b.id}
+                            style={{
+                              padding: "10px 16px", borderRadius: 8,
+                              border: "1.5px solid #FECACA",
+                              background: "#FEF2F2", color: "#DC2626",
+                              fontWeight: 600, fontSize: 13,
+                              cursor: deletingBookingId === b.id ? "not-allowed" : "pointer",
+                              display: "flex", alignItems: "center", gap: 6,
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+                            {deletingBookingId === b.id ? "Cancelling..." : "Cancel"}
+                          </button>
+                        )}
                         {/* ── Join Meeting ── only for non-cancelled, non-completed, non-expired upcoming ONLINE sessions ── */}
                         {!isCancelled && !isCompleted && !(special.isSpecial && !hasAssignedSpecialSlot) && !isBookingExpired(bookingForTime, now) && (b.meetingMode === "ONLINE" || !b.meetingMode) && (() => {
                           const joinStatus = getJoinMeetingStatus(bookingForTime, now);
@@ -5143,7 +5446,7 @@ export default function UserPage() {
                           );
                         })()}
 
-                        {/* ── Feedback — for COMPLETED or expired sessions ── */}
+                        {/* ── Feedback - for COMPLETED or expired sessions ── */}
                         {canLeaveFeedback && !hasFeedback && (
                           <button
                             onClick={() => handleOpenFeedback(bAny)}
@@ -5180,7 +5483,7 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ TICKETS ════ */}
+        {/* ==== TICKETS ==== */}
         {tab === "tickets" && (
           <div className="up-tab-padding">
             {/* Guest Trial Banner */}
@@ -5211,7 +5514,7 @@ export default function UserPage() {
                     <PartyPopper size={20} color="#2563EB" />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 700, fontSize: 13, color: "#1E40AF" }}>2-Month Free Guest Access Active</div>
-                      <div style={{ fontSize: 12, color: "#3B82F6", marginTop: 2 }}>You have full Pro/Elite ticket access — <strong>{daysLeft} day{daysLeft !== 1 ? "s" : ""}</strong> remaining in your free trial.</div>
+                      <div style={{ fontSize: 12, color: "#3B82F6", marginTop: 2 }}>You have full Pro/Elite ticket access - <strong>{daysLeft} day{daysLeft !== 1 ? "s" : ""}</strong> remaining in your free trial.</div>
                     </div>
                   </div>
                 );
@@ -5243,7 +5546,7 @@ export default function UserPage() {
                   setTickets(p => [t, ...p]);
                   setShowCreateTicket(false);
                   setSelectedTicket(t);
-                  // Fire ticket-created email — non-fatal
+                  // Fire ticket-created email - non-fatal
                   const userEmailTc = currentUser?.email || '';
                   const ticketNumTc = String((t as any).ticketNumber || t.id);
                   if (userEmailTc) {
@@ -5278,7 +5581,7 @@ export default function UserPage() {
               </div>
             </div>
 
-            {/* Email-to-Ticket Info Banner — backend auto-converts emails to tickets */}
+            {/* Email-to-Ticket Info Banner - backend auto-converts emails to tickets */}
             <div style={{
               background: "linear-gradient(135deg,#EFF6FF,#F0FDF4)",
               border: "1px solid #BFDBFE",
@@ -5304,7 +5607,7 @@ export default function UserPage() {
               </div>
             </div>
 
-            {/* 🎉 2-Month Free Trial Alert Banner — only shown to GUEST users */}
+            {/* 🎉 2-Month Free Trial Alert Banner - only shown to GUEST users */}
             {showFreeTrialAlert && (getLocalRole()).toUpperCase().replace(/^ROLE_/, "") === "GUEST" && (
               <div style={{
                 background: "linear-gradient(135deg,#F0FDF4 0%,#DCFCE7 50%,#D1FAE5 100%)",
@@ -5330,7 +5633,7 @@ export default function UserPage() {
                     <span style={{ background: "linear-gradient(135deg,#10B981,#059669)", color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 9px", borderRadius: 20, letterSpacing: "0.04em", textTransform: "uppercase", flexShrink: 0 }}>Limited Offer</span>
                   </div>
                   <div style={{ fontSize: 12, color: "#047857", lineHeight: 1.55 }}>
-                    Raise support tickets <strong>completely free</strong> for your first 2 months — no subscription needed. Get priority help from our team on any issue, anytime.
+                    Raise support tickets <strong>completely free</strong> for your first 2 months - no subscription needed. Get priority help from our team on any issue, anytime.
                   </div>
                 </div>
                 {/* CTA Button */}
@@ -5386,7 +5689,7 @@ export default function UserPage() {
               </div>
             ) : filteredTickets.length === 0 ? (
               <div className="up-empty-state">
-                <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}><Ticket size={40} color="#CBD5E1" strokeWidth={1.5} /></div>
+                <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}><TicketIcon size={40} color="#CBD5E1" strokeWidth={1.5} /></div>
                 <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>{tickets.length === 0 ? "No tickets yet." : "No tickets in this status."}</p>
                 {tickets.length === 0 && (
                   <button onClick={() => setShowCreateTicket(true)} style={{ marginTop: 16, padding: "10px 22px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
@@ -5407,7 +5710,7 @@ export default function UserPage() {
                       onMouseLeave={e => (e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.05)")}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: "#0F172A" }}>#{ticket.id} — {ticket.category}</div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: "#0F172A" }}>#{ticket.id} - {ticket.category}</div>
                           <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>
                             {formatTicketDate(ticket.createdAt)}
                             {ticket.agentName && ` · ${ticket.agentName}`}
@@ -5424,7 +5727,7 @@ export default function UserPage() {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
                         {sla && !["CLOSED", "RESOLVED"].includes(ticket.status) ? (
                           <div style={{ fontSize: 11, fontWeight: 700, color: sla.breached ? "#DC2626" : sla.warning ? "#D97706" : "#16A34A" }}>
-                            {sla.breached ? <><Clock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Response overdue — we're working on it</> : sla.warning ? <><AlertTriangle size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Response due soon</> : <><CheckCircle size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />{sla.label}</>}
+                            {sla.breached ? <><Clock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Response overdue - we're working on it</> : sla.warning ? <><AlertTriangle size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Response due soon</> : <><CheckCircle size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />{sla.label}</>}
                           </div>
                         ) : <div />}
                         {["RESOLVED", "CLOSED"].includes(ticket.status) && !ticket.feedbackRating && (
@@ -5442,7 +5745,7 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ NOTIFICATIONS (full tab) ════ */}
+        {/* ==== NOTIFICATIONS (full tab) ==== */}
         {tab === "notifications" && (
           <div className="up-tab-padding">
             <div style={{ marginBottom: 20 }}>
@@ -5513,7 +5816,7 @@ export default function UserPage() {
           </div>
         )}
 
-        {/* ════ SETTINGS ════ */}
+        {/* ==== SETTINGS ==== */}
         {tab === "settings" && (
           <div className="up-tab-padding">
 
@@ -5696,7 +5999,7 @@ export default function UserPage() {
                   })}
                 </div>
 
-                {/* Security section — Change Password only */}
+                {/* Security section - Change Password only */}
                 <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
                   <div style={{ padding: "14px 20px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>Security</div>
@@ -5800,7 +6103,7 @@ export default function UserPage() {
                           {privacyPwSaving ? (
                             <>
                               <img src={logoImg} alt="" style={{ width: 14, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
-                              Updating…
+                              Updating...
                             </>
                           ) : "Update Password"}
                         </button>
@@ -5822,7 +6125,7 @@ export default function UserPage() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                     <div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>My Categories</div>
-                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>Topics you're interested in — helps us match consultants</div>
+                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>Topics you're interested in - helps us match consultants</div>
                     </div>
                     <button onClick={() => {
                       setTempSelectedCategories(userCategories.map(uc => uc.category));
@@ -5872,7 +6175,7 @@ export default function UserPage() {
         )}
       </main>
 
-      {/* ══ PROFILE MODAL ══ */}
+      {/* == PROFILE MODAL == */}
       {profileConsultant && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.65)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(4px)" }} onClick={() => setProfileConsultant(null)}>
           <div style={{ background: "#fff", borderRadius: 20, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 32px 80px rgba(15,23,42,0.3)" }} onClick={e => e.stopPropagation()}>
@@ -5897,7 +6200,7 @@ export default function UserPage() {
                 {[{ icon: <MapPin size={14} color="#0F766E" />, label: "Location", value: profileConsultant.location }, { icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F766E" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>, label: "Languages", value: profileConsultant.languages || "English" }, { icon: <Phone size={14} color="#0F766E" />, label: "Contact", value: profileConsultant.phone || "On request" }, { icon: <DollarSign size={14} color="#0F766E" />, label: "Consultation Fee", value: `₹${calcTotal(profileConsultant.fee).total.toLocaleString()}` }].map(item => (
                   <div key={item.label} style={{ background: "#F8FAFC", borderRadius: 11, padding: "11px 13px", border: "1px solid #E2E8F0" }}>
                     <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, textTransform: "uppercase", marginBottom: 5, display: "flex", alignItems: "center", gap: 4 }}>{item.icon} {item.label}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{item.value || "—"}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>{item.value || "-"}</div>
                   </div>
                 ))}
               </div>
@@ -5917,7 +6220,7 @@ export default function UserPage() {
         </div>
       )}
 
-      {/* ══ BOOKING MODAL ══ */}
+      {/* == BOOKING MODAL == */}
       {showModal && selectedConsultant && (
         <div className="up-modal-overlay" onClick={() => setShowModal(false)}>
           <div className="up-modal" onClick={e => e.stopPropagation()} style={{ padding: 0, overflow: "hidden" }}>
@@ -5936,7 +6239,7 @@ export default function UserPage() {
                 </div>
               ) : (
                 <>
-                  {/* About This Consultant section removed — info shown on consultant card */}
+                  {/* About This Consultant section removed - info shown on consultant card */}
 
                   <div style={{ marginBottom: 20, padding: "16px 18px", borderRadius: 14, background: "#F8FAFC", border: "1px solid #E2E8F0" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
@@ -5944,7 +6247,7 @@ export default function UserPage() {
                         <p className="up-step-label" style={{ marginTop: 0, marginBottom: 4 }}>{bookingMode === "SPECIAL" ? "Special Booking Day" : "Available Slots"}</p>
                         <div style={{ fontSize: 12, color: "#64748B" }}>
                           {bookingMode === "SPECIAL"
-                            ? "This is a Special Day — send a booking request and the consultant will confirm the meeting time with you directly."
+                            ? "This is a Special Day - send a booking request and the consultant will confirm the meeting time with you directly."
                             : "Choose one available session from the consultant's published slots."}
                         </div>
                       </div>
@@ -6003,7 +6306,7 @@ export default function UserPage() {
                               key={d.iso}
                               disabled={isUnavailableDay}
                               title={isSpecialDay
-                                ? "Special Day — send a booking request, consultant confirms time"
+                                ? "Special Day - send a booking request, consultant confirms time"
                                 : isUnavailableDay
                                   ? "No published availability"
                                   : "Available sessions"}
@@ -6091,7 +6394,7 @@ export default function UserPage() {
                         <p style={{ margin: 0, fontSize: 12, color: "#64748B" }}>The next 30 days are visible, but the consultant has not opened any bookable standard or special days yet.</p>
                       </div>
                     )}
-                    <p className="up-step-label">Step 2 — {bookingMode === "SPECIAL" ? "Special Request Day" : "Select Time"}</p>
+                    <p className="up-step-label">Step 2 - {bookingMode === "SPECIAL" ? "Special Request Day" : "Select Time"}</p>
                     {bookingMode === "SPECIAL" ? (
                       <div style={{ padding: "14px 18px", borderRadius: 14, background: "linear-gradient(135deg,#FFF8E1 0%,#FEF3C7 60%,#FFFBEB 100%)", border: "1.5px solid #F59E0B", color: "#78350F", fontSize: 13, lineHeight: 1.6, boxShadow: "0 2px 10px rgba(245,158,11,0.12)" }}>
                         <div style={{ fontWeight: 800, marginBottom: 5, display: "flex", alignItems: "center", gap: 7, fontSize: 14 }}>
@@ -6101,13 +6404,13 @@ export default function UserPage() {
                         <div style={{ color: "#92400E" }}>The consultant will confirm the exact meeting time after you submit the request. Choose the slot you want below.</div>
                       </div>
                     ) : isFreeFlowingSpecialDay ? (
-                      /* ── Request-based special day: no fixed time — consultant confirms ── */
+                      /* ── Request-based special day: no fixed time - consultant confirms ── */
                       <div style={{ padding: "16px 18px", borderRadius: 14, background: "linear-gradient(135deg,#FFFBEB,#FEF3C7)", border: "1px solid #FCD34D", color: "#92400E", fontSize: 13, lineHeight: 1.65 }}>
                         <div style={{ fontWeight: 800, marginBottom: 6, display: "flex", alignItems: "center", gap: 7 }}>
                           <span style={{ background: "#F59E0B", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>SPECIAL</span>
                           Request-based Special Day
                         </div>
-                        <div>The consultant has opened this date for a special booking. There are no fixed time slots — fill in your requirement notes and preferred meeting mode below, and the consultant will confirm the exact meeting time with you directly.</div>
+                        <div>The consultant has opened this date for a special booking. There are no fixed time slots - fill in your requirement notes and preferred meeting mode below, and the consultant will confirm the exact meeting time with you directly.</div>
                       </div>
                     ) : selectedSpecialDaySlots.length > 0 ? (
                       <div className="up-time-grid">
@@ -6118,14 +6421,16 @@ export default function UserPage() {
                           const isToday = selectedDay.iso === todayStr;
                           const [slotHour, slotMinute] = slotStart.split(":").map(Number);
                           const isPast = isToday && (slotHour < now.getHours() || (slotHour === now.getHours() && slotMinute <= now.getMinutes()));
-                          const isBookedSlot = slot.status?.toUpperCase() === "BOOKED";
+                          const slotStatus = String(slot.status || "AVAILABLE").toUpperCase();
+                          const isBookedSlot = slotStatus === "BOOKED" || bookedSlotSet.has(`${selectedDay.iso}|${slotStart}`);
+                          const isUnavailableSlot = slotStatus !== "AVAILABLE" && !isBookedSlot;
                           const isSelected = selectedSlot?.start24h === slotStart;
-                          const isDisabled = isPast || isBookedSlot;
+                          const isDisabled = isPast || isBookedSlot || isUnavailableSlot;
                           return (
                             <button
                               key={slot.id}
                               disabled={isDisabled}
-                              title={isBookedSlot ? "Already booked" : isPast ? "Time passed" : "Available"}
+                              title={isBookedSlot ? "Already booked" : isUnavailableSlot ? "Unavailable" : isPast ? "Time passed" : "Available"}
                               onClick={() => {
                                 if (isDisabled) return;
                                 const nextLabel = slotLabel;
@@ -6139,7 +6444,7 @@ export default function UserPage() {
                               }}
                               className={`up-time-btn ${isSelected ? "up-time-btn-active" : ""} ${isDisabled ? "up-time-btn-booked" : ""}`}
                               style={
-                                isBookedSlot
+                                (isBookedSlot || isUnavailableSlot)
                                   ? { opacity: 0.65, cursor: "not-allowed", pointerEvents: "none", background: "#FEF2F2", borderColor: "#FECACA", color: "#DC2626" }
                                   : isPast
                                     ? { textDecoration: "line-through", opacity: 0.6, cursor: "not-allowed", pointerEvents: "none" }
@@ -6150,7 +6455,8 @@ export default function UserPage() {
                             >
                               {slotLabel}
                               {isBookedSlot && <div className="up-unavailable-label" style={{ color: "#DC2626", fontWeight: 800 }}>BOOKED</div>}
-                              {isPast && !isBookedSlot && <div className="up-unavailable-label">PASSED</div>}
+                              {isUnavailableSlot && <div className="up-unavailable-label" style={{ color: "#DC2626", fontWeight: 800 }}>UNAVAILABLE</div>}
+                              {isPast && !isBookedSlot && !isUnavailableSlot && <div className="up-unavailable-label">PASSED</div>}
                             </button>
                           );
                         })}
@@ -6230,7 +6536,7 @@ export default function UserPage() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#0F766E", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
                           <Clock size={13} />
                           Slot Duration
-                          <span style={{ fontSize: 10, fontWeight: 500, color: "#64748B" }}>(optional — helps the consultant plan)</span>
+                          <span style={{ fontSize: 10, fontWeight: 500, color: "#64748B" }}>(optional - helps the consultant plan)</span>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                           <div>
@@ -6294,7 +6600,7 @@ export default function UserPage() {
                     <div style={{ marginTop: 20, padding: "20px", borderRadius: 14, background: "linear-gradient(135deg,#F0FDF4 0%,#DCFCE7 100%)", border: "2px solid #86EFAC", textAlign: "center" }}>
                       <div style={{ fontSize: 26, marginBottom: 8 }}>🎁</div>
                       <div style={{ fontSize: 15, fontWeight: 800, color: "#166534", marginBottom: 4 }}>Free Premium Access</div>
-                      <div style={{ fontSize: 12, color: "#15803D", lineHeight: 1.6 }}>Session bookings are completely free for you.<br />No charges apply — enjoy unlimited access!</div>
+                      <div style={{ fontSize: 12, color: "#15803D", lineHeight: 1.6 }}>Session bookings are completely free for you.<br />No charges apply - enjoy unlimited access!</div>
                     </div>
                   ) : (<>
                     <div style={{ marginTop: 20 }}>
@@ -6318,7 +6624,7 @@ export default function UserPage() {
                             <input type="radio" name="offer" checked={selectedOfferId === null} onChange={() => setSelectedOfferId(null)} style={{ accentColor: "#2563EB", width: 18, height: 18 }} />
                             <div style={{ flex: 1 }}>
                               <span style={{ fontSize: 13, fontWeight: selectedOfferId === null ? 700 : 600, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>
-                                No offer — Pay full price
+                                No offer - Pay full price
                               </span>
                             </div>
                             <span style={{ fontSize: 14, fontWeight: 800, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>₹{calcTotal(selectedConsultant.fee).total.toLocaleString()}</span>
@@ -6487,7 +6793,7 @@ export default function UserPage() {
                           </div>
                           {/* Price breakdown */}
                           <div style={{ fontSize: 12, color: "#475569" }}>
-                            {/* Session fee — already includes platform commission */}
+                            {/* Session fee - already includes platform commission */}
                             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                               <span>
                                 Session Fee
@@ -6535,7 +6841,7 @@ export default function UserPage() {
                     onClick={handleConfirm}
                     className={`up-proceed-btn ${(bookingMode === "SPECIAL" || selectedSlot) && !confirming && (bookingMode !== "SPECIAL" || userNotes.trim()) ? "up-proceed-btn-active" : ""}`}
                   >
-                    {confirming ? (bookingMode === "SPECIAL" ? "Sending Request…" : isAdminMember ? "Booking…" : "Processing Payment…") : (() => {
+                    {confirming ? (bookingMode === "SPECIAL" ? "Sending Request..." : isAdminMember ? "Booking..." : "Processing Payment...") : (() => {
                       if (bookingMode !== "SPECIAL" && !selectedSlot) return "Select an available slot";
                       if (bookingMode === "SPECIAL" && !userNotes.trim()) return "Enter requirement notes to continue";
                       if (isAdminMember) {
@@ -6564,7 +6870,7 @@ export default function UserPage() {
         </div>
       )}
 
-      {/* ── Bottom Nav — 5 tabs ── */}
+      {/* ── Bottom Nav - 5 tabs ── */}
       <nav className="up-bottom-nav">
         {(["consultants", "bookings", "tickets", "notifications", "settings"] as const).map(t => (
           <button key={t} onClick={() => { setTab(t); if (t !== "notifications") setShowNotifPanel(false); }}
@@ -6581,7 +6887,7 @@ export default function UserPage() {
         ))}
       </nav>
 
-      {/* ══ BOOKING FEEDBACK MODAL ══ */}
+      {/* == BOOKING FEEDBACK MODAL == */}
       {feedbackModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.65)", zIndex: 1200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(6px)" }} onClick={() => !submittingFeedback && setFeedbackModal(null)}>
           <div style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 32px 80px rgba(15,23,42,0.35)" }} onClick={e => e.stopPropagation()}>
@@ -6613,7 +6919,7 @@ export default function UserPage() {
               </div>
               <div style={{ marginBottom: 24 }}>
                 <p style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 8px" }}>Comments (optional)</p>
-                <textarea value={feedbackComment} onChange={e => setFeedbackComment(e.target.value)} placeholder="Share your experience…" maxLength={1000} rows={4}
+                <textarea value={feedbackComment} onChange={e => setFeedbackComment(e.target.value)} placeholder="Share your experience..." maxLength={1000} rows={4}
                   style={{ width: "100%", padding: "12px 14px", border: "1.5px solid #E2E8F0", borderRadius: 12, fontSize: 13, fontFamily: "inherit", resize: "none", outline: "none", boxSizing: "border-box", color: "#1E293B", lineHeight: 1.6 }}
                   onFocus={e => (e.target.style.borderColor = "#2563EB")} onBlur={e => (e.target.style.borderColor = "#E2E8F0")} />
                 <div style={{ textAlign: "right", fontSize: 11, color: "#94A3B8", marginTop: 4 }}>{feedbackComment.length}/1000</div>
@@ -6621,7 +6927,7 @@ export default function UserPage() {
               <button onClick={handleSubmitFeedback} disabled={submittingFeedback || feedbackRating === 0}
                 style={{ width: "100%", padding: 14, background: feedbackRating === 0 || submittingFeedback ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: feedbackRating === 0 || submittingFeedback ? "#94A3B8" : "#fff", border: "none", borderRadius: 14, fontWeight: 700, fontSize: 15, cursor: feedbackRating === 0 ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 {submittingFeedback
-                  ? <><img src={logoImg} alt="" style={{ width: 18, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} /> Submitting…</>
+                  ? <><img src={logoImg} alt="" style={{ width: 18, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} /> Submitting...</>
                   : feedbackModal.existingFeedback ? "Update Feedback" : "Submit Feedback"}
               </button>
               {feedbackRating === 0 && <p style={{ textAlign: "center", fontSize: 12, color: "#94A3B8", margin: "10px 0 0" }}>Please select a star rating to continue</p>}
@@ -6630,11 +6936,11 @@ export default function UserPage() {
         </div>
       )}
 
-      {/* ══ CATEGORY & QUESTIONNAIRE MODAL ══ */}
-      {/* ══ CATEGORY MODAL — multi-select, saved categories shown first ══ */}
+      {/* == CATEGORY & QUESTIONNAIRE MODAL == */}
+      {/* == CATEGORY MODAL - multi-select, saved categories shown first == */}
       {showCategoryModal && (() => {
-        // All state lives at component level — tempSelectedCategories, dynamicSkillCategories, userCategories
-        // This IIFE is pure rendering logic only — NO hooks here
+        // All state lives at component level - tempSelectedCategories, dynamicSkillCategories, userCategories
+        // This IIFE is pure rendering logic only - NO hooks here
         const savedCats = userCategories.map(uc => uc.category);
         const allCats = dynamicSkillCategories.length > 0 ? dynamicSkillCategories : Object.keys(CATEGORY_OPTIONS);
         // Put saved categories first, then remaining
@@ -6779,7 +7085,7 @@ export default function UserPage() {
       })()}
 
 
-      {/* ══ CATEGORY QUESTIONS MODAL — shown after selecting categories from Settings ══ */}
+      {/* == CATEGORY QUESTIONS MODAL - shown after selecting categories from Settings == */}
       {showCategoryQuestionsModal && (
         <div style={{ position: "fixed", inset: 0, zIndex: 2150, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.7)" }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 540, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 32px 80px rgba(15,23,42,0.4)" }}>
@@ -6790,7 +7096,7 @@ export default function UserPage() {
               <div style={{ fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#93C5FD", marginBottom: 4 }}>CATEGORY QUESTIONS</div>
               <h3 style={{ fontSize: 18, fontWeight: 700, color: "#fff", margin: "0 0 6px" }}>A few quick questions</h3>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }}>
-                Based on your selected categories — helps consultants prepare for your session
+                Based on your selected categories - helps consultants prepare for your session
               </div>
             </div>
 
@@ -6843,7 +7149,7 @@ export default function UserPage() {
                             <textarea
                               value={categoryQAnswers[q.id] || ""}
                               onChange={e => setCategoryQAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                              placeholder="Your answer…"
+                              placeholder="Your answer..."
                               rows={2}
                               style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", resize: "none", fontFamily: "inherit", boxSizing: "border-box", transition: "border-color 0.15s" }}
                               onFocus={e => { e.target.style.borderColor = "#BFDBFE"; }}
@@ -6876,7 +7182,7 @@ export default function UserPage() {
         </div>
       )}
 
-      {/* ══ FIRST-LOGIN ONBOARDING MODAL ══ */}
+      {/* == FIRST-LOGIN ONBOARDING MODAL == */}
       {/* Flow: Step 1 Details → Step 2 Categories → Step 3 Questions → Step 4 T&C → Consultants */}
       {showFirstLoginQuestionnaire && (
         <div style={{ position: "fixed", inset: 0, zIndex: 2200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.7)" }}>
@@ -6892,15 +7198,15 @@ export default function UserPage() {
                   else if (firstLoginStep === "terms") setFirstLoginStep(skillQuestions.length > 0 ? "skill-questions" : "categories");
                 }} style={{ position: "absolute", top: 16, left: 16, background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", cursor: "pointer" }}><ArrowLeft size={16} /></button>
               )}
-              {/* No close/skip button — onboarding is mandatory for first-time users */}
+              {/* No close/skip button - onboarding is mandatory for first-time users */}
 
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#93C5FD", marginBottom: 6 }}>
                   {firstLoginStep === "intro" && "Welcome to Meet The Masters"}
-                  {firstLoginStep === "details" && "Step 1 of 4 — Your Details"}
-                  {firstLoginStep === "categories" && "Step 2 of 4 — Your Interests"}
-                  {firstLoginStep === "skill-questions" && "Step 3 of 4 — Quick Questions"}
-                  {firstLoginStep === "terms" && "Step 4 of 4 — Terms & Conditions"}
+                  {firstLoginStep === "details" && "Step 1 of 4 - Your Details"}
+                  {firstLoginStep === "categories" && "Step 2 of 4 - Your Interests"}
+                  {firstLoginStep === "skill-questions" && "Step 3 of 4 - Quick Questions"}
+                  {firstLoginStep === "terms" && "Step 4 of 4 - Terms & Conditions"}
                   {firstLoginStep === "done" && "All Set!"}
                 </div>
                 <h3 style={{ fontSize: 20, fontWeight: 800, color: "#fff", margin: "0 0 4px" }}>
@@ -6915,13 +7221,13 @@ export default function UserPage() {
                   {firstLoginStep === "intro" && "4 quick steps to match you with the right consultants."}
                   {firstLoginStep === "details" && "Confirm your details and financial background."}
                   {firstLoginStep === "categories" && "Select the areas where you need expert guidance."}
-                  {firstLoginStep === "skill-questions" && "Based on your selected categories — helps consultants prepare."}
+                  {firstLoginStep === "skill-questions" && "Based on your selected categories - helps consultants prepare."}
                   {firstLoginStep === "terms" && "Please read and accept our Terms & Conditions to continue."}
                   {firstLoginStep === "done" && "Consultants matched based on your full profile."}
                 </p>
               </div>
 
-              {/* Progress bar — 4 steps */}
+              {/* Progress bar - 4 steps */}
               {firstLoginStep !== "done" && (
                 <div style={{ display: "flex", gap: 5, marginTop: 16 }}>
                   {["intro", "details", "categories", "skill-questions", "terms"].map((s, i) => (
@@ -6944,7 +7250,7 @@ export default function UserPage() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 24 }}>
                     {[
                       { icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" /></svg>, title: "Personalised Matching", desc: "Get consultants matched to your exact needs." },
-                      { icon: "zap", title: "Quick Setup", desc: "4 simple steps — takes under 3 minutes." },
+                      { icon: "zap", title: "Quick Setup", desc: "4 simple steps - takes under 3 minutes." },
                       { icon: <Lock size={16} color="#2563EB" />, title: "Private & Secure", desc: "Your answers are used only for recommendations." },
                       { icon: "edit", title: "Always Editable", desc: "Change your preferences anytime from Settings." },
                     ].map((item, i) => (
@@ -7041,11 +7347,11 @@ export default function UserPage() {
                 );
               })()}
 
-              {/* ── STEP 2: Categories — from backend skills ── */}
+              {/* ── STEP 2: Categories - from backend skills ── */}
               {firstLoginStep === "categories" && (
                 <div>
                   <div style={{ fontSize: 13, color: "#64748B", marginBottom: 16, lineHeight: 1.6 }}>
-                    Select at least one category that interests you. <span style={{ color: "#DC2626", fontWeight: 700 }}>This is required</span> — consultants are matched based on your selections.
+                    Select at least one category that interests you. <span style={{ color: "#DC2626", fontWeight: 700 }}>This is required</span> - consultants are matched based on your selections.
                   </div>
                   {dynamicSkillCategories.length === 0 && (
                     <div style={{ textAlign: "center", padding: "24px 0", color: "#94A3B8", fontSize: 13 }}>
@@ -7131,7 +7437,7 @@ export default function UserPage() {
                           <textarea
                             value={skillQAnswers[q.id] || ""}
                             onChange={e => { setSkillQAnswers(prev => ({ ...prev, [q.id]: e.target.value })); setOnboardingQError(""); }}
-                            placeholder="Your answer… (required)"
+                            placeholder="Your answer... (required)"
                             rows={2}
                             style={{ width: "100%", padding: "10px 13px", border: `1.5px solid ${(onboardingQError && !skillQAnswers[q.id]?.trim()) ? "#FECACA" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", resize: "none", fontFamily: "inherit", background: (onboardingQError && !skillQAnswers[q.id]?.trim()) ? "#FEF2F2" : "#fff" }}
                           />
@@ -7177,65 +7483,37 @@ export default function UserPage() {
                   ) : (
                     <div style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 12, padding: "16px", marginBottom: 18, height: 280, overflowY: "auto", fontSize: 12, color: "#374151", lineHeight: 1.7 }}>
                       {/* Parse ### heading format from admin editor into styled sections */}
-                      {(termsContent || `MEET THE MASTERS — TERMS & CONDITIONS
-
-Last updated: March 2026
-
-1. ACCEPTANCE OF TERMS
-By accessing and using Meet The Masters platform, you agree to be bound by these Terms and Conditions.
-
-2. PLATFORM SERVICES
-Meet The Masters provides a platform connecting users with independent financial consultants. We do not provide financial advice directly.
-
-3. USER RESPONSIBILITIES
-• You must be at least 18 years of age to use this platform.
-• You agree to provide accurate and truthful information during registration and onboarding.
-• You are responsible for maintaining the confidentiality of your account credentials.
-
-4. CONSULTANT SERVICES
-• Consultants are independent professionals. Their advice does not constitute financial advice from Meet The Masters.
-• Bookings and consultations are subject to the consultant's availability and terms.
-
-5. PRIVACY & DATA
-• Your personal and financial information is used solely for matching you with relevant consultants.
-• We do not sell your data to third parties.
-
-6. PAYMENT & REFUNDS
-• Payments are processed securely. Final session charges are shown before confirmation.
-• Cancellations must be made at least 24 hours before the session for a full refund.
-
-7. LIMITATION OF LIABILITY
-Meet The Masters is not liable for the accuracy of financial advice provided by consultants. Always exercise independent judgment.
-
-8. CHANGES TO TERMS
-We reserve the right to update these terms. Users will be notified of significant changes.
-
-By clicking "Accept & Continue", you confirm that you have read, understood, and agree to these Terms & Conditions.`)
-                        .split("\n\n")
-                        .map((block, i) => {
-                          const lines = block.split("\n");
-                          const firstLine = lines[0] || "";
-                          const isHeading = firstLine.startsWith("### ");
-                          const heading = isHeading ? firstLine.replace(/^###\s*/, "") : null;
-                          const body = isHeading ? lines.slice(1).join("\n") : block;
-                          return (
-                            <div key={i} style={{ marginBottom: 12 }}>
-                              {heading && (
-                                <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{heading}</div>
-                              )}
-                              {!heading && firstLine && !isHeading && (
-                                <div style={{ fontWeight: 700, fontSize: 12, color: "#0F172A", marginBottom: 2 }}>{firstLine}</div>
-                              )}
-                              {(heading ? body : lines.slice(1).join("\n") || "").split("\n").map((line, j) => (
-                                line.trim() ? <div key={j} style={{ color: "#374151", marginBottom: 2 }}>{line}</div> : null
-                              ))}
-                              {!heading && lines.length === 1 && (
-                                <div style={{ color: "#374151" }}>{block}</div>
-                              )}
-                            </div>
-                          );
-                        })
-                      }
+                      {resolvedTermsContent ? (
+                        resolvedTermsContent
+                          .split("\n\n")
+                          .map((block, i) => {
+                            const lines = block.split("\n");
+                            const firstLine = lines[0] || "";
+                            const isHeading = firstLine.startsWith("### ");
+                            const heading = isHeading ? firstLine.replace(/^###\s*/, "") : null;
+                            const body = isHeading ? lines.slice(1).join("\n") : block;
+                            return (
+                              <div key={i} style={{ marginBottom: 12 }}>
+                                {heading && (
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A", marginBottom: 4 }}>{heading}</div>
+                                )}
+                                {!heading && firstLine && !isHeading && (
+                                  <div style={{ fontWeight: 700, fontSize: 12, color: "#0F172A", marginBottom: 2 }}>{firstLine}</div>
+                                )}
+                                {(heading ? body : lines.slice(1).join("\n") || "").split("\n").map((line, j) => (
+                                  line.trim() ? <div key={j} style={{ color: "#374151", marginBottom: 2 }}>{line}</div> : null
+                                ))}
+                                {!heading && lines.length === 1 && (
+                                  <div style={{ color: "#374151" }}>{block}</div>
+                                )}
+                              </div>
+                            );
+                          })
+                      ) : (
+                        <div style={{ fontSize: 13, color: "#64748B", lineHeight: 1.7 }}>
+                          The latest Terms &amp; Conditions content is not available right now.
+                        </div>
+                      )}
                     </div>
                   )}
                   <label style={{ display: "flex", alignItems: "flex-start", gap: 12, cursor: "pointer", marginBottom: 20 }}>
@@ -7278,14 +7556,14 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
       )}
 
 
-      {/* ══ FIRST-LOGIN PASSWORD CHANGE MODAL ══ */}
+      {/* == FIRST-LOGIN PASSWORD CHANGE MODAL == */}
       {/* Shown when backend requiresPasswordChange=true (set on user creation) */}
       {showPasswordChangeModal && (
         <div style={{ position: "fixed", inset: 0, zIndex: 2500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.75)" }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 460, boxShadow: "0 32px 80px rgba(15,23,42,0.4)", overflow: "hidden", animation: "popIn 0.25s ease" }}>
             {/* Header */}
             <div style={{ background: "linear-gradient(135deg,#1E3A5F,#2563EB)", padding: "24px 24px 20px", borderRadius: "24px 24px 0 0", position: "relative" }}>
-              {/* No close button — password change is mandatory on first login */}
+              {/* No close button - password change is mandatory on first login */}
               <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10 }}>
                 <div style={{ width: 48, height: 48, borderRadius: 14, background: "rgba(255,255,255,0.15)", border: "1.5px solid rgba(255,255,255,0.3)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
@@ -7388,8 +7666,8 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#64748B", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Requirements</div>
                 {[
                   { rule: "At least 8 characters", met: pwForm.newPass.length >= 8 },
-                  { rule: "Uppercase letter (A–Z)", met: /[A-Z]/.test(pwForm.newPass) },
-                  { rule: "Number (0–9)", met: /[0-9]/.test(pwForm.newPass) },
+                  { rule: "Uppercase letter (A-Z)", met: /[A-Z]/.test(pwForm.newPass) },
+                  { rule: "Number (0-9)", met: /[0-9]/.test(pwForm.newPass) },
                   { rule: "Special character (recommended)", met: /[^A-Za-z0-9]/.test(pwForm.newPass) },
                 ].map(r => (
                   <div key={r.rule} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: r.met ? "#16A34A" : "#94A3B8", marginBottom: 4 }}>
@@ -7430,14 +7708,14 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                         if (r.ok || r.status === 200 || r.status === 204) { ok = true; break; }
                         // 400 means wrong payload shape but endpoint exists - still mark ok
                         if (r.status === 400) {
-                          ok = true; break; // 400 but endpoint reached — treat as attempted
+                          ok = true; break; // 400 but endpoint reached - treat as attempted
                         }
                       } catch { /* try next */ }
                     }
 
                     // Regardless of API result: clear the flag and close modal
                     localStorage.removeItem("fin_requires_pw_change");
-                    // Set permanent per-user done key — modal will NEVER show again for this user
+                    // Set permanent per-user done key - modal will NEVER show again for this user
                     const doneUid = localStorage.getItem("fin_user_id");
                     if (doneUid) localStorage.setItem(`fin_pw_changed_${doneUid}`, "true");
                     // Mark onboarding as done so the questionnaire never shows for this user
@@ -7462,7 +7740,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                 }}
               >
                 {pwSaving
-                  ? <><img src={logoImg} alt="" style={{ width: 18, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} /> Saving…</>
+                  ? <><img src={logoImg} alt="" style={{ width: 18, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" }} /> Saving...</>
                   : <><Lock size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }} />Set New Password</>}
               </button>
             </div>
@@ -7470,7 +7748,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
         </div>
       )}
 
-      {/* ══ SUBSCRIPTION WELCOME POPUP ══ */}
+      {/* == SUBSCRIPTION WELCOME POPUP == */}
       {showSubPopup && (
         <div style={{ position: "fixed", inset: 0, zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.65)" }} onClick={() => setShowSubPopup(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 420, boxShadow: "0 32px 80px rgba(15,23,42,0.35)", overflow: "hidden", animation: "popIn 0.25s ease" }}>
@@ -7531,7 +7809,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
           }}
         />
       )}
-      {/* ══ GUEST TRIAL EXPIRED POPUP ══ */}
+      {/* == GUEST TRIAL EXPIRED POPUP == */}
       {showGuestTrialExpiredPopup && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)", background: "rgba(15,23,42,0.75)" }}
@@ -7555,7 +7833,7 @@ By clicking "Accept & Continue", you confirm that you have read, understood, and
                 <span style={{ background: "rgba(255,255,255,0.25)", color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 10px", borderRadius: 20, letterSpacing: "0.04em", textTransform: "uppercase", flexShrink: 0 }}>Limited Offer</span>
               </div>
               <p style={{ fontSize: 13, color: "#D1FAE5", margin: 0, lineHeight: 1.65 }}>
-                Raise support tickets <strong style={{ color: "#fff" }}>completely free</strong> for your first 2 months — no subscription needed. Get priority help from our team on any issue, anytime.
+                Raise support tickets <strong style={{ color: "#fff" }}>completely free</strong> for your first 2 months - no subscription needed. Get priority help from our team on any issue, anytime.
               </p>
             </div>
             {/* Body */}

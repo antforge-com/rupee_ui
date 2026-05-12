@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import { MouseEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import logoImg from '../assests/Meetmasterslogopng.png';
+import headerLogoImg from '../assests/MeetMastersHorizontalLogo.png';
+import logoImg from '../assests/MeetMastersMLogo.png';
 import { API_BASE_URL } from "../config/api";
 import { checkOtp as apiCheckOtp, sendRegistrationOtp } from "../services/api";
 import { formatNameLikeInput, startsWithNumber } from "../utils/formUtils";
@@ -189,7 +190,7 @@ export default function RegisterPage() {
     setSendingOtp(true); setSendOtpError(""); setErrors(x => ({ ...x, email: "" }));
     try {
       // Pass the mobile number so the backend can also dispatch an SMS OTP when
-      // SMS is enabled.  sendRegistrationOtp treats phoneNumber as optional —
+      // SMS is enabled.  sendRegistrationOtp treats phoneNumber as optional -
       // if the user hasn't filled it in yet we simply omit it.
       const cleanMobile = mobileNumber.replace(/\s/g, "");
       await sendRegistrationOtp(clean, cleanMobile || undefined);
@@ -249,12 +250,12 @@ export default function RegisterPage() {
     setInlineOtpError("");
 
     try {
-      // POST /api/users/check-otp — validates the OTP against the backend without
+      // POST /api/users/check-otp - validates the OTP against the backend without
       // consuming it. The OTP is marked as used later when /onboarding is called.
       // This gives the user immediate feedback if they typed the wrong code.
       await apiCheckOtp(sanitizeEmail(email), otp);
 
-      // Backend confirmed the OTP is valid — store it so handleSubmit can forward
+      // Backend confirmed the OTP is valid - store it so handleSubmit can forward
       // it to /onboarding which will do the final consume (verifyAndMarkOtpUsed).
       setConfirmedOtp(otp);
       setEmailVerified(true);
@@ -291,7 +292,7 @@ export default function RegisterPage() {
     else if (!EMAIL_REGEX.test(cleanedEmail)) e.email = "Enter a valid email address";
     if (cleanedLocation && startsWithNumber(cleanedLocation)) e.location = "Location cannot start with a number";
     if (cleanedLocation && cleanedLocation.length < MIN_TEXT_LENGTH) e.location = "Enter a valid location";
-    // FIX: emailVerified check removed here — handled separately in handleSubmit to avoid leaking error outside OTP box
+    // FIX: emailVerified check removed here - handled separately in handleSubmit to avoid leaking error outside OTP box
     if (!selectedPlan) e.plan = "Please select a subscription plan";
     setErrors(e); return Object.keys(e).length === 0;
   };
@@ -387,16 +388,15 @@ export default function RegisterPage() {
         </div>
       )}
 
-      <div style={{ maxWidth: '600px', width: '100%', margin: '0 auto' }} className="animate-fade-up">
+      <div className="register-shell animate-fade-up" style={{ maxWidth: '600px', width: '100%', margin: '0 auto' }}>
 
-        <div className="section-modern" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+        <div className="section-modern register-header-card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
           <button onClick={() => navigate("/")} className="icon-button-circle" style={{ background: 'var(--bg-body)' }}>
             <ArrowLeft size={20} />
           </button>
           <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-            <img src={logoImg} alt="Meet The Masters"
-              style={{ height: 40, width: 'auto', objectFit: 'contain', display: 'block' }} />
-            <div className="auth-brand" style={{ fontSize: '13px', marginBottom: 0 }}>MEET THE MASTERS</div>
+            <img src={headerLogoImg} alt="Meet The Masters"
+              style={{ height: 44, width: 'auto', maxWidth: 260, objectFit: 'contain', display: 'block' }} />
             <div className="auth-tagline" style={{ fontSize: '9px', marginBottom: 0 }}>Create Your Account</div>
           </div>
           <div style={{ width: 36 }} />
@@ -414,8 +414,8 @@ export default function RegisterPage() {
 
           <div className="auth-input-group">
             <label className="label-base">MOBILE NUMBER <span style={{ color: 'var(--color-danger)' }}>*</span></label>
-            <div style={{ display: "flex" }}>
-              <span style={{ display: "flex", alignItems: "center", padding: "0 14px", background: "var(--bg-body)", border: "1.5px solid var(--border-color)", borderRight: "none", borderRadius: "var(--radius-md) 0 0 var(--radius-md)", fontSize: 14, color: "var(--text-muted)", fontWeight: 700 }}>+91</span>
+            <div className="phone-input-row" style={{ display: "flex" }}>
+              <span className="phone-input-prefix" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "0 14px", background: "var(--bg-body)", border: "1.5px solid var(--border-color)", borderRight: "none", borderRadius: "var(--radius-md) 0 0 var(--radius-md)", fontSize: 14, color: "var(--text-muted)", fontWeight: 700, whiteSpace: "nowrap", flex: "0 0 54px", lineHeight: 1 }}>+91</span>
               <input
                 value={mobileNumber}
                 onChange={e => { setMobileNumber(e.target.value.replace(/\D/g, "").slice(0, 10)); setErrors(x => ({ ...x, mobileNumber: "" })); }}
@@ -444,7 +444,7 @@ export default function RegisterPage() {
 
           <div className="auth-input-group" style={{ marginBottom: 0 }}>
             <label className="label-base">EMAIL ADDRESS <span style={{ color: 'var(--color-danger)' }}>*</span></label>
-            <div style={{ display: "flex", gap: 10 }}>
+            <div className="email-otp-row" style={{ display: "flex", gap: 10 }}>
               <input
                 value={email}
                 onChange={e => { setEmail(e.target.value); if (emailVerified || otpBoxVisible) resetEmailVerification(); }}
@@ -452,7 +452,7 @@ export default function RegisterPage() {
                 type="email"
                 disabled={emailVerified}
                 className={`input-base ${errors.email ? "input-error" : ""}`}
-                style={{ flex: 1, ...(emailVerified ? { borderColor: 'var(--color-primary)', background: 'var(--color-primary-light)' } : {}) }}
+                  style={{ flex: 1, minWidth: 0, ...(emailVerified ? { borderColor: 'var(--color-primary)', background: 'var(--color-primary-light)' } : {}) }}
               />
               {emailVerified ? (
                 <div className="badge badge-info" style={{ height: 42, paddingLeft: 16, paddingRight: 16 }}>
@@ -478,24 +478,24 @@ export default function RegisterPage() {
           </div>
 
           {otpBoxVisible && !emailVerified && (
-            <div className="section-modern animate-fade-up" style={{ marginTop: 16, background: 'var(--color-primary-light)', border: '1px solid var(--color-info-border)', padding: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div className="section-modern register-otp-card animate-fade-up" style={{ marginTop: 16, background: 'var(--color-primary-light)', border: '1px solid var(--color-info-border)', padding: '20px' }}>
+              <div className="register-otp-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <div>
                   <div style={{ fontWeight: 800, color: 'var(--color-primary)', fontSize: '14px' }}><Mail size={16} style={{ verticalAlign: 'middle', marginRight: '6px' }} /> Verify Email</div>
                   <div style={{ color: 'var(--text-muted)', textTransform: 'none', lineHeight: 1.4 }}>
                     <span style={{ fontSize: '12px' }}>OTP sent to </span>
-                    <span style={{ fontSize: '11px', fontWeight: 700 }}>{otpSentToEmail}</span>
+                    <span className="register-otp-email" style={{ fontSize: '11px', fontWeight: 700 }}>{otpSentToEmail}</span>
                   </div>
                 </div>
                 <button onClick={() => setOtpBoxVisible(false)} className="icon-button-circle" style={{ width: 28, height: 28 }}><X size={14} /></button>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16 }} onPaste={handleInlineOtpPaste}>
+              <div className="register-otp-grid" style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16 }} onPaste={handleInlineOtpPaste}>
                 {inlineOtp.map((val, i) => (
                   <input key={i} ref={el => { inlineOtpRefs.current[i] = el; }} value={val} maxLength={1} inputMode="numeric"
                     onChange={e => handleInlineOtpChange(i, e.target.value)}
                     onKeyDown={e => handleInlineOtpKeyDown(i, e)}
-                    className="input-base"
+                    className="input-base register-otp-input"
                     style={{ width: 44, height: 54, textAlign: 'center', fontSize: '20px', fontWeight: '800', padding: 0 }}
                   />
                 ))}
@@ -538,7 +538,7 @@ export default function RegisterPage() {
         <div className="section-modern">
           <h2 className="section-modern-title"><ShieldCheck size={20} style={{ verticalAlign: 'middle', marginRight: '8px', color: 'var(--color-primary)' }} /> Subscription Plan</h2>
 
-          {/* Badge row — highlight based on selected plan */}
+          {/* Badge row - highlight based on selected plan */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
             <div className="badge" style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -611,7 +611,7 @@ export default function RegisterPage() {
                         <div style={{ fontSize: '20px', fontWeight: 900, color: isSelected ? activePriceColor : (free ? 'var(--text-light)' : 'var(--color-primary)') }}>
                           {free ? "Free" : `₹${plan.discountPrice}`}
                         </div>
-                        {/* Radio circle — filled when selected, correct colour per plan type */}
+                        {/* Radio circle - filled when selected, correct colour per plan type */}
                         <div style={{
                           width: 22, height: 22, borderRadius: '50%',
                           border: `2.5px solid ${isSelected ? activeRadio : 'var(--border-color)'}`,

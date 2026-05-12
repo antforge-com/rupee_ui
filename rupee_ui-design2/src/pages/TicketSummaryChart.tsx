@@ -49,7 +49,7 @@ const formatDay = (d: Date) =>
   d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
 
 const formatWeek = (start: Date, end: Date) =>
-  `${formatDay(start)} – ${formatDay(end)}`;
+  `${formatDay(start)} - ${formatDay(end)}`;
 
 const startOfDay = (d: Date) => {
   const c = new Date(d);
@@ -209,7 +209,7 @@ const TicketSummaryChart: React.FC<Props> = ({ tickets, consultantNameMap = {} }
           },
           {
             label: `Top ${groupBy.charAt(0).toUpperCase() + groupBy.slice(1)}`,
-            value: topGroup ? topGroup[0] : "—",
+            value: topGroup ? topGroup[0] : "-",
             color: "#7C3AED", bg: "#F5F3FF",
             small: true,
           },

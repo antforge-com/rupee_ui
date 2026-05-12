@@ -8,7 +8,7 @@ export interface Advisor {
 }
 
 // ✅ Added Exported Type
-export type BookingStatus = 'CONFIRMED' | 'PENDING' | 'COMPLETED';
+export type BookingStatus = 'CONFIRMED' | 'PENDING' | 'COMPLETED' | 'CANCELLED';
 
 export interface Booking {
   id: number;

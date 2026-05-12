@@ -1,0 +1,559 @@
+import { createHotContext as __vite__createHotContext } from "/@vite/client";import.meta.hot = __vite__createHotContext("/src/components/ForcePasswordChangeModal.tsx");import __vite__cjsImport0_react_jsxDevRuntime from "/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=a1dfa202"; const Fragment = __vite__cjsImport0_react_jsxDevRuntime["Fragment"]; const jsxDEV = __vite__cjsImport0_react_jsxDevRuntime["jsxDEV"];
+import * as RefreshRuntime from "/@react-refresh";
+const inWebWorker = typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+let prevRefreshReg;
+let prevRefreshSig;
+if (import.meta.hot && !inWebWorker) {
+  if (!window.$RefreshReg$) {
+    throw new Error(
+      "@vitejs/plugin-react can't detect preamble. Something is wrong."
+    );
+  }
+  prevRefreshReg = window.$RefreshReg$;
+  prevRefreshSig = window.$RefreshSig$;
+  window.$RefreshReg$ = RefreshRuntime.getRefreshReg("C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx");
+  window.$RefreshSig$ = RefreshRuntime.createSignatureFunctionForTransform;
+}
+var _s = $RefreshSig$();
+import __vite__cjsImport3_react from "/node_modules/.vite/deps/react.js?v=a1dfa202"; const useEffect = __vite__cjsImport3_react["useEffect"]; const useState = __vite__cjsImport3_react["useState"];
+import logoImg from "/src/assests/MeetMastersMLogo.png?import";
+import { changePassword, getCurrentUser } from "/src/services/api.ts";
+const overlayStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 2500,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+  backdropFilter: "blur(8px)",
+  background: "rgba(15,23,42,0.75)"
+};
+export default function ForcePasswordChangeModal() {
+  _s();
+  const [visible, setVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [form, setForm] = useState({ newPass: "", confirmPass: "" });
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const storedUserId = localStorage.getItem("fin_user_id");
+      const doneKey = storedUserId ? `fin_pw_changed_${storedUserId}` : null;
+      const alreadyChanged = doneKey ? localStorage.getItem(doneKey) === "true" : false;
+      if (alreadyChanged) {
+        localStorage.removeItem("fin_requires_pw_change");
+        if (active) setVisible(false);
+        return;
+      }
+      if (localStorage.getItem("fin_requires_pw_change") === "true" && active) {
+        setVisible(true);
+      }
+      try {
+        const user = await getCurrentUser();
+        const uid = user?.id ? String(user.id) : storedUserId;
+        const permDoneKey = uid ? `fin_pw_changed_${uid}` : null;
+        const permAlreadyDone = permDoneKey ? localStorage.getItem(permDoneKey) === "true" : false;
+        if (permAlreadyDone) {
+          localStorage.removeItem("fin_requires_pw_change");
+          if (active) setVisible(false);
+          return;
+        }
+        if (user?.requiresPasswordChange === true) {
+          localStorage.setItem("fin_requires_pw_change", "true");
+          if (active) setVisible(true);
+        }
+      } catch {
+      }
+    };
+    load();
+    return () => {
+      active = false;
+    };
+  }, []);
+  if (!visible) return null;
+  const score = (form.newPass.length >= 8 ? 1 : 0) + (/[A-Z]/.test(form.newPass) ? 1 : 0) + (/[0-9]/.test(form.newPass) ? 1 : 0) + (/[^A-Za-z0-9]/.test(form.newPass) ? 1 : 0);
+  const levels = ["", "Weak", "Fair", "Good", "Strong"];
+  const colors = ["", "#EF4444", "#F59E0B", "#22C55E", "#16A34A"];
+  const handleSubmit = async () => {
+    if (!form.newPass || form.newPass !== form.confirmPass) {
+      setError("Passwords don't match.");
+      return;
+    }
+    if (form.newPass.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await changePassword({ newPassword: form.newPass, confirmPassword: form.confirmPass });
+      localStorage.removeItem("fin_requires_pw_change");
+      const doneUid = localStorage.getItem("fin_user_id");
+      if (doneUid) localStorage.setItem(`fin_pw_changed_${doneUid}`, "true");
+      setForm({ newPass: "", confirmPass: "" });
+      setVisible(false);
+    } catch (err) {
+      setError(String(err?.message || "Failed to change password. Please try again."));
+    } finally {
+      setLoading(false);
+    }
+  };
+  return /* @__PURE__ */ jsxDEV("div", { style: overlayStyle, children: /* @__PURE__ */ jsxDEV(
+    "div",
+    {
+      onClick: (e) => e.stopPropagation(),
+      style: { background: "#fff", borderRadius: 22, width: "100%", maxWidth: 430, boxShadow: "0 32px 80px rgba(15,23,42,0.4)", overflow: "hidden" },
+      children: [
+        /* @__PURE__ */ jsxDEV("div", { style: { background: "var(--portal-profile-gradient)", padding: "18px 20px 14px" }, children: [
+          /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }, children: [
+            /* @__PURE__ */ jsxDEV("div", { style: { width: 40, height: 40, borderRadius: 12, background: "rgba(255,255,255,0.15)", border: "1.5px solid rgba(255,255,255,0.3)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }, children: /* @__PURE__ */ jsxDEV("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "white", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+              /* @__PURE__ */ jsxDEV("rect", { x: "3", y: "11", width: "18", height: "11", rx: "2" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 133,
+                columnNumber: 151
+              }, this),
+              /* @__PURE__ */ jsxDEV("path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 133,
+                columnNumber: 202
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 133,
+              columnNumber: 15
+            }, this) }, void 0, false, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 132,
+              columnNumber: 13
+            }, this),
+            /* @__PURE__ */ jsxDEV("div", { children: [
+              /* @__PURE__ */ jsxDEV("div", { style: { fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#99F6E4", marginBottom: 4 }, children: "Security Required" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 136,
+                columnNumber: 15
+              }, this),
+              /* @__PURE__ */ jsxDEV("h3", { style: { fontSize: 16, fontWeight: 800, color: "#fff", margin: 0 }, children: "Set Your New Password" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 137,
+                columnNumber: 15
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 135,
+              columnNumber: 13
+            }, this)
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 131,
+            columnNumber: 11
+          }, this),
+          /* @__PURE__ */ jsxDEV("p", { style: { fontSize: 12, color: "#A5F3FC", margin: 0, lineHeight: 1.45 }, children: "Your account was created with a temporary password. Please set a new secure password to continue." }, void 0, false, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 140,
+            columnNumber: 11
+          }, this)
+        ] }, void 0, true, {
+          fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+          lineNumber: 130,
+          columnNumber: 9
+        }, this),
+        /* @__PURE__ */ jsxDEV("div", { style: { padding: "18px 20px 20px" }, children: [
+          /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", alignItems: "flex-start", gap: 8, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 10, padding: "9px 12px", marginBottom: 14 }, children: [
+            /* @__PURE__ */ jsxDEV("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "#B45309", strokeWidth: "2", strokeLinecap: "round", style: { flexShrink: 0, marginTop: 1 }, children: [
+              /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "10" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 147,
+                columnNumber: 168
+              }, this),
+              /* @__PURE__ */ jsxDEV("line", { x1: "12", y1: "8", x2: "12", y2: "12" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 147,
+                columnNumber: 201
+              }, this),
+              /* @__PURE__ */ jsxDEV("line", { x1: "12", y1: "16", x2: "12.01", y2: "16" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 147,
+                columnNumber: 240
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 147,
+              columnNumber: 13
+            }, this),
+            /* @__PURE__ */ jsxDEV("span", { style: { fontSize: 12, color: "#92400E", fontWeight: 600, lineHeight: 1.5 }, children: "Set a secure password to finish activating your account." }, void 0, false, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 148,
+              columnNumber: 13
+            }, this)
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 146,
+            columnNumber: 11
+          }, this),
+          error && /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", alignItems: "center", gap: 8, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 9, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#B91C1C", fontWeight: 600 }, children: [
+            /* @__PURE__ */ jsxDEV("svg", { width: "15", height: "15", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+              /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "10" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 155,
+                columnNumber: 135
+              }, this),
+              /* @__PURE__ */ jsxDEV("line", { x1: "12", y1: "8", x2: "12", y2: "12" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 155,
+                columnNumber: 168
+              }, this),
+              /* @__PURE__ */ jsxDEV("line", { x1: "12", y1: "16", x2: "12.01", y2: "16" }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 155,
+                columnNumber: 207
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 155,
+              columnNumber: 15
+            }, this),
+            error
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 154,
+            columnNumber: 11
+          }, this),
+          /* @__PURE__ */ jsxDEV("div", { style: { marginBottom: 14 }, children: [
+            /* @__PURE__ */ jsxDEV("label", { style: { fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }, children: "New Password *" }, void 0, false, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 161,
+              columnNumber: 13
+            }, this),
+            /* @__PURE__ */ jsxDEV("div", { style: { position: "relative" }, children: [
+              /* @__PURE__ */ jsxDEV(
+                "input",
+                {
+                  type: showNew ? "text" : "password",
+                  value: form.newPass,
+                  onChange: (e) => {
+                    setForm((p) => ({ ...p, newPass: e.target.value }));
+                    setError("");
+                  },
+                  placeholder: "Min. 8 characters",
+                  style: { width: "100%", padding: "11px 44px 11px 14px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }
+                },
+                void 0,
+                false,
+                {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 163,
+                  columnNumber: 15
+                },
+                this
+              ),
+              /* @__PURE__ */ jsxDEV("button", { type: "button", onClick: () => setShowNew((v) => !v), style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94A3B8", display: "flex", alignItems: "center", justifyContent: "center" }, children: showNew ? /* @__PURE__ */ jsxDEV("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+                /* @__PURE__ */ jsxDEV("path", { d: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 172,
+                  columnNumber: 137
+                }, this),
+                /* @__PURE__ */ jsxDEV("path", { d: "M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 172,
+                  columnNumber: 229
+                }, this),
+                /* @__PURE__ */ jsxDEV("line", { x1: "1", y1: "1", x2: "23", y2: "23" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 172,
+                  columnNumber: 312
+                }, this)
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 172,
+                columnNumber: 17
+              }, this) : /* @__PURE__ */ jsxDEV("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+                /* @__PURE__ */ jsxDEV("path", { d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 173,
+                  columnNumber: 137
+                }, this),
+                /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "3" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 173,
+                  columnNumber: 194
+                }, this)
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 173,
+                columnNumber: 17
+              }, this) }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 170,
+                columnNumber: 15
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 162,
+              columnNumber: 13
+            }, this),
+            form.newPass && /* @__PURE__ */ jsxDEV("div", { style: { marginTop: 6 }, children: [
+              /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", gap: 3, marginBottom: 3 }, children: [1, 2, 3, 4].map(
+                (i) => /* @__PURE__ */ jsxDEV("div", { style: { flex: 1, height: 4, borderRadius: 3, background: score >= i ? colors[score] : "#F1F5F9", transition: "background 0.2s" } }, i, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 180,
+                  columnNumber: 17
+                }, this)
+              ) }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 178,
+                columnNumber: 17
+              }, this),
+              /* @__PURE__ */ jsxDEV("span", { style: { fontSize: 10, fontWeight: 700, color: colors[score] }, children: [
+                levels[score],
+                " password"
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 183,
+                columnNumber: 17
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 177,
+              columnNumber: 13
+            }, this)
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 160,
+            columnNumber: 11
+          }, this),
+          /* @__PURE__ */ jsxDEV("div", { style: { marginBottom: 14 }, children: [
+            /* @__PURE__ */ jsxDEV("label", { style: { fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }, children: "Confirm Password *" }, void 0, false, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 189,
+              columnNumber: 13
+            }, this),
+            /* @__PURE__ */ jsxDEV("div", { style: { position: "relative" }, children: [
+              /* @__PURE__ */ jsxDEV(
+                "input",
+                {
+                  type: showConfirm ? "text" : "password",
+                  value: form.confirmPass,
+                  onChange: (e) => {
+                    setForm((p) => ({ ...p, confirmPass: e.target.value }));
+                    setError("");
+                  },
+                  placeholder: "Re-enter new password",
+                  style: { width: "100%", padding: "11px 44px 11px 14px", border: `1.5px solid ${form.confirmPass && form.confirmPass !== form.newPass ? "#FCA5A5" : "#E2E8F0"}`, borderRadius: 10, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }
+                },
+                void 0,
+                false,
+                {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 191,
+                  columnNumber: 15
+                },
+                this
+              ),
+              /* @__PURE__ */ jsxDEV("button", { type: "button", onClick: () => setShowConfirm((v) => !v), style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94A3B8", display: "flex", alignItems: "center", justifyContent: "center" }, children: showConfirm ? /* @__PURE__ */ jsxDEV("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+                /* @__PURE__ */ jsxDEV("path", { d: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 200,
+                  columnNumber: 137
+                }, this),
+                /* @__PURE__ */ jsxDEV("path", { d: "M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 200,
+                  columnNumber: 229
+                }, this),
+                /* @__PURE__ */ jsxDEV("line", { x1: "1", y1: "1", x2: "23", y2: "23" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 200,
+                  columnNumber: 312
+                }, this)
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 200,
+                columnNumber: 17
+              }, this) : /* @__PURE__ */ jsxDEV("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+                /* @__PURE__ */ jsxDEV("path", { d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 201,
+                  columnNumber: 137
+                }, this),
+                /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "3" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 201,
+                  columnNumber: 194
+                }, this)
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 201,
+                columnNumber: 17
+              }, this) }, void 0, false, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 198,
+                columnNumber: 15
+              }, this)
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 190,
+              columnNumber: 13
+            }, this),
+            form.confirmPass && form.confirmPass !== form.newPass && /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#DC2626", fontWeight: 600, marginTop: 4 }, children: [
+              /* @__PURE__ */ jsxDEV("svg", { width: "12", height: "12", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+                /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "10" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 206,
+                  columnNumber: 137
+                }, this),
+                /* @__PURE__ */ jsxDEV("line", { x1: "15", y1: "9", x2: "9", y2: "15" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 206,
+                  columnNumber: 170
+                }, this),
+                /* @__PURE__ */ jsxDEV("line", { x1: "9", y1: "9", x2: "15", y2: "15" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 206,
+                  columnNumber: 208
+                }, this)
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 206,
+                columnNumber: 17
+              }, this),
+              "Passwords don't match"
+            ] }, void 0, true, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 205,
+              columnNumber: 13
+            }, this)
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 188,
+            columnNumber: 11
+          }, this),
+          /* @__PURE__ */ jsxDEV("div", { style: { background: "#F8FAFC", border: "1px solid #F1F5F9", borderRadius: 10, padding: "10px 12px", marginBottom: 16 }, children: [
+            /* @__PURE__ */ jsxDEV("div", { style: { fontSize: 10, fontWeight: 700, color: "#64748B", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }, children: "Requirements" }, void 0, false, {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 213,
+              columnNumber: 13
+            }, this),
+            [
+              { rule: "At least 8 characters", met: form.newPass.length >= 8 },
+              { rule: "Uppercase letter (A-Z)", met: /[A-Z]/.test(form.newPass) },
+              { rule: "Number (0-9)", met: /[0-9]/.test(form.newPass) },
+              { rule: "Special character (recommended)", met: /[^A-Za-z0-9]/.test(form.newPass) }
+            ].map(
+              (rule) => /* @__PURE__ */ jsxDEV("div", { style: { display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: rule.met ? "#16A34A" : "#94A3B8", marginBottom: 4 }, children: [
+                rule.met ? /* @__PURE__ */ jsxDEV("svg", { width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "#16A34A", strokeWidth: "2.5", strokeLinecap: "round", children: /* @__PURE__ */ jsxDEV("polyline", { points: "20 6 9 17 4 12" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 222,
+                  columnNumber: 132
+                }, this) }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 222,
+                  columnNumber: 15
+                }, this) : /* @__PURE__ */ jsxDEV("svg", { width: "13", height: "13", viewBox: "0 0 24 24", fill: "none", stroke: "#CBD5E1", strokeWidth: "2", strokeLinecap: "round", children: /* @__PURE__ */ jsxDEV("circle", { cx: "12", cy: "12", r: "10" }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 223,
+                  columnNumber: 130
+                }, this) }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 223,
+                  columnNumber: 15
+                }, this),
+                rule.rule
+              ] }, rule.rule, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 220,
+                columnNumber: 13
+              }, this)
+            )
+          ] }, void 0, true, {
+            fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+            lineNumber: 212,
+            columnNumber: 11
+          }, this),
+          /* @__PURE__ */ jsxDEV(
+            "button",
+            {
+              type: "button",
+              disabled: loading || !form.newPass || form.newPass !== form.confirmPass || form.newPass.length < 8,
+              onClick: handleSubmit,
+              style: {
+                width: "100%",
+                padding: "13px",
+                borderRadius: 12,
+                border: "none",
+                background: loading || !form.newPass || form.newPass !== form.confirmPass || form.newPass.length < 8 ? "#E2E8F0" : "var(--color-primary-gradient)",
+                color: loading || !form.newPass || form.newPass !== form.confirmPass || form.newPass.length < 8 ? "#94A3B8" : "#fff",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8
+              },
+              children: loading ? /* @__PURE__ */ jsxDEV(Fragment, { children: [
+                /* @__PURE__ */ jsxDEV("img", { src: logoImg, alt: "", style: { width: 18, height: "auto", animation: "mtmPulse 1.8s ease-in-out infinite" } }, void 0, false, {
+                  fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                  lineNumber: 251,
+                  columnNumber: 15
+                }, this),
+                " Saving..."
+              ] }, void 0, true, {
+                fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+                lineNumber: 251,
+                columnNumber: 13
+              }, this) : "Set New Password"
+            },
+            void 0,
+            false,
+            {
+              fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+              lineNumber: 229,
+              columnNumber: 11
+            },
+            this
+          )
+        ] }, void 0, true, {
+          fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+          lineNumber: 145,
+          columnNumber: 9
+        }, this)
+      ]
+    },
+    void 0,
+    true,
+    {
+      fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+      lineNumber: 126,
+      columnNumber: 7
+    },
+    this
+  ) }, void 0, false, {
+    fileName: "C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx",
+    lineNumber: 125,
+    columnNumber: 5
+  }, this);
+}
+_s(ForcePasswordChangeModal, "xTOzx1oHuPyWGhYm9h9OWP9pRLQ=");
+_c = ForcePasswordChangeModal;
+var _c;
+$RefreshReg$(_c, "ForcePasswordChangeModal");
+if (import.meta.hot && !inWebWorker) {
+  window.$RefreshReg$ = prevRefreshReg;
+  window.$RefreshSig$ = prevRefreshSig;
+}
+if (import.meta.hot && !inWebWorker) {
+  RefreshRuntime.__hmr_import(import.meta.url).then((currentExports) => {
+    RefreshRuntime.registerExportsForReactRefresh("C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx", currentExports);
+    import.meta.hot.accept((nextExports) => {
+      if (!nextExports) return;
+      const invalidateMessage = RefreshRuntime.validateRefreshBoundaryAndEnqueueUpdate("C:/Users/Vamsi/Downloads/rupee_ui-design2/rupee_ui-design2/src/components/ForcePasswordChangeModal.tsx", currentExports, nextExports);
+      if (invalidateMessage) import.meta.hot.invalidate(invalidateMessage);
+    });
+  });
+}
+
+//# sourceMappingURL=data:application/json;base64,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QUtFLFlBQVlGLEtBQUtHLGVBQWVILEtBQUtFLFFBQVFtQixTQUFTLElBQUssWUFBWTtBQUFBLGdCQUNoSHNCLFVBQVU7QUFBQSxnQkFDVkksWUFBWTtBQUFBLGdCQUNaYyxRQUFRO0FBQUEsZ0JBQ1JMLFlBQVk7QUFBQSxnQkFDWjFFLFNBQVM7QUFBQSxnQkFDVEMsWUFBWTtBQUFBLGdCQUNaQyxnQkFBZ0I7QUFBQSxnQkFDaEJzRCxLQUFLO0FBQUEsY0FDUDtBQUFBLGNBRUM5QyxvQkFDRyxtQ0FBRTtBQUFBLHVDQUFDLFNBQUksS0FBS2pCLFNBQVMsS0FBSSxJQUFHLE9BQU8sRUFBRTJELE9BQU8sSUFBSU0sUUFBUSxRQUFRNEIsV0FBVyxxQ0FBcUMsS0FBOUc7QUFBQTtBQUFBO0FBQUE7QUFBQSx1QkFBZ0g7QUFBQSxnQkFBRztBQUFBLG1CQUFySDtBQUFBO0FBQUE7QUFBQTtBQUFBLHFCQUErSCxJQUMvSDtBQUFBO0FBQUEsWUF2Qk47QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBLFVBd0JBO0FBQUEsYUE1R0Y7QUFBQTtBQUFBO0FBQUE7QUFBQSxlQTZHQTtBQUFBO0FBQUE7QUFBQSxJQWhJRjtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUE7QUFBQTtBQUFBO0FBQUEsRUFpSUEsS0FsSUY7QUFBQTtBQUFBO0FBQUE7QUFBQSxTQW1JQTtBQUVKO0FBQUMvRSxHQTlOdUJELDBCQUF3QjtBQUFBLEtBQXhCQTtBQUF3QixJQUFBaUY7QUFBQSxhQUFBQSxJQUFBIiwibmFtZXMiOlsidXNlRWZmZWN0IiwidXNlU3RhdGUiLCJsb2dvSW1nIiwiY2hhbmdlUGFzc3dvcmQiLCJnZXRDdXJyZW50VXNlciIsIm92ZXJsYXlTdHlsZSIsInBvc2l0aW9uIiwiaW5zZXQiLCJ6SW5kZXgiLCJkaXNwbGF5IiwiYWxpZ25JdGVtcyIsImp1c3RpZnlDb250ZW50IiwicGFkZGluZyIsImJhY2tkcm9wRmlsdGVyIiwiYmFja2dyb3VuZCIsIkZvcmNlUGFzc3dvcmRDaGFuZ2VNb2RhbCIsIl9zIiwidmlzaWJsZSIsInNldFZpc2libGUiLCJsb2FkaW5nIiwic2V0TG9hZGluZyIsImVycm9yIiwic2V0RXJyb3IiLCJzaG93TmV3Iiwic2V0U2hvd05ldyIsInNob3dDb25maXJtIiwic2V0U2hvd0NvbmZpcm0iLCJmb3JtIiwic2V0Rm9ybSIsIm5ld1Bhc3MiLCJjb25maXJtUGFzcyIsImFjdGl2ZSIsImxvYWQiLCJzdG9yZWRVc2VySWQiLCJsb2NhbFN0b3JhZ2UiLCJnZXRJdGVtIiwiZG9uZUtleSIsImFscmVhZHlDaGFuZ2VkIiwicmVtb3ZlSXRlbSIsInVzZXIiLCJ1aWQiLCJpZCIsIlN0cmluZyIsInBlcm1Eb25lS2V5IiwicGVybUFscmVhZHlEb25lIiwicmVxdWlyZXNQYXNzd29yZENoYW5nZSIsInNldEl0ZW0iLCJzY29yZSIsImxlbmd0aCIsInRlc3QiLCJsZXZlbHMiLCJjb2xvcnMiLCJoYW5kbGVTdWJtaXQiLCJuZXdQYXNzd29yZCIsImNvbmZpcm1QYXNzd29yZCIsImRvbmVVaWQiLCJlcnIiLCJtZXNzYWdlIiwiZSIsInN0b3BQcm9wYWdhdGlvbiIsImJvcmRlclJhZGl1cyIsIndpZHRoIiwibWF4V2lkdGgiLCJib3hTaGFkb3ciLCJvdmVyZmxvdyIsImdhcCIsIm1hcmdpbkJvdHRvbSIsImhlaWdodCIsImJvcmRlciIsImZsZXhTaHJpbmsiLCJmb250U2l6ZSIsImxldHRlclNwYWNpbmciLCJ0ZXh0VHJhbnNmb3JtIiwiY29sb3IiLCJmb250V2VpZ2h0IiwibWFyZ2luIiwibGluZUhlaWdodCIsIm1hcmdpblRvcCIsInAiLCJ0YXJnZXQiLCJ2YWx1ZSIsIm91dGxpbmUiLCJib3hTaXppbmciLCJmb250RmFtaWx5IiwidiIsInJpZ2h0IiwidG9wIiwidHJhbnNmb3JtIiwiY3Vyc29yIiwibWFwIiwiaSIsImZsZXgiLCJ0cmFuc2l0aW9uIiwicnVsZSIsIm1ldCIsImFuaW1hdGlvbiIsIl9jIl0sImlnbm9yZUxpc3QiOltdLCJzb3VyY2VzIjpbIkZvcmNlUGFzc3dvcmRDaGFuZ2VNb2RhbC50c3giXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IFJlYWN0LCB7IHVzZUVmZmVjdCwgdXNlU3RhdGUgfSBmcm9tIFwicmVhY3RcIjtcbmltcG9ydCBsb2dvSW1nIGZyb20gXCIuLi9hc3Nlc3RzL01lZXRNYXN0ZXJzTUxvZ28ucG5nXCI7XG5pbXBvcnQgeyBjaGFuZ2VQYXNzd29yZCwgZ2V0Q3VycmVudFVzZXIgfSBmcm9tIFwiLi4vc2VydmljZXMvYXBpXCI7XG5cbmNvbnN0IG92ZXJsYXlTdHlsZTogUmVhY3QuQ1NTUHJvcGVydGllcyA9IHtcbiAgcG9zaXRpb246IFwiZml4ZWRcIixcbiAgaW5zZXQ6IDAsXG4gIHpJbmRleDogMjUwMCxcbiAgZGlzcGxheTogXCJmbGV4XCIsXG4gIGFsaWduSXRlbXM6IFwiY2VudGVyXCIsXG4gIGp1c3RpZnlDb250ZW50OiBcImNlbnRlclwiLFxuICBwYWRkaW5nOiAxNixcbiAgYmFja2Ryb3BGaWx0ZXI6IFwiYmx1cig4cHgpXCIsXG4gIGJhY2tncm91bmQ6IFwicmdiYSgxNSwyMyw0MiwwLjc1KVwiLFxufTtcblxuZXhwb3J0IGRlZmF1bHQgZnVuY3Rpb24gRm9yY2VQYXNzd29yZENoYW5nZU1vZGFsKCkge1xuICBjb25zdCBbdmlzaWJsZSwgc2V0VmlzaWJsZV0gPSB1c2VTdGF0ZShmYWxzZSk7XG4gIGNvbnN0IFtsb2FkaW5nLCBzZXRMb2FkaW5nXSA9IHVzZVN0YXRlKGZhbHNlKTtcbiAgY29uc3QgW2Vycm9yLCBzZXRFcnJvcl0gPSB1c2VTdGF0ZShcIlwiKTtcbiAgY29uc3QgW3Nob3dOZXcsIHNldFNob3dOZXddID0gdXNlU3RhdGUoZmFsc2UpO1xuICBjb25zdCBbc2hvd0NvbmZpcm0sIHNldFNob3dDb25maXJtXSA9IHVzZVN0YXRlKGZhbHNlKTtcbiAgY29uc3QgW2Zvcm0sIHNldEZvcm1dID0gdXNlU3RhdGUoeyBuZXdQYXNzOiBcIlwiLCBjb25maXJtUGFzczogXCJcIiB9KTtcblxuICB1c2VFZmZlY3QoKCkgPT4ge1xuICAgIGxldCBhY3RpdmUgPSB0cnVlO1xuXG4gICAgY29uc3QgbG9hZCA9IGFzeW5jICgpID0+IHtcbiAgICAgIGNvbnN0IHN0b3JlZFVzZXJJZCA9IGxvY2FsU3RvcmFnZS5nZXRJdGVtKFwiZmluX3VzZXJfaWRcIik7XG4gICAgICBjb25zdCBkb25lS2V5ID0gc3RvcmVkVXNlcklkID8gYGZpbl9wd19jaGFuZ2VkXyR7c3RvcmVkVXNlcklkfWAgOiBudWxsO1xuICAgICAgY29uc3QgYWxyZWFkeUNoYW5nZWQgPSBkb25lS2V5ID8gbG9jYWxTdG9yYWdlLmdldEl0ZW0oZG9uZUtleSkgPT09IFwidHJ1ZVwiIDogZmFsc2U7XG5cbiAgICAgIGlmIChhbHJlYWR5Q2hhbmdlZCkge1xuICAgICAgICBsb2NhbFN0b3JhZ2UucmVtb3ZlSXRlbShcImZpbl9yZXF1aXJlc19wd19jaGFuZ2VcIik7XG4gICAgICAgIGlmIChhY3RpdmUpIHNldFZpc2libGUoZmFsc2UpO1xuICAgICAgICByZXR1cm47XG4gICAgICB9XG5cbiAgICAgIGlmIChsb2NhbFN0b3JhZ2UuZ2V0SXRlbShcImZpbl9yZXF1aXJlc19wd19jaGFuZ2VcIikgPT09IFwidHJ1ZVwiICYmIGFjdGl2ZSkge1xuICAgICAgICBzZXRWaXNpYmxlKHRydWUpO1xuICAgICAgfVxuXG4gICAgICB0cnkge1xuICAgICAgICBjb25zdCB1c2VyID0gYXdhaXQgZ2V0Q3VycmVudFVzZXIoKTtcbiAgICAgICAgY29uc3QgdWlkID0gdXNlcj8uaWQgPyBTdHJpbmcodXNlci5pZCkgOiBzdG9yZWRVc2VySWQ7XG4gICAgICAgIGNvbnN0IHBlcm1Eb25lS2V5ID0gdWlkID8gYGZpbl9wd19jaGFuZ2VkXyR7dWlkfWAgOiBudWxsO1xuICAgICAgICBjb25zdCBwZXJtQWxyZWFkeURvbmUgPSBwZXJtRG9uZUtleSA/IGxvY2FsU3RvcmFnZS5nZXRJdGVtKHBlcm1Eb25lS2V5KSA9PT0gXCJ0cnVlXCIgOiBmYWxzZTtcblxuICAgICAgICBpZiAocGVybUFscmVhZHlEb25lKSB7XG4gICAgICAgICAgbG9jYWxTdG9yYWdlLnJlbW92ZUl0ZW0oXCJmaW5fcmVxdWlyZXNfcHdfY2hhbmdlXCIpO1xuICAgICAgICAgIGlmIChhY3RpdmUpIHNldFZpc2libGUoZmFsc2UpO1xuICAgICAgICAgIHJldHVybjtcbiAgICAgICAgfVxuXG4gICAgICAgIGlmICh1c2VyPy5yZXF1aXJlc1Bhc3N3b3JkQ2hhbmdlID09PSB0cnVlKSB7XG4gICAgICAgICAgbG9jYWxTdG9yYWdlLnNldEl0ZW0oXCJmaW5fcmVxdWlyZXNfcHdfY2hhbmdlXCIsIFwidHJ1ZVwiKTtcbiAgICAgICAgICBpZiAoYWN0aXZlKSBzZXRWaXNpYmxlKHRydWUpO1xuICAgICAgICB9XG4gICAgICB9IGNhdGNoIHtcbiAgICAgICAgLy8gRmFsbCBiYWNrIHRvIGxvY2FsU3RvcmFnZSBmbGFnIG9ubHkuXG4gICAgICB9XG4gICAgfTtcblxuICAgIGxvYWQoKTtcbiAgICByZXR1cm4gKCkgPT4geyBhY3RpdmUgPSBmYWxzZTsgfTtcbiAgfSwgW10pO1xuXG4gIGlmICghdmlzaWJsZSkgcmV0dXJuIG51bGw7XG5cbiAgY29uc3Qgc2NvcmUgPVxuICAgIChmb3JtLm5ld1Bhc3MubGVuZ3RoID49IDggPyAxIDogMCkgK1xuICAgICgvW0EtWl0vLnRlc3QoZm9ybS5uZXdQYXNzKSA/IDEgOiAwKSArXG4gICAgKC9bMC05XS8udGVzdChmb3JtLm5ld1Bhc3MpID8gMSA6IDApICtcbiAgICAoL1teQS1aYS16MC05XS8udGVzdChmb3JtLm5ld1Bhc3MpID8gMSA6IDApO1xuICBjb25zdCBsZXZlbHMgPSBbXCJcIiwgXCJXZWFrXCIsIFwiRmFpclwiLCBcIkdvb2RcIiwgXCJTdHJvbmdcIl07XG4gIGNvbnN0IGNvbG9ycyA9IFtcIlwiLCBcIiNFRjQ0NDRcIiwgXCIjRjU5RTBCXCIsIFwiIzIyQzU1RVwiLCBcIiMxNkEzNEFcIl07XG5cbiAgY29uc3QgaGFuZGxlU3VibWl0ID0gYXN5bmMgKCkgPT4ge1xuICAgIGlmICghZm9ybS5uZXdQYXNzIHx8IGZvcm0ubmV3UGFzcyAhPT0gZm9ybS5jb25maXJtUGFzcykge1xuICAgICAgc2V0RXJyb3IoXCJQYXNzd29yZHMgZG9uJ3QgbWF0Y2guXCIpO1xuICAgICAgcmV0dXJuO1xuICAgIH1cbiAgICBpZiAoZm9ybS5uZXdQYXNzLmxlbmd0aCA8IDgpIHtcbiAgICAgIHNldEVycm9yKFwiUGFzc3dvcmQgbXVzdCBiZSBhdCBsZWFzdCA4IGNoYXJhY3RlcnMuXCIpO1xuICAgICAgcmV0dXJuO1xuICAgIH1cblxuICAgIHNldExvYWRpbmcodHJ1ZSk7XG4gICAgc2V0RXJyb3IoXCJcIik7XG5cbiAgICB0cnkge1xuICAgICAgYXdhaXQgY2hhbmdlUGFzc3dvcmQoeyBuZXdQYXNzd29yZDogZm9ybS5uZXdQYXNzLCBjb25maXJtUGFzc3dvcmQ6IGZvcm0uY29uZmlybVBhc3MgfSk7XG4gICAgICBsb2NhbFN0b3JhZ2UucmVtb3ZlSXRlbShcImZpbl9yZXF1aXJlc19wd19jaGFuZ2VcIik7XG4gICAgICBjb25zdCBkb25lVWlkID0gbG9jYWxTdG9yYWdlLmdldEl0ZW0oXCJmaW5fdXNlcl9pZFwiKTtcbiAgICAgIGlmIChkb25lVWlkKSBsb2NhbFN0b3JhZ2Uuc2V0SXRlbShgZmluX3B3X2NoYW5nZWRfJHtkb25lVWlkfWAsIFwidHJ1ZVwiKTtcbiAgICAgIHNldEZvcm0oeyBuZXdQYXNzOiBcIlwiLCBjb25maXJtUGFzczogXCJcIiB9KTtcbiAgICAgIHNldFZpc2libGUoZmFsc2UpO1xuICAgIH0gY2F0Y2ggKGVycjogYW55KSB7XG4gICAgICBzZXRFcnJvcihTdHJpbmcoZXJyPy5tZXNzYWdlIHx8IFwiRmFpbGVkIHRvIGNoYW5nZSBwYXNzd29yZC4gUGxlYXNlIHRyeSBhZ2Fpbi5cIikpO1xuICAgIH0gZmluYWxseSB7XG4gICAgICBzZXRMb2FkaW5nKGZhbHNlKTtcbiAgICB9XG4gIH07XG5cbiAgcmV0dXJuIChcbiAgICA8ZGl2IHN0eWxlPXtvdmVybGF5U3R5bGV9PlxuICAgICAgPGRpdlxuICAgICAgICBvbkNsaWNrPXsoZSkgPT4gZS5zdG9wUHJvcGFnYXRpb24oKX1cbiAgICAgICAgc3R5bGU9e3sgYmFja2dyb3VuZDogXCIjZmZmXCIsIGJvcmRlclJhZGl1czogMjIsIHdpZHRoOiBcIjEwMCVcIiwgbWF4V2lkdGg6IDQzMCwgYm94U2hhZG93OiBcIjAgMzJweCA4MHB4IHJnYmEoMTUsMjMsNDIsMC40KVwiLCBvdmVyZmxvdzogXCJoaWRkZW5cIiB9fVxuICAgICAgPlxuICAgICAgICA8ZGl2IHN0eWxlPXt7IGJhY2tncm91bmQ6IFwidmFyKC0tcG9ydGFsLXByb2ZpbGUtZ3JhZGllbnQpXCIsIHBhZGRpbmc6IFwiMThweCAyMHB4IDE0cHhcIiB9fT5cbiAgICAgICAgICA8ZGl2IHN0eWxlPXt7IGRpc3BsYXk6IFwiZmxleFwiLCBhbGlnbkl0ZW1zOiBcImNlbnRlclwiLCBnYXA6IDEyLCBtYXJnaW5Cb3R0b206IDggfX0+XG4gICAgICAgICAgICA8ZGl2IHN0eWxlPXt7IHdpZHRoOiA0MCwgaGVpZ2h0OiA0MCwgYm9yZGVyUmFkaXVzOiAxMiwgYmFja2dyb3VuZDogXCJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpXCIsIGJvcmRlcjogXCIxLjVweCBzb2xpZCByZ2JhKDI1NSwyNTUsMjU1LDAuMylcIiwgZGlzcGxheTogXCJmbGV4XCIsIGFsaWduSXRlbXM6IFwiY2VudGVyXCIsIGp1c3RpZnlDb250ZW50OiBcImNlbnRlclwiLCBmbGV4U2hyaW5rOiAwIH19PlxuICAgICAgICAgICAgICA8c3ZnIHdpZHRoPVwiMjBcIiBoZWlnaHQ9XCIyMFwiIHZpZXdCb3g9XCIwIDAgMjQgMjRcIiBmaWxsPVwibm9uZVwiIHN0cm9rZT1cIndoaXRlXCIgc3Ryb2tlV2lkdGg9XCIyXCIgc3Ryb2tlTGluZWNhcD1cInJvdW5kXCIgc3Ryb2tlTGluZWpvaW49XCJyb3VuZFwiPjxyZWN0IHg9XCIzXCIgeT1cIjExXCIgd2lkdGg9XCIxOFwiIGhlaWdodD1cIjExXCIgcng9XCIyXCIgLz48cGF0aCBkPVwiTTcgMTFWN2E1IDUgMCAwIDEgMTAgMHY0XCIgLz48L3N2Zz5cbiAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgICAgPGRpdj5cbiAgICAgICAgICAgICAgPGRpdiBzdHlsZT17eyBmb250U2l6ZTogMTAsIGxldHRlclNwYWNpbmc6IFwiMC4xNmVtXCIsIHRleHRUcmFuc2Zvcm06IFwidXBwZXJjYXNlXCIsIGNvbG9yOiBcIiM5OUY2RTRcIiwgbWFyZ2luQm90dG9tOiA0IH19PlNlY3VyaXR5IFJlcXVpcmVkPC9kaXY+XG4gICAgICAgICAgICAgIDxoMyBzdHlsZT17eyBmb250U2l6ZTogMTYsIGZvbnRXZWlnaHQ6IDgwMCwgY29sb3I6IFwiI2ZmZlwiLCBtYXJnaW46IDAgfX0+U2V0IFlvdXIgTmV3IFBhc3N3b3JkPC9oMz5cbiAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgIDxwIHN0eWxlPXt7IGZvbnRTaXplOiAxMiwgY29sb3I6IFwiI0E1RjNGQ1wiLCBtYXJnaW46IDAsIGxpbmVIZWlnaHQ6IDEuNDUgfX0+XG4gICAgICAgICAgICBZb3VyIGFjY291bnQgd2FzIGNyZWF0ZWQgd2l0aCBhIHRlbXBvcmFyeSBwYXNzd29yZC4gUGxlYXNlIHNldCBhIG5ldyBzZWN1cmUgcGFzc3dvcmQgdG8gY29udGludWUuXG4gICAgICAgICAgPC9wPlxuICAgICAgICA8L2Rpdj5cblxuICAgICAgICA8ZGl2IHN0eWxlPXt7IHBhZGRpbmc6IFwiMThweCAyMHB4IDIwcHhcIiB9fT5cbiAgICAgICAgICA8ZGl2IHN0eWxlPXt7IGRpc3BsYXk6IFwiZmxleFwiLCBhbGlnbkl0ZW1zOiBcImZsZXgtc3RhcnRcIiwgZ2FwOiA4LCBiYWNrZ3JvdW5kOiBcIiNGRkZCRUJcIiwgYm9yZGVyOiBcIjFweCBzb2xpZCAjRkRFNjhBXCIsIGJvcmRlclJhZGl1czogMTAsIHBhZGRpbmc6IFwiOXB4IDEycHhcIiwgbWFyZ2luQm90dG9tOiAxNCB9fT5cbiAgICAgICAgICAgIDxzdmcgd2lkdGg9XCIxNlwiIGhlaWdodD1cIjE2XCIgdmlld0JveD1cIjAgMCAyNCAyNFwiIGZpbGw9XCJub25lXCIgc3Ryb2tlPVwiI0I0NTMwOVwiIHN0cm9rZVdpZHRoPVwiMlwiIHN0cm9rZUxpbmVjYXA9XCJyb3VuZFwiIHN0eWxlPXt7IGZsZXhTaHJpbms6IDAsIG1hcmdpblRvcDogMSB9fT48Y2lyY2xlIGN4PVwiMTJcIiBjeT1cIjEyXCIgcj1cIjEwXCIgLz48bGluZSB4MT1cIjEyXCIgeTE9XCI4XCIgeDI9XCIxMlwiIHkyPVwiMTJcIiAvPjxsaW5lIHgxPVwiMTJcIiB5MT1cIjE2XCIgeDI9XCIxMi4wMVwiIHkyPVwiMTZcIiAvPjwvc3ZnPlxuICAgICAgICAgICAgPHNwYW4gc3R5bGU9e3sgZm9udFNpemU6IDEyLCBjb2xvcjogXCIjOTI0MDBFXCIsIGZvbnRXZWlnaHQ6IDYwMCwgbGluZUhlaWdodDogMS41IH19PlxuICAgICAgICAgICAgICBTZXQgYSBzZWN1cmUgcGFzc3dvcmQgdG8gZmluaXNoIGFjdGl2YXRpbmcgeW91ciBhY2NvdW50LlxuICAgICAgICAgICAgPC9zcGFuPlxuICAgICAgICAgIDwvZGl2PlxuXG4gICAgICAgICAge2Vycm9yICYmIChcbiAgICAgICAgICAgIDxkaXYgc3R5bGU9e3sgZGlzcGxheTogXCJmbGV4XCIsIGFsaWduSXRlbXM6IFwiY2VudGVyXCIsIGdhcDogOCwgYmFja2dyb3VuZDogXCIjRkVGMkYyXCIsIGJvcmRlcjogXCIxcHggc29saWQgI0ZFQ0FDQVwiLCBib3JkZXJSYWRpdXM6IDksIHBhZGRpbmc6IFwiMTBweCAxNHB4XCIsIG1hcmdpbkJvdHRvbTogMTQsIGZvbnRTaXplOiAxMywgY29sb3I6IFwiI0I5MUMxQ1wiLCBmb250V2VpZ2h0OiA2MDAgfX0+XG4gICAgICAgICAgICAgIDxzdmcgd2lkdGg9XCIxNVwiIGhlaWdodD1cIjE1XCIgdmlld0JveD1cIjAgMCAyNCAyNFwiIGZpbGw9XCJub25lXCIgc3Ryb2tlPVwiY3VycmVudENvbG9yXCIgc3Ryb2tlV2lkdGg9XCIyXCIgc3Ryb2tlTGluZWNhcD1cInJvdW5kXCI+PGNpcmNsZSBjeD1cIjEyXCIgY3k9XCIxMlwiIHI9XCIxMFwiIC8+PGxpbmUgeDE9XCIxMlwiIHkxPVwiOFwiIHgyPVwiMTJcIiB5Mj1cIjEyXCIgLz48bGluZSB4MT1cIjEyXCIgeTE9XCIxNlwiIHgyPVwiMTIuMDFcIiB5Mj1cIjE2XCIgLz48L3N2Zz5cbiAgICAgICAgICAgICAge2Vycm9yfVxuICAgICAgICAgICAgPC9kaXY+XG4gICAgICAgICAgKX1cblxuICAgICAgICAgIDxkaXYgc3R5bGU9e3sgbWFyZ2luQm90dG9tOiAxNCB9fT5cbiAgICAgICAgICAgIDxsYWJlbCBzdHlsZT17eyBmb250U2l6ZTogMTEsIGZvbnRXZWlnaHQ6IDcwMCwgY29sb3I6IFwiIzY0NzQ4QlwiLCB0ZXh0VHJhbnNmb3JtOiBcInVwcGVyY2FzZVwiLCBsZXR0ZXJTcGFjaW5nOiBcIjAuMDVlbVwiLCBkaXNwbGF5OiBcImJsb2NrXCIsIG1hcmdpbkJvdHRvbTogNiB9fT5OZXcgUGFzc3dvcmQgKjwvbGFiZWw+XG4gICAgICAgICAgICA8ZGl2IHN0eWxlPXt7IHBvc2l0aW9uOiBcInJlbGF0aXZlXCIgfX0+XG4gICAgICAgICAgICAgIDxpbnB1dFxuICAgICAgICAgICAgICAgIHR5cGU9e3Nob3dOZXcgPyBcInRleHRcIiA6IFwicGFzc3dvcmRcIn1cbiAgICAgICAgICAgICAgICB2YWx1ZT17Zm9ybS5uZXdQYXNzfVxuICAgICAgICAgICAgICAgIG9uQ2hhbmdlPXsoZSkgPT4geyBzZXRGb3JtKChwKSA9PiAoeyAuLi5wLCBuZXdQYXNzOiBlLnRhcmdldC52YWx1ZSB9KSk7IHNldEVycm9yKFwiXCIpOyB9fVxuICAgICAgICAgICAgICAgIHBsYWNlaG9sZGVyPVwiTWluLiA4IGNoYXJhY3RlcnNcIlxuICAgICAgICAgICAgICAgIHN0eWxlPXt7IHdpZHRoOiBcIjEwMCVcIiwgcGFkZGluZzogXCIxMXB4IDQ0cHggMTFweCAxNHB4XCIsIGJvcmRlcjogXCIxLjVweCBzb2xpZCAjRTJFOEYwXCIsIGJvcmRlclJhZGl1czogMTAsIGZvbnRTaXplOiAxMywgb3V0bGluZTogXCJub25lXCIsIGJveFNpemluZzogXCJib3JkZXItYm94XCIsIGZvbnRGYW1pbHk6IFwiaW5oZXJpdFwiIH19XG4gICAgICAgICAgICAgIC8+XG4gICAgICAgICAgICAgIDxidXR0b24gdHlwZT1cImJ1dHRvblwiIG9uQ2xpY2s9eygpID0+IHNldFNob3dOZXcoKHYpID0+ICF2KX0gc3R5bGU9e3sgcG9zaXRpb246IFwiYWJzb2x1dGVcIiwgcmlnaHQ6IDEyLCB0b3A6IFwiNTAlXCIsIHRyYW5zZm9ybTogXCJ0cmFuc2xhdGVZKC01MCUpXCIsIGJhY2tncm91bmQ6IFwibm9uZVwiLCBib3JkZXI6IFwibm9uZVwiLCBjdXJzb3I6IFwicG9pbnRlclwiLCBjb2xvcjogXCIjOTRBM0I4XCIsIGRpc3BsYXk6IFwiZmxleFwiLCBhbGlnbkl0ZW1zOiBcImNlbnRlclwiLCBqdXN0aWZ5Q29udGVudDogXCJjZW50ZXJcIiB9fT5cbiAgICAgICAgICAgICAgICB7c2hvd05ld1xuICAgICAgICAgICAgICAgICAgPyA8c3ZnIHdpZHRoPVwiMTZcIiBoZWlnaHQ9XCIxNlwiIHZpZXdCb3g9XCIwIDAgMjQgMjRcIiBmaWxsPVwibm9uZVwiIHN0cm9rZT1cImN1cnJlbnRDb2xvclwiIHN0cm9rZVdpZHRoPVwiMlwiIHN0cm9rZUxpbmVjYXA9XCJyb3VuZFwiPjxwYXRoIGQ9XCJNMTcuOTQgMTcuOTRBMTAuMDcgMTAuMDcgMCAwIDEgMTIgMjBjLTcgMC0xMS04LTExLThhMTguNDUgMTguNDUgMCAwIDEgNS4wNi01Ljk0XCIgLz48cGF0aCBkPVwiTTkuOSA0LjI0QTkuMTIgOS4xMiAwIDAgMSAxMiA0YzcgMCAxMSA4IDExIDhhMTguNSAxOC41IDAgMCAxLTIuMTYgMy4xOVwiIC8+PGxpbmUgeDE9XCIxXCIgeTE9XCIxXCIgeDI9XCIyM1wiIHkyPVwiMjNcIiAvPjwvc3ZnPlxuICAgICAgICAgICAgICAgICAgOiA8c3ZnIHdpZHRoPVwiMTZcIiBoZWlnaHQ9XCIxNlwiIHZpZXdCb3g9XCIwIDAgMjQgMjRcIiBmaWxsPVwibm9uZVwiIHN0cm9rZT1cImN1cnJlbnRDb2xvclwiIHN0cm9rZVdpZHRoPVwiMlwiIHN0cm9rZUxpbmVjYXA9XCJyb3VuZFwiPjxwYXRoIGQ9XCJNMSAxMnM0LTggMTEtOCAxMSA4IDExIDgtNCA4LTExIDgtMTEtOC0xMS04elwiIC8+PGNpcmNsZSBjeD1cIjEyXCIgY3k9XCIxMlwiIHI9XCIzXCIgLz48L3N2Zz59XG4gICAgICAgICAgICAgIDwvYnV0dG9uPlxuICAgICAgICAgICAgPC9kaXY+XG4gICAgICAgICAgICB7Zm9ybS5uZXdQYXNzICYmIChcbiAgICAgICAgICAgICAgPGRpdiBzdHlsZT17eyBtYXJnaW5Ub3A6IDYgfX0+XG4gICAgICAgICAgICAgICAgPGRpdiBzdHlsZT17eyBkaXNwbGF5OiBcImZsZXhcIiwgZ2FwOiAzLCBtYXJnaW5Cb3R0b206IDMgfX0+XG4gICAgICAgICAgICAgICAgICB7WzEsIDIsIDMsIDRdLm1hcCgoaSkgPT4gKFxuICAgICAgICAgICAgICAgICAgICA8ZGl2IGtleT17aX0gc3R5bGU9e3sgZmxleDogMSwgaGVpZ2h0OiA0LCBib3JkZXJSYWRpdXM6IDMsIGJhY2tncm91bmQ6IHNjb3JlID49IGkgPyBjb2xvcnNbc2NvcmVdIDogXCIjRjFGNUY5XCIsIHRyYW5zaXRpb246IFwiYmFja2dyb3VuZCAwLjJzXCIgfX0gLz5cbiAgICAgICAgICAgICAgICAgICkpfVxuICAgICAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgICAgICAgIDxzcGFuIHN0eWxlPXt7IGZvbnRTaXplOiAxMCwgZm9udFdlaWdodDogNzAwLCBjb2xvcjogY29sb3JzW3Njb3JlXSB9fT57bGV2ZWxzW3Njb3JlXX0gcGFzc3dvcmQ8L3NwYW4+XG4gICAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgICAgKX1cbiAgICAgICAgICA8L2Rpdj5cblxuICAgICAgICAgIDxkaXYgc3R5bGU9e3sgbWFyZ2luQm90dG9tOiAxNCB9fT5cbiAgICAgICAgICAgIDxsYWJlbCBzdHlsZT17eyBmb250U2l6ZTogMTEsIGZvbnRXZWlnaHQ6IDcwMCwgY29sb3I6IFwiIzY0NzQ4QlwiLCB0ZXh0VHJhbnNmb3JtOiBcInVwcGVyY2FzZVwiLCBsZXR0ZXJTcGFjaW5nOiBcIjAuMDVlbVwiLCBkaXNwbGF5OiBcImJsb2NrXCIsIG1hcmdpbkJvdHRvbTogNiB9fT5Db25maXJtIFBhc3N3b3JkICo8L2xhYmVsPlxuICAgICAgICAgICAgPGRpdiBzdHlsZT17eyBwb3NpdGlvbjogXCJyZWxhdGl2ZVwiIH19PlxuICAgICAgICAgICAgICA8aW5wdXRcbiAgICAgICAgICAgICAgICB0eXBlPXtzaG93Q29uZmlybSA/IFwidGV4dFwiIDogXCJwYXNzd29yZFwifVxuICAgICAgICAgICAgICAgIHZhbHVlPXtmb3JtLmNvbmZpcm1QYXNzfVxuICAgICAgICAgICAgICAgIG9uQ2hhbmdlPXsoZSkgPT4geyBzZXRGb3JtKChwKSA9PiAoeyAuLi5wLCBjb25maXJtUGFzczogZS50YXJnZXQudmFsdWUgfSkpOyBzZXRFcnJvcihcIlwiKTsgfX1cbiAgICAgICAgICAgICAgICBwbGFjZWhvbGRlcj1cIlJlLWVudGVyIG5ldyBwYXNzd29yZFwiXG4gICAgICAgICAgICAgICAgc3R5bGU9e3sgd2lkdGg6IFwiMTAwJVwiLCBwYWRkaW5nOiBcIjExcHggNDRweCAxMXB4IDE0cHhcIiwgYm9yZGVyOiBgMS41cHggc29saWQgJHtmb3JtLmNvbmZpcm1QYXNzICYmIGZvcm0uY29uZmlybVBhc3MgIT09IGZvcm0ubmV3UGFzcyA/IFwiI0ZDQTVBNVwiIDogXCIjRTJFOEYwXCJ9YCwgYm9yZGVyUmFkaXVzOiAxMCwgZm9udFNpemU6IDEzLCBvdXRsaW5lOiBcIm5vbmVcIiwgYm94U2l6aW5nOiBcImJvcmRlci1ib3hcIiwgZm9udEZhbWlseTogXCJpbmhlcml0XCIgfX1cbiAgICAgICAgICAgICAgLz5cbiAgICAgICAgICAgICAgPGJ1dHRvbiB0eXBlPVwiYnV0dG9uXCIgb25DbGljaz17KCkgPT4gc2V0U2hvd0NvbmZpcm0oKHYpID0+ICF2KX0gc3R5bGU9e3sgcG9zaXRpb246IFwiYWJzb2x1dGVcIiwgcmlnaHQ6IDEyLCB0b3A6IFwiNTAlXCIsIHRyYW5zZm9ybTogXCJ0cmFuc2xhdGVZKC01MCUpXCIsIGJhY2tncm91bmQ6IFwibm9uZVwiLCBib3JkZXI6IFwibm9uZVwiLCBjdXJzb3I6IFwicG9pbnRlclwiLCBjb2xvcjogXCIjOTRBM0I4XCIsIGRpc3BsYXk6IFwiZmxleFwiLCBhbGlnbkl0ZW1zOiBcImNlbnRlclwiLCBqdXN0aWZ5Q29udGVudDogXCJjZW50ZXJcIiB9fT5cbiAgICAgICAgICAgICAgICB7c2hvd0NvbmZpcm1cbiAgICAgICAgICAgICAgICAgID8gPHN2ZyB3aWR0aD1cIjE2XCIgaGVpZ2h0PVwiMTZcIiB2aWV3Qm94PVwiMCAwIDI0IDI0XCIgZmlsbD1cIm5vbmVcIiBzdHJva2U9XCJjdXJyZW50Q29sb3JcIiBzdHJva2VXaWR0aD1cIjJcIiBzdHJva2VMaW5lY2FwPVwicm91bmRcIj48cGF0aCBkPVwiTTE3Ljk0IDE3Ljk0QTEwLjA3IDEwLjA3IDAgMCAxIDEyIDIwYy03IDAtMTEtOC0xMS04YTE4LjQ1IDE4LjQ1IDAgMCAxIDUuMDYtNS45NFwiIC8+PHBhdGggZD1cIk05LjkgNC4yNEE5LjEyIDkuMTIgMCAwIDEgMTIgNGM3IDAgMTEgOCAxMSA4YTE4LjUgMTguNSAwIDAgMS0yLjE2IDMuMTlcIiAvPjxsaW5lIHgxPVwiMVwiIHkxPVwiMVwiIHgyPVwiMjNcIiB5Mj1cIjIzXCIgLz48L3N2Zz5cbiAgICAgICAgICAgICAgICAgIDogPHN2ZyB3aWR0aD1cIjE2XCIgaGVpZ2h0PVwiMTZcIiB2aWV3Qm94PVwiMCAwIDI0IDI0XCIgZmlsbD1cIm5vbmVcIiBzdHJva2U9XCJjdXJyZW50Q29sb3JcIiBzdHJva2VXaWR0aD1cIjJcIiBzdHJva2VMaW5lY2FwPVwicm91bmRcIj48cGF0aCBkPVwiTTEgMTJzNC04IDExLTggMTEgOCAxMSA4LTQgOC0xMSA4LTExLTgtMTEtOHpcIiAvPjxjaXJjbGUgY3g9XCIxMlwiIGN5PVwiMTJcIiByPVwiM1wiIC8+PC9zdmc+fVxuICAgICAgICAgICAgICA8L2J1dHRvbj5cbiAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgICAge2Zvcm0uY29uZmlybVBhc3MgJiYgZm9ybS5jb25maXJtUGFzcyAhPT0gZm9ybS5uZXdQYXNzICYmIChcbiAgICAgICAgICAgICAgPGRpdiBzdHlsZT17eyBkaXNwbGF5OiBcImZsZXhcIiwgYWxpZ25JdGVtczogXCJjZW50ZXJcIiwgZ2FwOiA1LCBmb250U2l6ZTogMTEsIGNvbG9yOiBcIiNEQzI2MjZcIiwgZm9udFdlaWdodDogNjAwLCBtYXJnaW5Ub3A6IDQgfX0+XG4gICAgICAgICAgICAgICAgPHN2ZyB3aWR0aD1cIjEyXCIgaGVpZ2h0PVwiMTJcIiB2aWV3Qm94PVwiMCAwIDI0IDI0XCIgZmlsbD1cIm5vbmVcIiBzdHJva2U9XCJjdXJyZW50Q29sb3JcIiBzdHJva2VXaWR0aD1cIjJcIiBzdHJva2VMaW5lY2FwPVwicm91bmRcIj48Y2lyY2xlIGN4PVwiMTJcIiBjeT1cIjEyXCIgcj1cIjEwXCIgLz48bGluZSB4MT1cIjE1XCIgeTE9XCI5XCIgeDI9XCI5XCIgeTI9XCIxNVwiIC8+PGxpbmUgeDE9XCI5XCIgeTE9XCI5XCIgeDI9XCIxNVwiIHkyPVwiMTVcIiAvPjwvc3ZnPlxuICAgICAgICAgICAgICAgIFBhc3N3b3JkcyBkb24ndCBtYXRjaFxuICAgICAgICAgICAgICA8L2Rpdj5cbiAgICAgICAgICAgICl9XG4gICAgICAgICAgPC9kaXY+XG5cbiAgICAgICAgICA8ZGl2IHN0eWxlPXt7IGJhY2tncm91bmQ6IFwiI0Y4RkFGQ1wiLCBib3JkZXI6IFwiMXB4IHNvbGlkICNGMUY1RjlcIiwgYm9yZGVyUmFkaXVzOiAxMCwgcGFkZGluZzogXCIxMHB4IDEycHhcIiwgbWFyZ2luQm90dG9tOiAxNiB9fT5cbiAgICAgICAgICAgIDxkaXYgc3R5bGU9e3sgZm9udFNpemU6IDEwLCBmb250V2VpZ2h0OiA3MDAsIGNvbG9yOiBcIiM2NDc0OEJcIiwgbWFyZ2luQm90dG9tOiA4LCB0ZXh0VHJhbnNmb3JtOiBcInVwcGVyY2FzZVwiLCBsZXR0ZXJTcGFjaW5nOiBcIjAuMDZlbVwiIH19PlJlcXVpcmVtZW50czwvZGl2PlxuICAgICAgICAgICAge1tcbiAgICAgICAgICAgICAgeyBydWxlOiBcIkF0IGxlYXN0IDggY2hhcmFjdGVyc1wiLCBtZXQ6IGZvcm0ubmV3UGFzcy5sZW5ndGggPj0gOCB9LFxuICAgICAgICAgICAgICB7IHJ1bGU6IFwiVXBwZXJjYXNlIGxldHRlciAoQS1aKVwiLCBtZXQ6IC9bQS1aXS8udGVzdChmb3JtLm5ld1Bhc3MpIH0sXG4gICAgICAgICAgICAgIHsgcnVsZTogXCJOdW1iZXIgKDAtOSlcIiwgbWV0OiAvWzAtOV0vLnRlc3QoZm9ybS5uZXdQYXNzKSB9LFxuICAgICAgICAgICAgICB7IHJ1bGU6IFwiU3BlY2lhbCBjaGFyYWN0ZXIgKHJlY29tbWVuZGVkKVwiLCBtZXQ6IC9bXkEtWmEtejAtOV0vLnRlc3QoZm9ybS5uZXdQYXNzKSB9LFxuICAgICAgICAgICAgXS5tYXAoKHJ1bGUpID0+IChcbiAgICAgICAgICAgICAgPGRpdiBrZXk9e3J1bGUucnVsZX0gc3R5bGU9e3sgZGlzcGxheTogXCJmbGV4XCIsIGdhcDogOCwgYWxpZ25JdGVtczogXCJjZW50ZXJcIiwgZm9udFNpemU6IDEyLCBjb2xvcjogcnVsZS5tZXQgPyBcIiMxNkEzNEFcIiA6IFwiIzk0QTNCOFwiLCBtYXJnaW5Cb3R0b206IDQgfX0+XG4gICAgICAgICAgICAgICAge3J1bGUubWV0XG4gICAgICAgICAgICAgICAgICA/IDxzdmcgd2lkdGg9XCIxM1wiIGhlaWdodD1cIjEzXCIgdmlld0JveD1cIjAgMCAyNCAyNFwiIGZpbGw9XCJub25lXCIgc3Ryb2tlPVwiIzE2QTM0QVwiIHN0cm9rZVdpZHRoPVwiMi41XCIgc3Ryb2tlTGluZWNhcD1cInJvdW5kXCI+PHBvbHlsaW5lIHBvaW50cz1cIjIwIDYgOSAxNyA0IDEyXCIgLz48L3N2Zz5cbiAgICAgICAgICAgICAgICAgIDogPHN2ZyB3aWR0aD1cIjEzXCIgaGVpZ2h0PVwiMTNcIiB2aWV3Qm94PVwiMCAwIDI0IDI0XCIgZmlsbD1cIm5vbmVcIiBzdHJva2U9XCIjQ0JENUUxXCIgc3Ryb2tlV2lkdGg9XCIyXCIgc3Ryb2tlTGluZWNhcD1cInJvdW5kXCI+PGNpcmNsZSBjeD1cIjEyXCIgY3k9XCIxMlwiIHI9XCIxMFwiIC8+PC9zdmc+fVxuICAgICAgICAgICAgICAgIHtydWxlLnJ1bGV9XG4gICAgICAgICAgICAgIDwvZGl2PlxuICAgICAgICAgICAgKSl9XG4gICAgICAgICAgPC9kaXY+XG5cbiAgICAgICAgICA8YnV0dG9uXG4gICAgICAgICAgICB0eXBlPVwiYnV0dG9uXCJcbiAgICAgICAgICAgIGRpc2FibGVkPXtsb2FkaW5nIHx8ICFmb3JtLm5ld1Bhc3MgfHwgZm9ybS5uZXdQYXNzICE9PSBmb3JtLmNvbmZpcm1QYXNzIHx8IGZvcm0ubmV3UGFzcy5sZW5ndGggPCA4fVxuICAgICAgICAgICAgb25DbGljaz17aGFuZGxlU3VibWl0fVxuICAgICAgICAgICAgc3R5bGU9e3tcbiAgICAgICAgICAgICAgd2lkdGg6IFwiMTAwJVwiLFxuICAgICAgICAgICAgICBwYWRkaW5nOiBcIjEzcHhcIixcbiAgICAgICAgICAgICAgYm9yZGVyUmFkaXVzOiAxMixcbiAgICAgICAgICAgICAgYm9yZGVyOiBcIm5vbmVcIixcbiAgICAgICAgICAgICAgYmFja2dyb3VuZDogKGxvYWRpbmcgfHwgIWZvcm0ubmV3UGFzcyB8fCBmb3JtLm5ld1Bhc3MgIT09IGZvcm0uY29uZmlybVBhc3MgfHwgZm9ybS5uZXdQYXNzLmxlbmd0aCA8IDgpID8gXCIjRTJFOEYwXCIgOiBcInZhcigtLWNvbG9yLXByaW1hcnktZ3JhZGllbnQpXCIsXG4gICAgICAgICAgICAgIGNvbG9yOiAobG9hZGluZyB8fCAhZm9ybS5uZXdQYXNzIHx8IGZvcm0ubmV3UGFzcyAhPT0gZm9ybS5jb25maXJtUGFzcyB8fCBmb3JtLm5ld1Bhc3MubGVuZ3RoIDwgOCkgPyBcIiM5NEEzQjhcIiA6IFwiI2ZmZlwiLFxuICAgICAgICAgICAgICBmb250U2l6ZTogMTQsXG4gICAgICAgICAgICAgIGZvbnRXZWlnaHQ6IDcwMCxcbiAgICAgICAgICAgICAgY3Vyc29yOiBcInBvaW50ZXJcIixcbiAgICAgICAgICAgICAgZm9udEZhbWlseTogXCJpbmhlcml0XCIsXG4gICAgICAgICAgICAgIGRpc3BsYXk6IFwiZmxleFwiLFxuICAgICAgICAgICAgICBhbGlnbkl0ZW1zOiBcImNlbnRlclwiLFxuICAgICAgICAgICAgICBqdXN0aWZ5Q29udGVudDogXCJjZW50ZXJcIixcbiAgICAgICAgICAgICAgZ2FwOiA4LFxuICAgICAgICAgICAgfX1cbiAgICAgICAgICA+XG4gICAgICAgICAgICB7bG9hZGluZ1xuICAgICAgICAgICAgICA/IDw+PGltZyBzcmM9e2xvZ29JbWd9IGFsdD1cIlwiIHN0eWxlPXt7IHdpZHRoOiAxOCwgaGVpZ2h0OiBcImF1dG9cIiwgYW5pbWF0aW9uOiBcIm10bVB1bHNlIDEuOHMgZWFzZS1pbi1vdXQgaW5maW5pdGVcIiB9fSAvPiBTYXZpbmcuLi48Lz5cbiAgICAgICAgICAgICAgOiBcIlNldCBOZXcgUGFzc3dvcmRcIn1cbiAgICAgICAgICA8L2J1dHRvbj5cbiAgICAgICAgPC9kaXY+XG4gICAgICA8L2Rpdj5cbiAgICA8L2Rpdj5cbiAgKTtcbn1cbiJdLCJmaWxlIjoiQzovVXNlcnMvVmFtc2kvRG93bmxvYWRzL3J1cGVlX3VpLWRlc2lnbjIvcnVwZWVfdWktZGVzaWduMi9zcmMvY29tcG9uZW50cy9Gb3JjZVBhc3N3b3JkQ2hhbmdlTW9kYWwudHN4In0=

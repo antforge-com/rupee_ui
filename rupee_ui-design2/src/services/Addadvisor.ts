@@ -24,6 +24,8 @@ export const createAdvisor = async (consultantData: {
   charges: number;
   shiftTimings: string;
   skills: string[];
+  shiftStartTime?: string;
+  shiftEndTime?: string;
 }) => {
   console.log("[createAdvisor] Token key used:", TOKEN_KEY);
   console.log("[createAdvisor] Token present:", !!localStorage.getItem(TOKEN_KEY));

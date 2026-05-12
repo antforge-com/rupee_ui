@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// api.ts  —  Unified service layer
+// api.ts  -  Unified service layer
 // ─────────────────────────────────────────────────────────────────────────────
 
 import axios from "axios";
@@ -9,7 +9,7 @@ import { decryptLocal } from "./crypto";
 export const BASE_URL = API_BASE_URL;
 
 // ── IST date/time formatters (exported for use in AdminPage, AdvisorDashboard, etc.) ──
-// Backend returns timestamps WITHOUT 'Z' — append it to force UTC parsing before IST conversion
+// Backend returns timestamps WITHOUT 'Z' - append it to force UTC parsing before IST conversion
 const _istToUTC = (iso: string): Date => {
   if (!iso) return new Date(0);
   if (iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso)) return new Date(iso);
@@ -34,6 +34,7 @@ export const parseLocalTime = (t: any): string => {
 };
 
 export const TOKEN_KEY = "fin_token";
+export const SESSION_EVENT_KEY = "fin_session_event";
 export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || "";
 export const clearToken = () => {
@@ -41,6 +42,15 @@ export const clearToken = () => {
   localStorage.removeItem("fin_role");
   localStorage.removeItem("fin_user_id");
   localStorage.removeItem("fin_consultant_id");
+  localStorage.removeItem("fin_user_name");
+  localStorage.removeItem("fin_user_email");
+  localStorage.removeItem("fin_user_phone");
+  localStorage.removeItem("fin_first_login");
+  try {
+    localStorage.setItem(SESSION_EVENT_KEY, `logout:${Date.now()}`);
+  } catch {
+    // Ignore storage errors; local sign-out should still complete.
+  }
 };
 
 // FIX: Strip Spring Security's "ROLE_" prefix at the storage layer so that
@@ -62,7 +72,7 @@ export const debugToken = () => {
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)!;
     const val = localStorage.getItem(key) || "";
-    console.log(`   "${key}" = ${val.length > 80 ? val.substring(0, 80) + "…" : val}`);
+    console.log(`   "${key}" = ${val.length > 80 ? val.substring(0, 80) + "..." : val}`);
   }
   const token = getToken();
   if (!token) {
@@ -84,8 +94,8 @@ export const debugToken = () => {
     const exp = jwtPayload.exp ? new Date(jwtPayload.exp * 1000) : null;
     if (exp) {
       const expired = exp < new Date();
-      console.log(`   Expires: ${exp.toLocaleString()} — ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
-      if (expired) console.error("   ⚠️  Token is expired — log in again!");
+      console.log(`   Expires: ${exp.toLocaleString()} - ${expired ? "❌ EXPIRED" : "✅ Still valid"}`);
+      if (expired) console.error("   ⚠️  Token is expired - log in again!");
     }
     console.groupEnd();
     return jwtPayload;
@@ -105,7 +115,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error?.response?.status === 401) {
-      console.error("🔐 401 Unauthorized — token expired, redirecting to login");
+      console.error("🔐 401 Unauthorized - token expired, redirecting to login");
       clearToken();
       window.location.href = "/login";
     }
@@ -118,16 +128,26 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   } else {
-    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+    console.warn(`⚠️  [axios] No token found under key "${TOKEN_KEY}" - request will be unauthenticated`);
   }
   return config;
 });
 
-export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
+type ApiFetchOptions = RequestInit & {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+  suppressErrorLog?: boolean;
+};
+
+export const apiFetch = async (endpoint: string, options: ApiFetchOptions = {}) => {
+  const { timeoutMs, timeoutMessage, suppressErrorLog, signal, ...requestOptions } = options;
   const url = /^https?:\/\//i.test(endpoint) ? endpoint : `${BASE_URL}${endpoint}`;
   const defaultHeaders: Record<string, string> = { Accept: "application/json" };
+  const controller = timeoutMs ? new AbortController() : null;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const forwardAbort = () => controller?.abort();
 
-  if (!(options.body instanceof FormData)) {
+  if (!(requestOptions.body instanceof FormData)) {
     defaultHeaders["Content-Type"] = "application/json";
   }
 
@@ -135,13 +155,25 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   if (token) {
     defaultHeaders["Authorization"] = `Bearer ${token}`;
   } else {
-    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" — request will be unauthenticated`);
+    console.warn(`⚠️  [fetch] No token found under key "${TOKEN_KEY}" - request will be unauthenticated`);
   }
 
   try {
+    if (controller && signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener("abort", forwardAbort, { once: true });
+      }
+    }
+    if (controller && timeoutMs && timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
     const res = await fetch(url, {
-      ...options,
-      headers: { ...defaultHeaders, ...((options.headers as Record<string, string>) || {}) },
+      ...requestOptions,
+      signal: controller?.signal ?? signal,
+      headers: { ...defaultHeaders, ...((requestOptions.headers as Record<string, string>) || {}) },
     });
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -161,20 +193,32 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
 
     if (!res.ok) {
       if (res.status === 403) {
-        console.error(`🚫 403 Forbidden on ${options.method || "GET"} ${endpoint}`);
+        console.error(`🚫 403 Forbidden on ${requestOptions.method || "GET"} ${endpoint}`);
         console.error("   Response body:", data);
-        console.error("   Calling debugToken() to help diagnose…");
-        debugToken();
+        if (token) {
+          console.error("   Calling debugToken() to help diagnose...");
+          debugToken();
+        } else {
+          console.warn("   No auth token was attached to this request.");
+        }
       }
       throw new Error(data?.message || data?.error || `Request failed with status ${res.status}`);
     }
     return data;
   } catch (err: any) {
-    console.error("API Fetch Error:", err);
+    if (!suppressErrorLog) console.error("API Fetch Error:", err);
+    if (err?.name === "AbortError") {
+      throw new Error(timeoutMessage || "Request timed out. Please try again.");
+    }
     if (err.name === "TypeError" && err.message === "Failed to fetch") {
       throw new Error("Cannot connect to server. Please check if the backend is running.");
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (controller && signal) {
+      signal.removeEventListener("abort", forwardAbort);
+    }
   }
 };
 
@@ -207,8 +251,10 @@ const publicFetch = async (endpoint: string, options: PublicFetchOptions = {}) =
       ...requestOptions,
       signal: controller?.signal ?? signal,
       headers: {
-        "Content-Type": "application/json",
         Accept: "application/json",
+        ...(!(requestOptions.body instanceof FormData) && requestOptions.body
+          ? { "Content-Type": "application/json" }
+          : {}),
         ...((requestOptions.headers as Record<string, string>) || {}),
       },
     });
@@ -477,7 +523,7 @@ export const sendRegistrationOtp = async (email: string, phoneNumber?: string): 
   });
 };
 
-// ── POST /api/users/check-otp  — NO AUTH ──────────────────────────────────────
+// ── POST /api/users/check-otp  - NO AUTH ──────────────────────────────────────
 // Validates the OTP without consuming (marking as used) it.
 // Increments the attempt counter on failure to prevent brute-force attacks.
 // The OTP is fully consumed later when /onboarding is called.
@@ -627,7 +673,7 @@ export const getAvailableTimeslotsByConsultant = async (consultantId: number) =>
     const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
     return extractArray(data);
   } catch {
-    // FIX: Filter fallback to AVAILABLE slots only — prevents showing already-booked slots
+    // FIX: Filter fallback to AVAILABLE slots only - prevents showing already-booked slots
     const all = await getTimeslotsByConsultant(consultantId);
     const filtered = extractArray(all).filter(
       (s: any) => (s.status || "").toUpperCase() === "AVAILABLE"
@@ -657,13 +703,13 @@ export const deleteTimeslot = async (id: number) =>
 export const getConsultantMasterSlots = async (consultantId: number) =>
   extractArray(await apiFetch(`/consultants/${consultantId}/master-timeslots`));
 
-// POST /api/bookings — BookingRequest DTO:
+// POST /api/bookings - BookingRequest DTO:
 // { consultantId, timeSlotId, baseAmount (required), offerId?, meetingMode, userNotes }
 // BookingService calculates: total = (baseAmount - discount) + platformFee automatically
 export const createBooking = async (payload: {
   consultantId: number;
   timeSlotId: number;
-  baseAmount: number;       // required by BookingRequest — server calculates total
+  baseAmount: number;       // required by BookingRequest - server calculates total
   offerId?: number | null;  // optional: which offer to apply
   meetingMode: string;
   userNotes?: string;
@@ -684,7 +730,7 @@ export const createBooking = async (payload: {
   return apiFetch("/bookings", { method: "POST", body: JSON.stringify(body) });
 };
 
-// POST /api/bookings/bulk — BulkBookingRequest DTO:
+// POST /api/bookings/bulk - BulkBookingRequest DTO:
 // { consultantId, timeSlotIds: [id1, id2], baseAmountPerSlot, offerId?, meetingMode, userNotes }
 // Returns BulkBookingResponse { bookings: [], grandTotal }
 export const createBulkBooking = async (payload: {
@@ -719,6 +765,10 @@ export interface SpecialBookingRequestPayload {
   meetingMode: string;
   userNotes: string;
   offerId?: number | null;
+  requestNotes?: string;
+  preferredDate?: string;
+  preferredTime?: string;
+  preferredTimeRange?: string;
 }
 
 export const createSpecialBooking = async (
@@ -736,6 +786,10 @@ export const createSpecialBooking = async (
     meetingMode: payload.meetingMode || "ONLINE",
     userNotes: payload.userNotes || "Special booking request",
     offerId: payload.offerId ?? undefined,
+    requestNotes: payload.requestNotes || payload.userNotes,
+    preferredDate: payload.preferredDate,
+    preferredTime: payload.preferredTime,
+    preferredTimeRange: payload.preferredTimeRange,
   });
 
   return apiFetch("/special-bookings", { method: "POST", body: JSON.stringify(body) });
@@ -846,9 +900,62 @@ export const giveSlotSpecialBooking = async (
   });
 };
 
+export const cancelBooking = async (id: number): Promise<void> =>
+  apiFetch(`/bookings/${id}/cancel`, { method: "PATCH" });
+
+export const cancelSpecialBooking = async (id: number): Promise<void> =>
+  apiFetch(`/special-bookings/${id}/cancel`, { method: "PATCH" });
+
+export const rescheduleBooking = async (
+  id: number,
+  newTimeSlotId: number
+): Promise<any> =>
+  apiFetch(`/bookings/${id}/reschedule`, {
+    method: "PUT",
+    body: JSON.stringify({ newTimeSlotId }),
+  });
+
+export const rescheduleBulkBooking = async (
+  id: number,
+  oldTimeSlotId: number,
+  newTimeSlotId: number
+): Promise<any> =>
+  apiFetch(`/bookings/bulk/${id}/reschedule`, {
+    method: "PUT",
+    body: JSON.stringify({ oldTimeSlotId, newTimeSlotId }),
+  });
+
+export const rescheduleSpecialBooking = async (
+  id: number,
+  payload: { newDate: string; newTime: string }
+): Promise<any> =>
+  apiFetch(`/special-bookings/${id}/reschedule`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
 export const getBookingById = async (id: number) => apiFetch(`/bookings/${id}`);
 
-// Swagger: GET /api/onboarding/{id} — returns full profile (name, email, phone, etc.)
+export const getSpecialBookingById = async (id: number) =>
+  apiFetch(`/special-bookings/${id}`);
+
+export const verifyNormalBookingPayment = async (
+  bookingId: number,
+  payload: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string }
+) => {
+  const params = new URLSearchParams(payload);
+  return apiFetch(`/bookings/${bookingId}/verify-payment?${params.toString()}`, { method: "POST" });
+};
+
+export const verifySpecialBookingPayment = async (
+  specialBookingId: number,
+  payload: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string }
+) => {
+  const params = new URLSearchParams(payload);
+  return apiFetch(`/special-bookings/${specialBookingId}/verify-payment?${params.toString()}`, { method: "POST" });
+};
+
+// Swagger: GET /api/onboarding/{id} - returns full profile (name, email, phone, etc.)
 export const getUserProfile = async (userId: number): Promise<any> => {
   try { return await apiFetch(`/onboarding/${userId}`); } catch { return null; }
 };
@@ -921,7 +1028,7 @@ export const getAllBookings = async (): Promise<any[]> => {
   // Only try /bookings (the base endpoint).
   // /bookings/all → 500 "Unknown column 'b1_0.amount'"
   // /bookings/admin → 500 "Method parameter 'id': Failed to convert"
-  // Both fail on this backend — skip them entirely.
+  // Both fail on this backend - skip them entirely.
   try {
     const response = await api.get("/bookings");
     const extracted = extractArray(response.data);
@@ -986,7 +1093,7 @@ export const getBookingsPage = async (
     const data = await apiFetch(endpoint);
     // Spring Page object: { content:[], totalElements, totalPages, number }
     if (data && typeof data.totalElements === "number") return data;
-    // Fallback: plain array response — wrap it
+    // Fallback: plain array response - wrap it
     const arr = extractArray(data);
     return { content: arr, totalElements: arr.length, totalPages: 1, number: 0 };
   } catch (err: any) {
@@ -1054,7 +1161,7 @@ export const getAllSkills = async (): Promise<any[]> => {
     isActive: s.isActive !== false, // default true
   });
 
-  // Primary: GET /api/skills (SkillMasterController — returns only active skills)
+  // Primary: GET /api/skills (SkillMasterController - returns only active skills)
   const endpoints = ["/skills", "/skill-master", "/skillmaster", "/skill_master"];
   for (const ep of endpoints) {
     try {
@@ -1070,7 +1177,7 @@ export const getAllSkills = async (): Promise<any[]> => {
 };
 export const getSkills = getAllSkills;
 
-// SkillMaster CRUD — for admin panel
+// SkillMaster CRUD - for admin panel
 // Tries /skills first, falls back to /skill-master
 const SKILL_BASE = "/skills"; // primary endpoint
 
@@ -1081,7 +1188,7 @@ export const createSkill = async (payload: { name: string; description?: string 
     try { return await apiFetch(ep, { method: "POST", body: JSON.stringify(backendPayload) }); }
     catch (err: any) { if (!String(err?.message || "").includes("500")) throw err; }
   }
-  throw new Error("Could not create skill — server error on all endpoints.");
+  throw new Error("Could not create skill - server error on all endpoints.");
 };
 
 export const updateSkill = async (id: number, payload: { name: string; description?: string }): Promise<any> => {
@@ -1095,7 +1202,7 @@ export const updateSkill = async (id: number, payload: { name: string; descripti
 };
 
 export const deleteSkill = async (id: number): Promise<void> => {
-  // Primary: DELETE /api/skills/{id} — SkillMasterController soft-deletes skill + cascades to questions + answers
+  // Primary: DELETE /api/skills/{id} - SkillMasterController soft-deletes skill + cascades to questions + answers
   // Fallback to /skill-master/{id} for older backends
   for (const ep of [`/skills/${id}`, `/skill-master/${id}`, `/skillmaster/${id}`]) {
     try { return await apiFetch(ep, { method: "DELETE" }); }
@@ -1193,21 +1300,21 @@ export const createTicket = async (
   // If the caller only passed a category name string (e.g. "Billing") without a
   // numeric categoryId, look it up from the active categories list so the POST
   // never reaches the backend with a missing/null categoryId (which causes 400).
-  // Treat 0 as invalid (placeholder/unset) — same as null
+  // Treat 0 as invalid (placeholder/unset) - same as null
   let resolvedCategoryId = (payload.categoryId != null && payload.categoryId > 0)
     ? payload.categoryId
     : null;
   if (resolvedCategoryId == null && payload.category) {
     try {
       // getActiveTicketCategories() already returns normalised { id, name } objects
-      // from /admin/config/categories — no extra field-normalisation required here.
+      // from /admin/config/categories - no extra field-normalisation required here.
       const cats = await getActiveTicketCategories();
       const match = cats.find(c => c.name.toLowerCase() === payload.category.toLowerCase());
       if (match?.id) {
         resolvedCategoryId = match.id;
       } else if (cats.length > 0) {
         console.warn(
-          `⚠️ [createTicket] No category matched "${payload.category}" — falling back to first active category id=${cats[0].id}`
+          `⚠️ [createTicket] No category matched "${payload.category}" - falling back to first active category id=${cats[0].id}`
         );
         resolvedCategoryId = cats[0].id;
       }
@@ -1218,7 +1325,7 @@ export const createTicket = async (
 
   if (resolvedCategoryId == null) {
     console.warn(
-      "⚠️ [createTicket] categoryId is still null — backend will likely reject with 400 Validation Failed. " +
+      "⚠️ [createTicket] categoryId is still null - backend will likely reject with 400 Validation Failed. " +
       "Ensure categories are loaded and the form passes a valid category name."
     );
   }
@@ -1244,8 +1351,8 @@ export const createTicket = async (
   // a normal allowed cross-origin POST.
   if (isGuestTrial) form.append("guestTrialAccess", "true");
 
-  // Abort after 45 s — backend does synchronous email/notification work that can
-  // block for a long time; without a timeout the UI hangs in "Submitting…" forever.
+  // Abort after 45 s - backend does synchronous email/notification work that can
+  // block for a long time; without a timeout the UI hangs in "Submitting..." forever.
   // The ticket may still be created server-side even if we time out.
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), 45_000);
@@ -1273,13 +1380,13 @@ export const createTicket = async (
       const recovered = await recoverCreatedTicket(requestStartedAt);
       if (recovered) return recovered;
       throw new Error(
-        "The server is taking too long to respond. Your ticket may have been created — " +
+        "The server is taking too long to respond. Your ticket may have been created - " +
         "please refresh the Tickets tab to check before submitting again."
       );
     }
-    // Connection refused / server down — give a clear message instead of "Failed to fetch"
+    // Connection refused / server down - give a clear message instead of "Failed to fetch"
     if (err?.name === "TypeError" || err?.message === "Failed to fetch") {
-      throw new Error("Cannot connect to the server. The backend appears to be offline — please try again in a moment.");
+      throw new Error("Cannot connect to the server. The backend appears to be offline - please try again in a moment.");
     }
     throw err;
   }
@@ -1301,17 +1408,55 @@ const normalizeTicket = (t: any): any => {
   let categoryName: string;
 
   if (t.categoryName && typeof t.categoryName === "string" && t.categoryName.trim()) {
-    // ✅ Prefer the server-resolved string — TicketService.mapToTicketResponse()
-    // now always resolves the categoryId → name before returning the DTO.
     categoryName = t.categoryName.trim();
   } else if (raw && typeof raw === "object") {
-    // Legacy: backend returned category as a nested { id, name } object
     categoryName = String(raw.name || raw.categoryName || raw.label || raw.id || "");
   } else {
-    // Legacy: plain string or numeric ID fallback
     categoryName = String(raw || t.category_name || t.categoryTitle || "");
   }
-  return { ...t, category: categoryName };
+
+  const fullDescription =
+    t.fullEmailBody ||
+    t.emailBody ||
+    t.email_body ||
+    t.originalEmailBody ||
+    t.original_email_body ||
+    t.rawEmailBody ||
+    t.raw_email_body ||
+    t.body ||
+    t.messageBody ||
+    t.message_body ||
+    t.description;
+
+  const descStr = String(fullDescription || "");
+  
+  // Logic to detect if this is an email-to-ticket and extract headers
+  const looksLikeEmail = 
+    /^from:/im.test(descStr) ||
+    /^subject:/im.test(descStr) ||
+    /^sent:/im.test(descStr) ||
+    /^date:/im.test(descStr) ||
+    /original message/i.test(descStr);
+
+  let extractedSubject = t.emailSubject || t.subject || null;
+  let extractedBody = descStr;
+
+  if (looksLikeEmail) {
+    const subMatch = descStr.match(/^subject\s*:\s*(.+)$/im);
+    if (subMatch?.[1]) {
+      extractedSubject = subMatch[1].trim();
+      // If we extracted a subject, we might want to strip the headers from the body
+      // but for now let's just keep the full body as is or just provide the separate fields.
+    }
+  }
+
+  return { 
+    ...t, 
+    category: categoryName, 
+    description: descStr,
+    emailSubject: extractedSubject || t.title || categoryName,
+    emailBody: extractedBody
+  };
 };
 
 export const getAllTickets = async (): Promise<any[]> => {
@@ -1390,7 +1535,7 @@ export const getTicketsByConsultant = async (consultantId: number): Promise<any[
 // NOT as a JSON object { status }. We try 3 strategies in order.
 /** PATCH /api/tickets/:id/status */
 export const updateTicketStatus = async (id: number, status: string): Promise<any> => {
-  // Swagger: PATCH /api/tickets/{id}/status?status={status} — status is a query param
+  // Swagger: PATCH /api/tickets/{id}/status?status={status} - status is a query param
   return apiFetch(`/tickets/${id}/status?status=${encodeURIComponent(status)}`, {
     method: "PATCH",
   });
@@ -1581,7 +1726,7 @@ export const submitTicketFeedback = async (
   rating: number,
   feedbackText: string
 ) => {
-  // Backend TicketController.submitFeedback reads payload.get("feedbackRating") —
+  // Backend TicketController.submitFeedback reads payload.get("feedbackRating") -
   // the key must be "feedbackRating" not "rating".
   return apiFetch(`/tickets/${ticketId}/feedback`, {
     method: "POST",
@@ -1590,7 +1735,7 @@ export const submitTicketFeedback = async (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET — MISSING ENDPOINTS FROM TicketController & TicketService
+// TICKET - MISSING ENDPOINTS FROM TicketController & TicketService
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1630,18 +1775,18 @@ export const updateTicketPriority = async (
   id: number,
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT" | "CRITICAL"
 ): Promise<any> => {
-  // Strategy 1: query param — matches Spring @RequestParam Priority newPriority
+  // Strategy 1: query param - matches Spring @RequestParam Priority newPriority
   try {
     return await apiFetch(
       `/tickets/${id}/priority?priority=${encodeURIComponent(priority)}`,
       { method: "PATCH" }
     );
   } catch (err: any) {
-    // 403 = admin-only downgrade rule — propagate immediately, don't retry
+    // 403 = admin-only downgrade rule - propagate immediately, don't retry
     if (err?.message?.includes("403") || err?.message?.includes("Access Denied")) throw err;
     console.warn("⚠️ updateTicketPriority query-param failed, trying body fallback:", err?.message);
   }
-  // Strategy 2: JSON body — legacy @RequestBody variant
+  // Strategy 2: JSON body - legacy @RequestBody variant
   return apiFetch(`/tickets/${id}/priority`, {
     method: "PATCH",
     body: JSON.stringify({ priority }),
@@ -1649,7 +1794,7 @@ export const updateTicketPriority = async (
 };
 
 /**
- * GET /api/admin/config/categories  — single source of truth for ticket categories.
+ * GET /api/admin/config/categories  - single source of truth for ticket categories.
  * Returns active categories ordered by name from the Support Config endpoint.
  * Normalises each entry to { id: number, name: string } for consistent use across all pages.
  */
@@ -1669,7 +1814,7 @@ export const getActiveTicketCategories = async (): Promise<{ id: number; name: s
   }
 };
 
-/** @alias getActiveTicketCategories — both point to /admin/config/categories */
+/** @alias getActiveTicketCategories - both point to /admin/config/categories */
 export const getTicketCategoriesFromConfig = getActiveTicketCategories;
 
 /**
@@ -1719,7 +1864,7 @@ export const getTicketsByConsultantPaginated = async (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKET ANALYTICS — TicketService dashboard methods
+// TICKET ANALYTICS - TicketService dashboard methods
 // Assumed paths: GET /api/tickets/analytics/{tab}?days=&period=&groupBy=
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1939,8 +2084,24 @@ export const getSupportConfigReports = async (days = 14): Promise<{
 };
 
 export const getMyUnreadNotifications = async () => {
-  const data = await apiFetch("/notifications");
-  return extractArray(data);
+  const attempts = [
+    "/notifications",
+    "/notifications/my",
+    "/notifications/me",
+    "/notifications/unread",
+    "/users/me/notifications",
+  ];
+
+  let lastError: any = null;
+  for (const endpoint of attempts) {
+    try {
+      const data = await apiFetch(endpoint);
+      return extractArray(data);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("Unable to load notifications");
 };
 
 export const markNotificationAsRead = async (id: number) =>
@@ -2022,7 +2183,7 @@ export const sendTicketEscalatedEmail = async (payload: {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMAIL SERVICE — Full endpoint set matching backend EmailService
+// EMAIL SERVICE - Full endpoint set matching backend EmailService
 // All calls are fire-and-forget (errors are non-fatal, never throw)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2128,12 +2289,22 @@ export const emailOnTicketUpdated = async (payload: {
 // --- EMAIL → TICKET (ADMIN/OPS) ---
 
 export const emailToTicketHealth = async (): Promise<string> => {
-  const data: any = await apiFetch("/email-to-ticket/health", { method: "GET" });
+  const data: any = await apiFetch("/email-to-ticket/health", {
+    method: "GET",
+    timeoutMs: 8_000,
+    timeoutMessage: "Email-to-ticket health check timed out.",
+    suppressErrorLog: true,
+  });
   return String(data?.message ?? data ?? "");
 };
 
 export const triggerEmailToTicketPoll = async (): Promise<string> => {
-  const data: any = await apiFetch("/email-to-ticket/poll", { method: "POST" });
+  const data: any = await apiFetch("/email-to-ticket/poll", {
+    method: "POST",
+    timeoutMs: 120_000,
+    timeoutMessage: "Email inbox polling is still running. Please refresh tickets in a minute.",
+    suppressErrorLog: true,
+  });
   return String(data?.message ?? data ?? "");
 };
 
@@ -2305,12 +2476,12 @@ export const updateFeedback = async (id: number, payload: {
   comments?: string;
 }) => apiFetch(`/feedbacks/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 
-// ── DELETE /api/feedbacks/{id}  — auth required; only owner or ADMIN ──────────
+// ── DELETE /api/feedbacks/{id}  - auth required; only owner or ADMIN ──────────
 export const deleteFeedback = async (id: number): Promise<void> => {
   await apiFetch(`/feedbacks/${id}`, { method: "DELETE" });
 };
 
-// ── GET /api/feedbacks/consultant/{consultantId}  — auth required ─────────────
+// ── GET /api/feedbacks/consultant/{consultantId}  - auth required ─────────────
 export const getFeedbackByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
     const data = await apiFetch(`/feedbacks/consultant/${consultantId}`);
@@ -2318,15 +2489,15 @@ export const getFeedbackByConsultant = async (consultantId: number): Promise<any
   } catch { return []; }
 };
 
-// ── GET /api/feedbacks/{id}  — auth required ─────────────────────────────────
+// ── GET /api/feedbacks/{id}  - auth required ─────────────────────────────────
 export const getFeedbackById = async (id: number): Promise<any> =>
   apiFetch(`/feedbacks/${id}`);
 
-// ── GET /api/feedbacks/meeting/{meetingId}  — auth required ──────────────────
+// ── GET /api/feedbacks/meeting/{meetingId}  - auth required ──────────────────
 export const getFeedbackByMeeting = async (meetingId: number): Promise<any> =>
   apiFetch(`/feedbacks/meeting/${meetingId}`);
 
-// ── GET /api/feedbacks/public/highest-rated?limit={n}  — NO AUTH ─────────────
+// ── GET /api/feedbacks/public/highest-rated?limit={n}  - NO AUTH ─────────────
 // Used on the public homepage to showcase top reviews.
 // Backend caps at 50; defaults to 5 if limit ≤ 0.
 export const getHighestRatedFeedbacks = async (limit = 5): Promise<any[]> => {
@@ -2343,7 +2514,7 @@ export const getHighestRatedFeedbacks = async (limit = 5): Promise<any[]> => {
   } catch { return []; }
 };
 
-// ── GET /api/feedbacks  — auth required, returns all feedbacks (admin view) ───
+// ── GET /api/feedbacks  - auth required, returns all feedbacks (admin view) ───
 export const getAllFeedbacksAdmin = async (): Promise<any[]> => {
   try {
     const data = await apiFetch("/feedbacks");
@@ -2394,7 +2565,7 @@ export const escalateTicket = async (id: number, reason?: string): Promise<any> 
   if (!trimmedReason) {
     throw new Error("Escalation reason is required.");
   }
-  // Swagger: POST /api/tickets/{id}/escalate — body { reason: string }
+  // Swagger: POST /api/tickets/{id}/escalate - body { reason: string }
   return apiFetch(`/tickets/${id}/escalate`, {
     method: "POST",
     body: JSON.stringify({ reason: trimmedReason }),
@@ -2410,7 +2581,7 @@ export const getCannedResponses = async (): Promise<any[]> => {
 export const createCannedResponse = async (payload: {
   title: string; message: string; category?: string;
 }): Promise<any> =>
-  // Swagger: POST /api/admin/config/canned-responses — uses "content" not "message"
+  // Swagger: POST /api/admin/config/canned-responses - uses "content" not "message"
   apiFetch("/admin/config/canned-responses", {
     method: "POST",
     body: JSON.stringify({ title: payload.title, content: payload.message || (payload as any).content || "", category: payload.category }),
@@ -2426,7 +2597,7 @@ export const deleteCannedResponse = async (id: number): Promise<void> => {
   await apiFetch(`/admin/config/canned-responses/${id}`, { method: "DELETE" });
 };
 
-/** @alias getActiveTicketCategories — both point to /admin/config/categories */
+/** @alias getActiveTicketCategories - both point to /admin/config/categories */
 export const getTicketCategories = getActiveTicketCategories;
 
 export const createTicketCategory = async (payload: {
@@ -2654,15 +2825,15 @@ tr:nth-child(even){background:#f8fafc}</style></head><body>
 export default api;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OFFERS — public & authenticated
+// OFFERS - public & authenticated
 // These endpoints may return 403 if called without a valid token on some
 // server configurations. We always catch and return [] to prevent home page
 // errors.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /api/offers/checkout?consultantId=  — active APPROVED offers for booking/home page
- * Backend: OfferController.getActiveOffersForCheckout — returns only APPROVED + isActive + in date range
+ * GET /api/offers/checkout?consultantId=  - active APPROVED offers for booking/home page
+ * Backend: OfferController.getActiveOffersForCheckout - returns only APPROVED + isActive + in date range
  * Safe: returns [] on any error
  */
 export const getActiveOffers = async (consultantId?: number): Promise<any[]> => {
@@ -2726,7 +2897,7 @@ export const getActiveOffers = async (consultantId?: number): Promise<any[]> => 
 };
 
 /**
- * GET /api/offers/checkout?consultantId=:id — active approved offers for a consultant's booking page
+ * GET /api/offers/checkout?consultantId=:id - active approved offers for a consultant's booking page
  */
 export const getOffersByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
@@ -2761,7 +2932,7 @@ const normalizeOfferDate = (dateInput: string | Date): string => {
 };
 
 /**
- * POST /api/offers — create offer (admin or consultant)
+ * POST /api/offers - create offer (admin or consultant)
  * Backend OfferRequest: title*, description, discount*, validFrom*, validTo*, isActive, consultantId
  * Backend expects dates in format: yyyy-MM-dd'T'HH:mm:ss (e.g., "2026-03-18T00:00:00")
  * Backend auto-sets status: ADMIN → APPROVED, CONSULTANT → PENDING
@@ -2777,7 +2948,7 @@ export const createOffer = async (payload: {
   consultantId?: number | null;
   [key: string]: any;
 }): Promise<any> => {
-  // Send only fields defined in OfferRequest DTO — extra fields cause 500
+  // Send only fields defined in OfferRequest DTO - extra fields cause 500
   const body: Record<string, any> = {
     title: payload.title,
     description: payload.description || "",
@@ -2791,7 +2962,7 @@ export const createOffer = async (payload: {
 };
 
 /**
- * PUT /api/offers/:id — update offer
+ * PUT /api/offers/:id - update offer
  * Backend OfferRequest same fields as createOffer
  * Backend expects dates in format: yyyy-MM-dd'T'HH:mm:ss
  */
@@ -2809,18 +2980,18 @@ export const updateOffer = async (id: number, payload: any): Promise<any> => {
 };
 
 /**
- * DELETE /api/offers/:id — delete offer
+ * DELETE /api/offers/:id - delete offer
  */
 export const deleteOffer = async (id: number): Promise<void> =>
   apiFetch(`/offers/${id}`, { method: "DELETE" });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REVIEWS — public & authenticated
+// REVIEWS - public & authenticated
 // Safe: returns [] on any error (including 403 for public visitors)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /api/reviews — approved reviews for home page testimonials
+ * GET /api/reviews - approved reviews for home page testimonials
  * Safe: returns [] on 403/401 (public visitors)
  */
 export const getPublicReviews = async (): Promise<any[]> => {
@@ -2838,7 +3009,7 @@ export const getPublicReviews = async (): Promise<any[]> => {
           return Array.isArray(data) ? data : extractArray(data);
         }
         if (res.status === 403 || res.status === 401) {
-          console.warn(`⚠️ getPublicReviews: ${res.status} on ${ep} — returning []`);
+          console.warn(`⚠️ getPublicReviews: ${res.status} on ${ep} - returning []`);
           return [];
         }
       } catch { continue; }
@@ -2851,7 +3022,7 @@ export const getPublicReviews = async (): Promise<any[]> => {
 };
 
 /**
- * GET /api/reviews/consultant/:id — reviews for a specific consultant
+ * GET /api/reviews/consultant/:id - reviews for a specific consultant
  */
 export const getReviewsByConsultant = async (consultantId: number): Promise<any[]> => {
   try {
@@ -2861,14 +3032,14 @@ export const getReviewsByConsultant = async (consultantId: number): Promise<any[
 };
 
 /**
- * POST /api/reviews — submit a review after a completed session
+ * POST /api/reviews - submit a review after a completed session
  */
 export const submitReview = async (payload: {
   consultantId: number; bookingId: number; rating: number; reviewText: string;
 }): Promise<any> => apiFetch("/reviews", { method: "POST", body: JSON.stringify(payload) });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// USER CATEGORIES — save questionnaire answers to backend
+// USER CATEGORIES - save questionnaire answers to backend
 // Endpoint: POST /api/users/:id/categories
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2876,7 +3047,7 @@ export const saveUserCategories = async (
   userId: number,
   categories: Array<{ category: string; subOption: string; answers: Record<string, string> }>
 ): Promise<any> => {
-  // Try multiple endpoint/payload variants — backend may use different structure
+  // Try multiple endpoint/payload variants - backend may use different structure
   const attempts = [
     // Variant 1: standard array POST
     { url: `/users/${userId}/categories`, body: JSON.stringify(categories) },
@@ -2892,7 +3063,7 @@ export const saveUserCategories = async (
       return await apiFetch(attempt.url, { method: "POST", body: attempt.body });
     } catch (err: any) {
       const msg = String(err?.message || "");
-      // Only retry on 500 — propagate auth errors immediately
+      // Only retry on 500 - propagate auth errors immediately
       if (!msg.includes("500") && !msg.includes("Internal Server")) {
         console.warn("⚠️ saveUserCategories failed (non-fatal):", msg);
         return null;
@@ -2900,7 +3071,7 @@ export const saveUserCategories = async (
       // else try next variant
     }
   }
-  // All failed — save to localStorage as final fallback (already done by caller)
+  // All failed - save to localStorage as final fallback (already done by caller)
   console.warn("⚠️ saveUserCategories: all endpoints failed, relying on localStorage");
   return null;
 };
@@ -2913,7 +3084,7 @@ export const getUserCategories = async (userId: number): Promise<any[]> => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATIC CONTENT — Backend: StaticContentController @ /api/static-content
+// STATIC CONTENT - Backend: StaticContentController @ /api/static-content
 // GET  /api/static-content/{contentType}  → StaticContentResponse
 // GET  /api/static-content               → List<StaticContentResponse>
 // POST /api/static-content               → upsert (admin only)
@@ -2921,13 +3092,13 @@ export const getUserCategories = async (userId: number): Promise<any[]> => {
 
 export const getStaticContent = async (contentType: string): Promise<any | null> => {
   try {
-    return await apiFetch(`/static-content/${contentType}`);
+    return await publicFetch(`/static-content/${contentType}`);
   } catch { return null; }
 };
 
 export const getAllStaticContent = async (): Promise<any[]> => {
   try {
-    const data = await apiFetch("/static-content");
+    const data = await publicFetch("/static-content");
     return Array.isArray(data) ? data : extractArray(data);
   } catch { return []; }
 };
@@ -2947,27 +3118,40 @@ export const saveStaticContent = async (payload: {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TERMS & CONDITIONS — delegates to StaticContentController (backward compat)
+// TERMS & CONDITIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getTermsAndConditions = async (): Promise<any[]> => {
-  // Try new StaticContentController endpoint first
-  // 404 = nothing saved yet, that is normal — not an error
+const getLocalStaticContentFallback = (storageKey: string): any[] => {
   try {
-    const data = await apiFetch("/static-content/TERMS_AND_CONDITIONS");
-    if (data && (data.content || data.text)) return [data];
-  } catch (e: any) {
-    // 404 is expected when no T&C saved yet — swallow silently
-    if (!String(e?.message || "").includes("404")) {
-      console.warn("⚠️ getTermsAndConditions /static-content failed:", e?.message);
-    }
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const versions = JSON.parse(raw);
+    if (!Array.isArray(versions) || versions.length === 0) return [];
+    const active = versions.find((item: any) => item?.isActive) || versions[versions.length - 1];
+    return active ? [active] : [];
+  } catch {
+    return [];
   }
-  // Legacy fallback
-  try {
-    const data = await apiFetch("/admin/terms-and-conditions");
-    return Array.isArray(data) ? data : extractArray(data);
-  } catch { return []; }
 };
+
+const getStaticContentWithFallback = async (
+  contentType: string,
+  storageKey: string,
+): Promise<any[]> => {
+  const fallback = getLocalStaticContentFallback(storageKey);
+  try {
+    const data = await publicFetch(`/static-content/${contentType}`);
+    return data && (data.content || data.text) ? [data] : fallback;
+  } catch (e: any) {
+    if (!String(e?.message || "").includes("404")) {
+      console.warn(`⚠️ ${contentType} /static-content failed:`, e?.message);
+    }
+    return fallback;
+  }
+};
+
+export const getTermsAndConditions = async (): Promise<any[]> =>
+  getStaticContentWithFallback("TERMS_AND_CONDITIONS", "fin_terms_versions");
 
 export const saveTermsAndConditions = async (payload: {
   version: string; content: string; isActive: boolean;
@@ -2981,21 +3165,36 @@ export const saveTermsAndConditions = async (payload: {
         lastUpdatedBy: "Admin",
       }),
     });
-  } catch {
-    try {
-      return await apiFetch("/admin/terms-and-conditions", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-    } catch (err: any) {
-      console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
-      return null;
-    }
+  } catch (err: any) {
+    console.warn("⚠️ saveTermsAndConditions failed:", err?.message);
+    return null;
+  }
+};
+
+export const getPrivacyPolicy = async (): Promise<any[]> => {
+  return getStaticContentWithFallback("PRIVACY_POLICY", "fin_privacy_versions");
+};
+
+export const savePrivacyPolicy = async (payload: {
+  version: string; content: string; isActive: boolean;
+}): Promise<any> => {
+  try {
+    return await apiFetch("/static-content", {
+      method: "POST",
+      body: JSON.stringify({
+        contentType: "PRIVACY_POLICY",
+        content: payload.content,
+        lastUpdatedBy: "Admin",
+      }),
+    });
+  } catch (err: any) {
+    console.warn("⚠️ savePrivacyPolicy failed:", err?.message);
+    return null;
   }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN — Add Member (POST /api/admin/users)
+// ADMIN - Add Member (POST /api/admin/users)
 // Handles bcrypt encryption on backend, sets isFirstLogin=true
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -3043,7 +3242,7 @@ export interface FeeConfig {
 
 /**
  * GET /api/admin/settings/public/fee-config
- * Public endpoint — accessible by all users (no auth required).
+ * Public endpoint - accessible by all users (no auth required).
  * Returns the platform commission configuration.
  */
 export const getFeeConfig = async (): Promise<FeeConfig> => {
@@ -3135,10 +3334,10 @@ export const calculateTotalPrice = (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QUESTIONS & ANSWERS — Backend: QuestionController @ /api/questions
+// QUESTIONS & ANSWERS - Backend: QuestionController @ /api/questions
 //                                AnswerController  @ /api/answers
 //
-// Updated schema (standalone questions — NOT linked to skills):
+// Updated schema (standalone questions - NOT linked to skills):
 //   Question   { id, text, type, options, placeholder, isActive, updatedAt }
 //   QuestionRequest  { text, type?, options?, placeholder? }
 //   QuestionResponse { id, text, type, options, placeholder, isActive, updatedAt }
@@ -3147,10 +3346,10 @@ export const calculateTotalPrice = (
 //   AnswerSubmissionRequest { bookingId, consultantId?, answers: [{ questionId, text }] }
 //
 // Question types:
-//   "radio"       — single-choice, options stored as "|||"-delimited string
-//   "multiselect" — multi-choice,  options stored as "|||"-delimited string
-//   "text"        — free-text input, placeholder supported
-//   "mobile"      — 10-digit IN phone input, placeholder supported
+//   "radio"       - single-choice, options stored as "|||"-delimited string
+//   "multiselect" - multi-choice,  options stored as "|||"-delimited string
+//   "text"        - free-text input, placeholder supported
+//   "mobile"      - 10-digit IN phone input, placeholder supported
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire type returned by GET /api/questions */
@@ -3176,7 +3375,7 @@ export interface BackendAnswer {
   isActive?: boolean;
 }
 
-/** Frontend display model — extends BackendQuestion with parsed options array */
+/** Frontend display model - extends BackendQuestion with parsed options array */
 export interface AdminQuestion {
   id?: number;
   text: string;
@@ -3200,7 +3399,7 @@ export const parseQuestionOptions = (raw?: string | null): string[] => {
 /**
  * GET /api/questions
  * Fetches ALL active standalone questions.
- * Public/user endpoint — no admin token required.
+ * Public/user endpoint - no admin token required.
  */
 export const getAllActiveQuestions = async (skillIds?: number[]): Promise<BackendQuestion[]> => {
   try {
@@ -3224,7 +3423,7 @@ export const getAllActiveQuestions = async (skillIds?: number[]): Promise<Backen
 
 /**
  * Alias kept for the AdminPage QuestionsManagementPanel.
- * Calls GET /api/questions — returns all active standalone questions.
+ * Calls GET /api/questions - returns all active standalone questions.
  */
 export const getAdminQuestions = getAllActiveQuestions;
 
@@ -3232,10 +3431,10 @@ export const getAdminQuestions = getAllActiveQuestions;
  * POST /api/questions  (ADMIN only)
  * Creates a new standalone question.
  *
- * @param payload.text        — question text (required)
- * @param payload.type        — "radio" | "multiselect" | "text" | "mobile"  (default: "radio")
- * @param payload.options     — "|||"-delimited option string for radio/multiselect
- * @param payload.placeholder — hint text for text/mobile inputs
+ * @param payload.text        - question text (required)
+ * @param payload.type        - "radio" | "multiselect" | "text" | "mobile"  (default: "radio")
+ * @param payload.options     - "|||"-delimited option string for radio/multiselect
+ * @param payload.placeholder - hint text for text/mobile inputs
  */
 export const createAdminQuestion = async (payload: {
   text: string;
@@ -3285,7 +3484,7 @@ export const deleteAdminQuestion = async (id: number): Promise<void> =>
 
 // ── LEGACY COMPAT ─────────────────────────────────────────────────────────────
 /**
- * @deprecated  Questions are now standalone — skillIds param is ignored.
+ * @deprecated  Questions are now standalone - skillIds param is ignored.
  * Use getAllActiveQuestions() instead.
  */
 export const getQuestionsBySkills = async (
@@ -3301,7 +3500,7 @@ export const getQuestionsBySkills = async (
 export interface AnswerResponse {
   id: number;
   bookingId: number;
-  bookingType: string; // "NORMAL" | "SPECIAL" — matches AnswerResponse DTO
+  bookingType: string; // "NORMAL" | "SPECIAL" - matches AnswerResponse DTO
   questionId: number;
   text: string;
   updatedAt?: string;
@@ -3312,10 +3511,10 @@ export interface AnswerResponse {
  * POST /api/answers
  * User submits answers to post-booking questions for a specific booking.
  *
- * @param bookingId    — The booking this answer set belongs to (required by backend DTO)
- * @param answers      — Array of { questionId, text } pairs
- * @param consultantId — Optional: the consultant associated with the booking
- * @param bookingType  — "NORMAL" (default) or "SPECIAL" — required by AnswerSubmissionRequest DTO
+ * @param bookingId    - The booking this answer set belongs to (required by backend DTO)
+ * @param answers      - Array of { questionId, text } pairs
+ * @param consultantId - Optional: the consultant associated with the booking
+ * @param bookingType  - "NORMAL" (default) or "SPECIAL" - required by AnswerSubmissionRequest DTO
  *
  * Backend: AnswerSubmissionRequest now requires bookingType to correctly scope
  * soft-deletes and avoid ID collisions between the bookings and special_bookings tables.
@@ -3351,9 +3550,9 @@ export const getUserAnswers = async (userId: number): Promise<BackendAnswer[]> =
 /**
  * GET /api/users/:userId/bookings/:bookingId/answers?type=NORMAL|SPECIAL
  * Admin / consultant endpoint: fetch all active answers for a specific booking.
- * Calls AnswerController.getAnswersForBooking — returns List<AnswerResponse>.
+ * Calls AnswerController.getAnswersForBooking - returns List<AnswerResponse>.
  *
- * @param bookingType — "NORMAL" (default) or "SPECIAL".
+ * @param bookingType - "NORMAL" (default) or "SPECIAL".
  * Backend requires this to distinguish between the bookings and special_bookings
  * tables, since IDs from both tables can collide.
  */
@@ -3385,15 +3584,45 @@ export const getAnswersForBooking = async (
  * Permanent offers (no dates set) are always included.
  */
 export const getPublicHomeOffers = async (): Promise<any[]> => {
-  try {
-    const url = `${BASE_URL}/offers/public`;
-    const res = await fetch(url, {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      cache: "no-store",
-    });
+  const normalizeHomeOffers = (items: any[]): any[] => {
+    const seen = new Set<string>();
+    return (Array.isArray(items) ? items : [])
+      .filter((o: any) => {
+        if (!String(o?.title || "").trim()) return false;
+        if (o.isActive === false || o.active === false) return false;
+        const status = String(o.approvalStatus ?? o.status ?? "APPROVED").toUpperCase();
+        if (status === "REJECTED" || status === "PENDING") return false;
+        const key = String(o.id ?? `${o.title}-${o.discount ?? ""}`);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  };
+
+  const fetchOffers = async (path: string, auth = false): Promise<any[]> => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    const token = getToken();
+    if (auth && token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${BASE_URL}${path}`, { headers, cache: "no-store" });
     if (!res.ok) return [];
     const data = await res.json();
-    return Array.isArray(data) ? data : extractArray(data);
+    return normalizeHomeOffers(Array.isArray(data) ? data : extractArray(data));
+  };
+
+  try {
+    for (const [path, auth] of [
+      ["/offers/public", false],
+      ["/offers/checkout", false],
+      ["/offers", false],
+      ["/offers/admin", true],
+    ] as const) {
+      const offers = await fetchOffers(path, auth);
+      if (offers.length > 0) return offers;
+    }
+    return [];
   } catch { return []; }
 };
 
@@ -3403,7 +3632,7 @@ export const getPublicHomeOffers = async (): Promise<any[]> => {
  * - Includes global admin offers + consultant-specific offers.
  * - Filters out offers the user has already redeemed (non-CANCELLED bookings).
  *
- * @param consultantId  Optional — pass the consultant's ID to include their offers.
+ * @param consultantId  Optional - pass the consultant's ID to include their offers.
  */
 export const getActiveOffersForCheckout = async (consultantId?: number): Promise<any[]> => {
   try {
@@ -3414,7 +3643,7 @@ export const getActiveOffersForCheckout = async (consultantId?: number): Promise
 };
 
 /**
- * GET /api/offers/admin — fetch all offers (admin view: PENDING, APPROVED, REJECTED)
+ * GET /api/offers/admin - fetch all offers (admin view: PENDING, APPROVED, REJECTED)
  * Returns consultant-submitted offers (consultantId != null) and global admin offers
  */
 export const getConsultantSubmittedOffers = async (): Promise<any[]> => {
@@ -3427,7 +3656,7 @@ export const getConsultantSubmittedOffers = async (): Promise<any[]> => {
 };
 
 /**
- * GET /api/offers/admin — all offers for admin management panel
+ * GET /api/offers/admin - all offers for admin management panel
  */
 export const getAllOffersForAdmin = async (): Promise<any[]> => {
   try {
@@ -3437,15 +3666,15 @@ export const getAllOffersForAdmin = async (): Promise<any[]> => {
 };
 
 /**
- * PUT /api/offers/{id}/status?status=APPROVED — approve a consultant offer
- * Backend: OfferController.updateOfferStatus — admin only
+ * PUT /api/offers/{id}/status?status=APPROVED - approve a consultant offer
+ * Backend: OfferController.updateOfferStatus - admin only
  */
 export const approveOffer = async (id: number): Promise<any> =>
   apiFetch(`/offers/${id}/status?status=APPROVED`, { method: "PUT" });
 
 /**
- * PUT /api/offers/{id}/status?status=REJECTED — reject a consultant offer
- * Backend: OfferController.updateOfferStatus — admin only
+ * PUT /api/offers/{id}/status?status=REJECTED - reject a consultant offer
+ * Backend: OfferController.updateOfferStatus - admin only
  */
 export const rejectOffer = async (id: number): Promise<any> =>
   apiFetch(`/offers/${id}/status?status=REJECTED`, { method: "PUT" });
@@ -3496,4 +3725,76 @@ export const getEscalationBlocks = (): any[] => {
   } catch {
     return [];
   }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKINGS — additional endpoints from BookingService
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /bookings/status/{status}?page=&size=
+ * Returns bookings filtered by status. Role-aware on the backend:
+ * ADMIN sees all, CONSULTANT sees their own, USER sees their own.
+ */
+export const getBookingsByStatus = async (
+  status: string,
+  page = 0,
+  size = 10
+): Promise<any> =>
+  apiFetch(`/bookings/status/${status}?page=${page}&size=${size}`);
+
+/**
+ * PUT /bookings/bulk/{id}
+ * Update a bulk booking (status, payment, meeting details, slot reassignment).
+ * Only use this endpoint for bookings that contain comma-separated timeSlotIds.
+ */
+export const updateBulkBooking = async (id: number, payload: {
+  bookingStatus?: string;
+  paymentStatus?: string;
+  meetingMode?: string;
+  meetingLink?: string;
+  meetingId?: string;
+  meetingNotes?: string;
+  consultantId?: number;
+  timeSlotIds?: number[];
+}): Promise<any> =>
+  apiFetch(`/bookings/bulk/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+/**
+ * GET /bookings/revenue-analytics?days=
+ * Admin revenue analytics: totalBookings, completed, totalRevenue, tableData.
+ */
+export const getRevenueAnalytics = async (days = 30): Promise<{
+  totalBookings: number;
+  completed: number;
+  totalRevenue: number;
+  tableData: Array<{
+    consultantId: number;
+    bookings: number;
+    completed: number;
+    revenue: number;
+  }>;
+}> => apiFetch(`/bookings/revenue-analytics?days=${days}`);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPECIAL BOOKINGS — additional endpoints from SpecialBookingService
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /special-bookings/admin/all?page=&size=
+ * Admin: get all special bookings with pagination.
+ */
+export const getAllSpecialBookings = async (page = 0, size = 10): Promise<any> => {
+  const attempts = [
+    () => apiFetch(`/special-bookings/admin/all?page=${page}&size=${size}`),
+    () => apiFetch(`/special-bookings/all?page=${page}&size=${size}`),
+    () => apiFetch(`/special-bookings?page=${page}&size=${size}`),
+  ];
+  for (const attempt of attempts) {
+    try { return await attempt(); } catch { /* try next */ }
+  }
+  return { content: [], totalElements: 0 };
 };

@@ -17,7 +17,10 @@ const resolveApiBaseUrl = (rawValue?: string): string => {
 
   try {
     const parsed = new URL(candidate);
-    const path = normalizeApiPath(parsed.pathname);
+    const path =
+      parsed.hostname === "api.meetthemasters.in" && (!parsed.pathname || parsed.pathname === "/")
+        ? "/api"
+        : normalizeApiPath(parsed.pathname);
     return `${parsed.origin}${path}`;
   } catch {
     return DEFAULT_API_URL;

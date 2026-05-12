@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   ArrowRight,
   CheckCircle,
   ChevronLeft,
@@ -17,7 +16,8 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import logoImg from '../assests/Meetmasterslogopng.png';
+import headerLogoImg from '../assests/MeetMastersHorizontalLogo.png';
+import logoImg from '../assests/MeetMastersMLogo.png';
 import { API_BASE_URL } from "../config/api";
 import { getHighestRatedFeedbacks, getPublicHomeOffers, getRole } from "../services/api";
 import { decryptLocal } from "../services/crypto";
@@ -107,7 +107,7 @@ const loadArrayFromEndpoint = async (ep: string, allowAuthFallback = false): Pro
 const loadReviews = async (): Promise<Review[]> => {
   // ── 1. Try the dedicated highest-rated public endpoint first ──────────────
   try {
-    const highRated = await getHighestRatedFeedbacks(6);
+    const highRated = await getHighestRatedFeedbacks(3);
     if (highRated.length > 0) {
       const seen = new Set<number>();
       const result: Review[] = [];
@@ -166,7 +166,7 @@ const loadReviews = async (): Promise<Review[]> => {
     });
   }
 
-  return result.sort((a, b) => b.rating - a.rating).slice(0, 6);
+  return result.sort((a, b) => b.rating - a.rating).slice(0, 3);
 };
 
 const CARD_THEMES = [
@@ -271,8 +271,8 @@ const StarRating: React.FC<{ rating: number }> = ({ rating }) => (
   <div style={{ display: "flex", gap: 2 }}>
     {[1, 2, 3, 4, 5].map((i) => (
       <Star key={i} size={13}
-        fill={i <= rating ? "#F59E0B" : "#E2E8F0"}
-        stroke={i <= rating ? "#F59E0B" : "#E2E8F0"}
+        fill={i <= rating ? "#0F766E" : "#CCFBF1"}
+        stroke={i <= rating ? "#0F766E" : "#CCFBF1"}
         strokeWidth={1.5} />
     ))}
   </div>
@@ -391,6 +391,7 @@ const VELORAH_VIDEO =
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const pageTopRef = useRef<HTMLDivElement>(null);
   const offersSectionRef = useRef<HTMLElement>(null);
   const reviewsSectionRef = useRef<HTMLElement>(null);
   const offersRailRef = useRef<HTMLDivElement>(null);
@@ -454,6 +455,14 @@ export default function HomePage() {
     setContactTouched({});
     setContactSuccess(false);
     setShowContact(true);
+  };
+
+  const openPrivacyPolicy = () => {
+    navigate("/privacy-policy");
+  };
+
+  const openTermsAndConditions = () => {
+    navigate("/terms-and-conditions");
   };
 
   const handleContactBlur = (field: string) => {
@@ -614,7 +623,7 @@ export default function HomePage() {
 
     const slideOne = () => {
       if (offersAutoScrollPausedRef.current) {
-        // User hovering/dragging — retry after a short delay
+        // User hovering/dragging - retry after a short delay
         phaseTimer = setTimeout(slideOne, 120);
         return;
       }
@@ -625,7 +634,7 @@ export default function HomePage() {
 
       const animate = (now: number) => {
         if (offersAutoScrollPausedRef.current) {
-          // Interrupted mid-glide — snap to target and re-enter pause
+          // Interrupted mid-glide - snap to target and re-enter pause
           rail.scrollLeft = start + cardWidth;
           clampToMiddle();
           phaseTimer = setTimeout(slideOne, PAUSE_MS);
@@ -637,7 +646,7 @@ export default function HomePage() {
         if (t < 1) {
           rafId = requestAnimationFrame(animate);
         } else {
-          // Glide done — sit still before next slide
+          // Glide done - sit still before next slide
           phaseTimer = setTimeout(slideOne, PAUSE_MS);
         }
       };
@@ -662,6 +671,9 @@ export default function HomePage() {
 
     const beginDrag = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // Don't hijack clicks on buttons or links - let them fire normally
+      const target = e.target as HTMLElement;
+      if (target.closest("button, a, [role='button']")) return;
       dragState.active = true;
       dragState.pointerId = e.pointerId;
       dragState.startX = e.clientX;
@@ -692,6 +704,12 @@ export default function HomePage() {
 
     const suppressClickAfterDrag = (e: MouseEvent) => {
       if (!dragState.moved) return;
+      // Don't suppress clicks on interactive elements (buttons, links) even after drag
+      const target = e.target as HTMLElement;
+      if (target.closest("button, a, [role='button']")) {
+        dragState.moved = false;
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       dragState.moved = false;
@@ -699,7 +717,11 @@ export default function HomePage() {
 
     // ── Pause on hover so users can read cards ──
     const onMouseEnter = () => { offersAutoScrollPausedRef.current = true; };
-    const onMouseLeave = () => { offersAutoScrollPausedRef.current = false; };
+    const onMouseLeave = (e: MouseEvent) => {
+      // Don't resume if the user is clicking a button (relatedTarget is outside rail)
+      if (dragState.active) return;
+      offersAutoScrollPausedRef.current = false;
+    };
 
     const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
       syncLoopWidth();
@@ -772,18 +794,29 @@ export default function HomePage() {
   };
 
   const handleClaimOffer = (offer: Offer) => {
+    // Always save the offer so it can be applied after login
     localStorage.setItem("fin_pending_offer", JSON.stringify({
       id: offer.id, title: offer.title, description: offer.description,
       discount: offer.discount, consultantId: offer.consultantId, consultantName: offer.consultantName,
     }));
-    const token = localStorage.getItem("fin_token");
+
+    // Pause auto-scroll immediately so the carousel doesn't keep moving during navigation
+    offersAutoScrollPausedRef.current = true;
+
+    const token = (localStorage.getItem("fin_token") || "").trim();
+    if (!token) {
+      // Not logged in - scroll to top first, then navigate to login
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setTimeout(() => navigate("/login"), 300);
+      return;
+    }
     const role = getStoredRole();
     const canUseUserBooking = ["USER", "SUBSCRIBER", "GUEST", "MEMBER"].includes(role);
-    navigate(token && canUseUserBooking ? "/user" : "/login");
+    navigate(canUseUserBooking ? "/user" : "/login");
   };
 
   return (
-    <div className="hp-container">
+    <div className="hp-container" ref={pageTopRef}>
 
       <svg width="0" height="0" style={{ position: "absolute" }}>
         <filter id="hp-noise">
@@ -797,17 +830,16 @@ export default function HomePage() {
       {/* ── HEADER ── */}
       <header className={`hp-header${scrolled ? " hp-header-scrolled" : ""}`}>
         <div className="hp-header-inner">
-          <div className="hp-logo" style={{ cursor: "pointer" }} onClick={() => navigate("/home")}>
-            <img src={logoImg} alt="Meet The Masters"
-              style={{ height: 76, width: "auto", objectFit: "contain", display: "block" }} />
+          <div className="hp-logo" style={{ cursor: "pointer" }} onClick={() => navigate("/")}>
+            <img src={headerLogoImg} alt="Meet The Masters" className="hp-header-logo-img" />
           </div>
 
           <div className="hp-nav-buttons hp-desktop-nav">
             <nav className="hp-nav-links">
-              <span onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} className="hp-nav-link">Home</span>
+              <span onClick={() => { if (window.location.pathname !== "/") { navigate("/"); } setTimeout(() => pageTopRef.current?.scrollIntoView({ behavior: "smooth" }), 50); }} className="hp-nav-link">Home</span>
               <span onClick={() => offersSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} className="hp-nav-link">Offers</span>
               <span onClick={() => reviewsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} className="hp-nav-link">Reviews</span>
-              <span onClick={openContact} className="hp-nav-link">Contact</span>
+              <span onClick={openContact} className="hp-nav-link">Contact Us</span>
             </nav>
             <button onClick={() => navigate("/login")} className="hp-login-btn">Sign In</button>
             <button onClick={() => { navigate("/register", { replace: false, state: { reset: true } }); }} className="hp-primary-btn">Create Account</button>
@@ -822,10 +854,10 @@ export default function HomePage() {
 
         {mobileMenuOpen && (
           <div className="hp-mobile-menu">
-            <span onClick={() => { window.scrollTo({ top: 0, behavior: "smooth" }); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Home</span>
+            <span onClick={() => { if (window.location.pathname !== "/") { navigate("/"); } setTimeout(() => pageTopRef.current?.scrollIntoView({ behavior: "smooth" }), 50); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Home</span>
             <span onClick={() => { offersSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Offers</span>
             <span onClick={() => { reviewsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Reviews</span>
-            <span onClick={() => { openContact(); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Contact</span>
+            <span onClick={() => { openContact(); setMobileMenuOpen(false); }} className="hp-mobile-nav-link">Contact Us</span>
             <button onClick={() => { navigate("/login"); setMobileMenuOpen(false); }} className="hp-mobile-menu-btn hp-login-btn">Sign In</button>
             <button onClick={() => { navigate("/register"); setMobileMenuOpen(false); }} className="hp-mobile-menu-btn hp-primary-btn">Create Account</button>
           </div>
@@ -956,29 +988,21 @@ export default function HomePage() {
             <div className="hp-reviews-grid">
               {reviews.map((review, idx) => (
                 <div key={review.id} className="hp-review-card" style={{ animationDelay: `${idx * 0.08}s` }}>
-                  <StarRating rating={review.rating} />
+                  <div className="hp-review-stars"><StarRating rating={review.rating} /></div>
                   <p className="hp-review-text">"{review.reviewText}"</p>
+                  <div className="hp-review-divider" />
                   <div className="hp-review-author">
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{
-                        width: 38, height: 38, borderRadius: "50%",
-                        background: "linear-gradient(135deg,#0F766E,#2563EB)",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 14, fontWeight: 800, color: "#fff", flexShrink: 0,
-                        boxShadow: "0 2px 8px rgba(15,118,110,0.35)",
-                      }}>
-                        {(review.reviewerName || "U").charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="hp-review-author-name">{review.reviewerName}</div>
-                        {review.consultantName && <div className="hp-review-consultant">Session with {review.consultantName}</div>}
-                        {review.createdAt && (
-                          <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 1 }}>
-                            {new Date(review.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                          </div>
-                        )}
+                    <div>
+                      <div className="hp-review-author-name">{review.reviewerName || "Client"}</div>
+                      <div className="hp-review-consultant">
+                        {review.createdAt
+                          ? new Date(review.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+                          : "Verified client"}
                       </div>
                     </div>
+                    <span className="hp-review-event-pill">
+                      {review.consultantName ? `Session with ${review.consultantName}` : "Verified Review"}
+                    </span>
                   </div>
                   <div className="hp-review-shimmer" />
                 </div>
@@ -1000,8 +1024,8 @@ export default function HomePage() {
             <img src={logoImg} alt="Meet The Masters" className="hp-footer-logo" />
             <div className="hp-footer-links">
               <span style={{ cursor: "pointer" }} onClick={openContact}>Contact Us</span>
-              <span>Privacy</span>
-              <span>Terms</span>
+              <span style={{ cursor: "pointer" }} onClick={openPrivacyPolicy}>Privacy</span>
+              <span style={{ cursor: "pointer" }} onClick={openTermsAndConditions}>Terms</span>
             </div>
           </div>
         </div>
@@ -1041,12 +1065,18 @@ export default function HomePage() {
                   <div style={{ marginBottom: 12 }}>
                     <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
                       <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><User size={17} /></span>
-                      <input 
-                        value={contactForm.name} 
-                        onChange={(e) => { setContactForm(f => ({ ...f, name: e.target.value })); if (contactTouched.name) validateContact({ ...contactForm, name: e.target.value }); }} 
+                      <input
+                        value={contactForm.name}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          // Block numbers and special characters as the very first character
+                          if (val.length === 1 && /[^a-zA-Z]/.test(val)) return;
+                          setContactForm(f => ({ ...f, name: val }));
+                          if (contactTouched.name) validateContact({ ...contactForm, name: val });
+                        }}
                         onBlur={() => handleContactBlur("name")}
-                        placeholder="Your Name" 
-                        className="hp-contact-input" 
+                        placeholder="Your Name"
+                        className="hp-contact-input"
                       />
                     </div>
                     {contactTouched.name && contactErrors.name && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.name}</div>}
@@ -1055,13 +1085,13 @@ export default function HomePage() {
                   <div style={{ marginBottom: 12 }}>
                     <div className="hp-contact-input-wrapper" style={{ marginBottom: 0 }}>
                       <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}><Mail size={17} /></span>
-                      <input 
-                        value={contactForm.email} 
-                        onChange={(e) => { setContactForm(f => ({ ...f, email: e.target.value })); if (contactTouched.email) validateContact({ ...contactForm, email: e.target.value }); }} 
+                      <input
+                        value={contactForm.email}
+                        onChange={(e) => { setContactForm(f => ({ ...f, email: e.target.value })); if (contactTouched.email) validateContact({ ...contactForm, email: e.target.value }); }}
                         onBlur={() => handleContactBlur("email")}
-                        placeholder="Email Address" 
-                        type="email" 
-                        className="hp-contact-input" 
+                        placeholder="Email Address"
+                        type="email"
+                        className="hp-contact-input"
                       />
                     </div>
                     {contactTouched.email && contactErrors.email && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.email}</div>}
@@ -1070,13 +1100,13 @@ export default function HomePage() {
                   <div style={{ marginBottom: 12 }}>
                     <div className="hp-contact-textarea-wrapper" style={{ marginBottom: 0 }}>
                       <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, marginTop: 2 }}><MessageSquare size={17} /></span>
-                      <textarea 
-                        value={contactForm.message} 
-                        onChange={(e) => { setContactForm(f => ({ ...f, message: e.target.value })); if (contactTouched.message) validateContact({ ...contactForm, message: e.target.value }); }} 
+                      <textarea
+                        value={contactForm.message}
+                        onChange={(e) => { setContactForm(f => ({ ...f, message: e.target.value })); if (contactTouched.message) validateContact({ ...contactForm, message: e.target.value }); }}
                         onBlur={() => handleContactBlur("message")}
-                        placeholder="Your message…" 
-                        rows={4} 
-                        className="hp-contact-textarea" 
+                        placeholder="Your message..."
+                        rows={4}
+                        className="hp-contact-textarea"
                       />
                     </div>
                     {contactTouched.message && contactErrors.message && <div style={{ color: "#FCA5A5", fontSize: 11, fontWeight: 600, marginTop: 4, marginLeft: 34 }}>{contactErrors.message}</div>}
@@ -1084,7 +1114,7 @@ export default function HomePage() {
                   {/* Removed global error display */}
                   <button onClick={handleContactSubmit} disabled={contactSending} className="hp-contact-submit-btn">
                     <Send size={15} />
-                    {contactSending ? "Sending…" : "Send Message"}
+                    {contactSending ? "Sending..." : "Send Message"}
                   </button>
                 </>
               )}
@@ -1113,48 +1143,56 @@ export default function HomePage() {
           min-height: 100vh; overflow-x: hidden; min-width: 320px;
         }
 
-        /* ═══ HEADER ═══ */
+        /* === HEADER === */
         .hp-header {
           position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-          background: linear-gradient(135deg, #0F172A 0%, #0F766E 48%, #2563EB 100%);
+          background: linear-gradient(90deg, #FFFFFF 0%, #87CEEB 45%, #0B3D91 100%);
           backdrop-filter: blur(20px) saturate(1.6);
           -webkit-backdrop-filter: blur(20px) saturate(1.6);
-          border-bottom: 1px solid rgba(255,255,255,0.18);
+          border-bottom: 1px solid rgba(11,61,145,0.16);
           transition: all 0.4s cubic-bezier(0.4,0,0.2,1);
         }
         .hp-header-scrolled {
-          background: linear-gradient(135deg, #0F172A 0%, #0F766E 48%, #2563EB 100%);
-          box-shadow: 0 8px 32px rgba(13,148,136,0.22), 0 2px 8px rgba(37,99,235,0.15);
-          border-bottom-color: rgba(255,255,255,0.22);
+          background: linear-gradient(90deg, #FFFFFF 0%, #87CEEB 45%, #0B3D91 100%);
+          box-shadow: 0 8px 32px rgba(11,61,145,0.18), 0 2px 8px rgba(37,99,235,0.14);
+          border-bottom-color: rgba(11,61,145,0.22);
         }
         .hp-header-inner {
           width: 100%; padding: 0 24px 0 20px;
           display: flex; align-items: center; justify-content: space-between;
           height: 84px; gap: 16px; position: relative;
         }
-        .hp-logo { font-size: 18px; font-weight: 900; letter-spacing: -0.5px; color: #fff; flex-shrink: 0; }
+        .hp-logo { font-size: 18px; font-weight: 900; letter-spacing: -0.5px; color: #fff; flex-shrink: 0; display: flex; align-items: center; }
+        .hp-header-logo-img {
+          height: 58px;
+          width: auto;
+          max-width: min(320px, 42vw);
+          object-fit: contain;
+          display: block;
+        }
         .hp-nav-buttons { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
         .hp-nav-links { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
         .hp-nav-link {
-          padding: 7px 14px; border-radius: 8px; font-size: 14px; font-weight: 600;
-          color: rgba(255,255,255,0.80); cursor: pointer; transition: all 0.2s ease; white-space: nowrap;
+          padding: 8px 15px; border-radius: 8px; font-size: 16px; font-weight: 900;
+          color: #fff; cursor: pointer; transition: all 0.2s ease; white-space: nowrap;
+          text-shadow: 0 1px 8px rgba(11,61,145,0.32);
         }
         .hp-nav-link:hover { color: #fff; background: rgba(255,255,255,0.10); }
         .hp-hamburger { display: none; flex-direction: column; background: none; border: none; cursor: pointer; padding: 4px; }
         .hp-mobile-menu {
           display: none; flex-direction: column; gap: 10px; padding: 16px 24px;
-          background: linear-gradient(180deg, rgba(15,23,42,0.98) 0%, rgba(15,118,110,0.96) 100%);
-          border-top: 1px solid rgba(255,255,255,0.08);
+          background: linear-gradient(180deg, #DDF4FF 0%, #0B3D91 100%);
+          border-top: 1px solid rgba(11,61,145,0.12);
         }
         .hp-mobile-menu-btn { width: 100%; text-align: center; }
         .hp-mobile-nav-link {
-          padding: 10px 4px; font-size: 15px; font-weight: 600;
-          color: rgba(255,255,255,0.80); cursor: pointer;
+          padding: 11px 4px; font-size: 17px; font-weight: 900;
+          color: #fff; cursor: pointer;
           border-bottom: 1px solid rgba(255,255,255,0.07);
         }
         .hp-mobile-nav-link:hover { color: #fff; }
 
-        /* ═══ BUTTONS ═══ */
+        /* === BUTTONS === */
         .hp-login-btn:hover { background: linear-gradient(135deg, #0D9488, #1D4ED8); box-shadow: 0 4px 16px rgba(15,118,110,0.45); transform: translateY(-1px); }
         .hp-login-btn {
          padding: 8px 20px; border-radius: 10px; border: none;
@@ -1172,7 +1210,7 @@ export default function HomePage() {
         }
         .hp-primary-btn:hover { background: linear-gradient(135deg, #0D9488, #1D4ED8); box-shadow: 0 4px 16px rgba(15,118,110,0.45); transform: translateY(-1px); }
 
-        /* ═══ HERO ═══ */
+        /* === HERO === */
         .hp-velorah-outer {
           position: relative; width: 100%; min-height: 100vh;
           overflow: hidden; display: flex; flex-direction: column;
@@ -1215,7 +1253,7 @@ export default function HomePage() {
         .animate-fade-rise       { animation: fade-rise 0.8s ease-out both; }
         .animate-fade-rise-delay { animation: fade-rise 0.8s ease-out 0.2s both; }
 
-        /* ═══ SECTION LAYOUT ═══ */
+        /* === SECTION LAYOUT === */
         .hp-offers-section,
         .hp-reviews-section {
           padding: 78px 24px;
@@ -1289,7 +1327,7 @@ export default function HomePage() {
         .hp-state-card-offers h3, .hp-state-card-offers p { color: #475569; }
         .hp-state-logo { width: 52px; height: auto; display: block; animation: mtmPulse 1.8s ease-in-out infinite; }
 
-        /* ═══ OFFERS RAIL ═══ */
+        /* === OFFERS RAIL === */
         .hp-offers-rail {
           display: flex;
           gap: var(--hp-offer-rail-gap);
@@ -1307,7 +1345,7 @@ export default function HomePage() {
         .hp-offers-rail:active { cursor: grabbing; }
         .hp-offers-rail::-webkit-scrollbar { display: none; }
 
-        /* ═══ OFFER CARD ═══ */
+        /* === OFFER CARD === */
         .hp-offer-card {
           position: relative;
           flex: 0 0 var(--hp-offer-card-width);
@@ -1373,28 +1411,59 @@ export default function HomePage() {
         }
         .hp-offer-cta:hover { transform: translateY(-1px); filter: brightness(1.02); }
 
-        /* ═══ REVIEWS ═══ */
-        .hp-reviews-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+        /* === REVIEWS === */
+        .hp-reviews-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; max-width: 1080px; margin: 0 auto; }
         .hp-review-card {
-          position: relative; background: #fff; border-radius: 20px; padding: 26px;
-          border: 1px solid #EEF2F8; overflow: hidden;
-          display: flex; flex-direction: column; gap: 12px;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-          transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+          position: relative; border-radius: 12px; padding: 20px 20px;
+          overflow: hidden; min-height: 210px;
+          display: flex; flex-direction: column; gap: 13px;
+          background: #fff;
+          /* Gradient border via box-shadow + pseudo approach */
+          border: 1.5px solid transparent;
+          background-clip: padding-box;
+          box-shadow: 0 2px 12px rgba(15,118,110,0.08), 0 1px 3px rgba(37,99,235,0.06);
+          transition: transform 0.22s ease, box-shadow 0.22s ease;
           animation: reviewCardIn 0.55s both; animation-play-state: paused;
         }
+        /* Gradient border using pseudo-element */
+        .hp-review-card::before {
+          content: ""; position: absolute; inset: 0; border-radius: 12px; padding: 1.5px;
+          background: linear-gradient(135deg, #0F766E 0%, #2563EB 100%);
+          -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+          -webkit-mask-composite: xor; mask-composite: exclude;
+          pointer-events: none; opacity: 0.35; transition: opacity 0.22s ease;
+        }
+        /* Top gradient accent bar */
+        .hp-review-card::after {
+          content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+          background: linear-gradient(90deg, #0F766E 0%, #2563EB 100%);
+          border-radius: 12px 12px 0 0; opacity: 0.85;
+        }
         .hp-section-visible .hp-review-card { animation-play-state: running; }
-        .hp-review-card:hover { transform: translateY(-4px); border-color: #99F6E4; box-shadow: 0 12px 32px rgba(0,0,0,0.09); }
+        .hp-review-card:hover {
+          transform: translateY(-5px);
+          box-shadow: 0 16px 40px rgba(15,118,110,0.15), 0 4px 12px rgba(37,99,235,0.12);
+        }
+        .hp-review-card:hover::before { opacity: 0.75; }
         .hp-review-shimmer {
           position: absolute; inset: 0; left: -100%; width: 60%;
-          background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.55) 50%, transparent 60%);
-          pointer-events: none; transition: left 0.55s ease;
+          background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.6) 50%, transparent 60%);
+          pointer-events: none; transition: left 0.55s ease; z-index: 1;
         }
         .hp-review-card:hover .hp-review-shimmer { left: 150%; }
-        .hp-review-text { font-size: 14px; color: #334155; line-height: 1.7; flex: 1; margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-        .hp-review-author { margin-top: auto; }
-        .hp-review-author-name { font-size: 13px; font-weight: 700; color: #1E293B; }
-        .hp-review-consultant { font-size: 11px; color: #0D9488; font-weight: 500; margin-top: 2px; }
+        .hp-review-stars { display: inline-flex; gap: 2px; }
+        .hp-review-text { font-size: 14px; color: #0F172A; line-height: 1.5; flex: 1; margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+        .hp-review-divider { height: 1px; background: linear-gradient(90deg, #CCFBF1 0%, #BFDBFE 100%); margin-top: auto; }
+        .hp-review-author { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 0; }
+        .hp-review-author-name { font-size: 13px; font-weight: 800; color: #020617; }
+        .hp-review-consultant { font-size: 11px; color: #334155; font-weight: 500; margin-top: 1px; }
+        .hp-review-event-pill {
+          flex: 0 1 auto; max-width: 54%; padding: 4px 10px; border-radius: 999px;
+          background: linear-gradient(135deg, #0F766E 0%, #2563EB 100%);
+          border: none; color: #fff;
+          font-size: 10px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          box-shadow: 0 2px 8px rgba(15,118,110,0.2);
+        }
         .hp-empty-reviews {
           text-align: center; padding: 60px 20px; color: #94A3B8;
           background: #fff; border: 1px solid #EEF2F8; border-radius: 20px; box-shadow: 0 12px 28px rgba(15,23,42,0.06);
@@ -1408,7 +1477,7 @@ export default function HomePage() {
           box-shadow: 0 10px 24px rgba(15,118,110,0.18); display: inline-flex; align-items: center; gap: 8px;
         }
 
-        /* ═══ FOOTER ═══ */
+        /* === FOOTER === */
         .hp-footer {
           background: linear-gradient(135deg, #0F172A 0%, #0F766E 48%, #2563EB 100%);
           padding: 28px 0;
@@ -1446,7 +1515,7 @@ export default function HomePage() {
         }
         .hp-footer-links span:hover { color: #fff; }
 
-        /* ═══ CONTACT MODAL ═══ */
+        /* === CONTACT MODAL === */
         .hp-contact-modal-overlay {
           position: fixed; inset: 0; z-index: 200;
           background: rgba(15,23,42,0.7);
@@ -1492,7 +1561,7 @@ export default function HomePage() {
         .hp-contact-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .hp-contact-success { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 
-        /* ═══ WHATSAPP ═══ */
+        /* === WHATSAPP === */
         .hp-whatsapp-button {
           position: fixed; bottom: 24px; right: 24px; z-index: 99;
           width: 54px; height: 54px; border-radius: 50%;
@@ -1503,7 +1572,7 @@ export default function HomePage() {
         }
         .hp-whatsapp-button:hover { transform: scale(1.12); box-shadow: 0 8px 28px rgba(37,211,102,0.55); }
 
-        /* ═══ ANIMATIONS ═══ */
+        /* === ANIMATIONS === */
         @keyframes pulse   { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.85;transform:scale(1.04)} }
         @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
         @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
@@ -1525,7 +1594,7 @@ export default function HomePage() {
 
         div::-webkit-scrollbar { display: none; }
 
-        /* ═══ RESPONSIVE ═══ */
+        /* === RESPONSIVE === */
         @media (max-width: 1100px) {
           .hp-offers-head { align-items: center; }
           .hp-offers-section {
@@ -1550,6 +1619,7 @@ export default function HomePage() {
           .hp-desktop-nav { display: none !important; }
           .hp-hamburger  { display: flex !important; }
           .hp-mobile-menu { display: flex !important; }
+          .hp-header-logo-img { height: 48px; max-width: 230px; }
           .hp-velorah-hero { padding: 120px 20px 80px; }
           .hp-velorah-title { letter-spacing: -1px; }
           .hp-offers-section,
@@ -1566,7 +1636,7 @@ export default function HomePage() {
           .hp-offer-visual { width: 76px; height: 76px; border-radius: 20px; }
           .hp-offer-title { font-size: 16px; }
           .hp-offer-description { font-size: 12px; }
-          .hp-review-card { padding: 22px; }
+          .hp-review-card { padding: 18px; min-height: 190px; }
           .hp-reviews-grid { grid-template-columns: 1fr; }
           .hp-footer-bottom-row { flex-direction: column; align-items: center; gap: 16px; }
           .hp-footer-copyright-row { text-align: center; }
