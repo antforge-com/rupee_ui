@@ -14,6 +14,7 @@ interface SubscriptionPlanDetail {
   discountPrice: number;
   features?: string;
   tag?: string;
+  validityInMonths?: number;
 }
 
 interface UserProfile {
@@ -141,6 +142,7 @@ export const AccountProfile: React.FC<AccountProfileProps> = ({ onBack }) => {
                 discountPrice: Number(p.discountPrice ?? p.price ?? p.originalPrice ?? 0),
                 features: p.features || "",
                 tag: p.tag || "",
+                validityInMonths: Math.max(0, Number(p.validityInMonths ?? p.validity_in_months ?? 1) || 0),
               })));
               break;
             }

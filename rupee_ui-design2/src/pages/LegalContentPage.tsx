@@ -17,7 +17,7 @@ const resolveContent = async (contentType: LegalContentType): Promise<string> =>
     ? await getPrivacyPolicy()
     : await getTermsAndConditions();
 
-  return (Array.isArray(records) ? records : [])
+  return (Array.isArray(records) ? records : [records])
     .map((record: any) => String(record?.content || record?.text || "").trim())
     .filter(Boolean)
     .join("\n\n");

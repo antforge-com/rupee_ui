@@ -41,6 +41,7 @@ interface Plan {
   discountPrice: number;
   features: string;
   tag: string;
+  validityInMonths: number;
 }
 
 export const SubscriptionPlansPanel: React.FC = () => {
@@ -56,9 +57,20 @@ export const SubscriptionPlansPanel: React.FC = () => {
     discountPrice: 0,
     features: "",
     tag: "",
+    validityInMonths: 1,
   });
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+
+  const normalizePlan = (plan: any): Plan => ({
+    id: Number(plan.id),
+    name: plan.name || plan.planName || "",
+    originalPrice: Number(plan.originalPrice ?? plan.price ?? plan.discountPrice ?? 0),
+    discountPrice: Number(plan.discountPrice ?? plan.price ?? plan.originalPrice ?? 0),
+    features: plan.features || "",
+    tag: plan.tag || "",
+    validityInMonths: Math.max(0, Number(plan.validityInMonths ?? plan.validity_in_months ?? 1) || 0),
+  });
 
   const extractPlans = (data: any): Plan[] => {
     if (!data) return [];
@@ -80,7 +92,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
       } catch (e) {
         data = await apiFetch("/subscription-plans");
       }
-      setPlans(extractPlans(data));
+      setPlans(extractPlans(data).map(normalizePlan).filter(plan => plan.id));
     } catch (err: any) {
       setError(err?.message || "Failed to load plans.");
     } finally {
@@ -101,10 +113,11 @@ export const SubscriptionPlansPanel: React.FC = () => {
         discountPrice: plan.discountPrice || 0,
         features: plan.features || "",
         tag: plan.tag || "",
+        validityInMonths: plan.validityInMonths ?? 1,
       });
     } else {
       setEditingPlan(null);
-      setFormData({ name: "", originalPrice: 0, discountPrice: 0, features: "", tag: "" });
+      setFormData({ name: "", originalPrice: 0, discountPrice: 0, features: "", tag: "", validityInMonths: 1 });
     }
     setFormError("");
     setIsModalOpen(true);
@@ -124,6 +137,10 @@ export const SubscriptionPlansPanel: React.FC = () => {
     }
     if (startsWithNumber(cleanedName)) {
       setFormError("Plan name cannot start with a number");
+      return;
+    }
+    if (formData.validityInMonths < 0) {
+      setFormError("Validity cannot be negative");
       return;
     }
     setFormSubmitting(true);
@@ -271,6 +288,10 @@ export const SubscriptionPlansPanel: React.FC = () => {
                 )}
               </div>
 
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 16 }}>
+                Validity: {plan.validityInMonths || 0} month{plan.validityInMonths === 1 ? "" : "s"}
+              </div>
+
               {plan.features && (
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", marginBlockEnd: 8, textTransform: "uppercase" }}>Features</div>
@@ -311,7 +332,8 @@ export const SubscriptionPlansPanel: React.FC = () => {
               background: "#fff",
               borderRadius: 16,
               inlineSize: "min(500px, 95vw)",
-              overflow: "hidden",
+              maxBlockSize: "92vh",
+              overflowY: "auto",
               boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
             }}
           >
@@ -370,6 +392,18 @@ export const SubscriptionPlansPanel: React.FC = () => {
                       required
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 6 }}>Validity (months) *</label>
+                  <input
+                    type="number"
+                    value={formData.validityInMonths}
+                    onChange={(e) => setFormData({ ...formData, validityInMonths: Math.max(0, Number(e.target.value)) })}
+                    style={{ inlineSize: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #CBD5E1", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                    min="0"
+                    required
+                  />
                 </div>
 
                 <div>

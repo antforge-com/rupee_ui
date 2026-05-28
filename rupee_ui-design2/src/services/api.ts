@@ -192,7 +192,7 @@ export const apiFetch = async (endpoint: string, options: ApiFetchOptions = {}) 
     }
 
     if (!res.ok) {
-      if (res.status === 403) {
+      if (res.status === 403 && !suppressErrorLog) {
         console.error(`🚫 403 Forbidden on ${requestOptions.method || "GET"} ${endpoint}`);
         console.error("   Response body:", data);
         if (token) {
@@ -652,8 +652,12 @@ export const deleteConsultant = async (consultantId: number) =>
 export const deleteAdvisor = deleteConsultant;
 
 export const getOnboarding = async (id: number) => apiFetch(`/onboarding/${id}`);
-export const updateOnboarding = async (id: number, payload: object) =>
-  apiFetch(`/onboarding/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+export const updateOnboarding = async (id: number, payload: object, file?: File | null) => {
+  const formData = new FormData();
+  formData.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+  if (file) formData.append("file", file);
+  return apiFetch(`/onboarding/${id}`, { method: "PUT", body: formData });
+};
 export const deleteOnboarding = async (id: number) =>
   apiFetch(`/onboarding/${id}`, { method: "DELETE" });
 
@@ -823,20 +827,11 @@ export const getMySpecialBookings = async (): Promise<any[]> => {
 };
 
 export const getSpecialBookingsByConsultant = async (consultantId: number): Promise<any[]> => {
-  const attempts: Array<() => Promise<any>> = [
-    () => apiFetch(`/special-bookings/consultant/${consultantId}`),
-    () => apiFetch(`/consultants/${consultantId}/special-bookings`),
-    () => apiFetch(`/special-bookings?consultantId=${consultantId}`),
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      const data = await attempt();
-      const arr = extractArray(data);
-      if (Array.isArray(arr)) return arr;
-    } catch {
-      // try next endpoint variant
-    }
+  try {
+    const data = await apiFetch(`/special-bookings/consultant/${consultantId}`, { suppressErrorLog: true });
+    return extractArray(data);
+  } catch {
+    // Optional availability data; older backend builds may restrict this endpoint.
   }
   return [];
 };
@@ -3134,19 +3129,102 @@ const getLocalStaticContentFallback = (storageKey: string): any[] => {
   }
 };
 
+const DEFAULT_STATIC_CONTENT: Record<string, string> = {
+  PRIVACY_POLICY: `1. Information We Collect
+We collect information that you provide directly, including account details, profile preferences, and booking information.
+
+2. How We Use Information
+Your information is used to deliver consultations, process bookings, improve platform quality, and support customer service.
+
+3. Payments and Bookings
+Payment and booking information is used only to process transactions, confirmations, cancellations, refunds, and related support requests.
+
+4. Data Protection
+We use reasonable safeguards to protect your personal information and limit access to authorized personnel.
+
+5. Third-Party Services
+Payment processing and communication providers may process limited information needed to complete platform services.
+
+6. Your Rights
+You may request access, correction, or deletion of your personal data subject to applicable laws.
+
+7. Policy Updates
+We may update this Privacy Policy periodically and publish the latest version on the platform.`,
+  TERMS_AND_CONDITIONS: `1. Acceptance of Terms
+By accessing and using Meet The Masters, you agree to be bound by these Terms.
+
+2. Use of Services
+Our platform provides access to certified consultants for lawful purposes only.
+
+3. Confidentiality
+Consultation sessions and related information are strictly confidential.
+
+4. Booking and Payments
+Bookings are confirmed upon successful payment. Cancellations and refunds are handled according to the platform policy shown during booking.
+
+5. Disclaimer
+Advice provided through the platform is for informational purposes and does not replace independent professional judgment.`,
+};
+
+const getDefaultStaticContentFallback = (contentType: string): any[] => {
+  const content = DEFAULT_STATIC_CONTENT[contentType];
+  return content ? [{ contentType, content, lastUpdatedBy: "Frontend fallback" }] : [];
+};
+
+const normalizeStaticContentType = (value: any): string =>
+  String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+const staticContentTypeMatches = (value: any, contentType: string): boolean => {
+  const actual = normalizeStaticContentType(value);
+  const expected = normalizeStaticContentType(contentType);
+  if (!actual || !expected) return false;
+  if (actual === expected) return true;
+
+  const aliases: Record<string, string[]> = {
+    PRIVACYPOLICY: ["PRIVACY", "PRIVACIES"],
+    TERMSANDCONDITIONS: ["TERMS", "TERMSCONDITIONS", "TERMSOFUSE"],
+  };
+  return (aliases[expected] || []).includes(actual);
+};
+
+const normalizeStaticContentRecord = (data: any, contentType: string): any | null => {
+  if (!data) return null;
+
+  if (Array.isArray(data)) {
+    return data.find((item: any) =>
+      staticContentTypeMatches(item?.contentType || item?.type, contentType) && (item?.content || item?.text)
+    ) || null;
+  }
+
+  return data.content || data.text ? data : null;
+};
+
 const getStaticContentWithFallback = async (
   contentType: string,
   storageKey: string,
 ): Promise<any[]> => {
   const fallback = getLocalStaticContentFallback(storageKey);
+  const defaultFallback = fallback.length > 0 ? fallback : getDefaultStaticContentFallback(contentType);
+  let listEndpointWorked = false;
+  const allContent = await publicFetch("/static-content")
+    .then((data) => {
+      listEndpointWorked = true;
+      return data;
+    })
+    .catch(() => []);
+  const matchingRecord = normalizeStaticContentRecord(allContent, contentType);
+  if (matchingRecord) return [matchingRecord];
+  if (listEndpointWorked) return defaultFallback;
+
   try {
     const data = await publicFetch(`/static-content/${contentType}`);
-    return data && (data.content || data.text) ? [data] : fallback;
+    const record = normalizeStaticContentRecord(data, contentType);
+    return record ? [record] : defaultFallback;
   } catch (e: any) {
     if (!String(e?.message || "").includes("404")) {
       console.warn(`⚠️ ${contentType} /static-content failed:`, e?.message);
     }
-    return fallback;
+    return defaultFallback;
   }
 };
 

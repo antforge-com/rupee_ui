@@ -59,6 +59,11 @@ const loadRazorpayCheckout = () => {
 
 const toPaise = (amount: number) => Math.round(Number(amount || 0) * 100);
 
+const normalizeContact = (contact?: string) => {
+  const digits = String(contact || "").replace(/\D/g, "").slice(-10);
+  return digits.length === 10 ? digits : undefined;
+};
+
 const getCheckoutImageUrl = () => {
   const host = window.location.hostname;
   if (host === "localhost" || host === "127.0.0.1") return undefined;
@@ -80,6 +85,8 @@ export const openRazorpayOrder = async (
 
   return new Promise<RazorpayCheckoutResult>((resolve, reject) => {
     const checkoutImage = getCheckoutImageUrl();
+    const prefill = request.prefill || {};
+    const contact = normalizeContact(prefill.contact);
     const checkoutOptions: Record<string, any> = {
       key,
       amount: toPaise(request.amount),
@@ -87,8 +94,35 @@ export const openRazorpayOrder = async (
       name: "Meet The Masters",
       description: request.description,
       order_id: request.orderId,
-      prefill: request.prefill || {},
+      prefill: {
+        ...prefill,
+        ...(contact ? { contact } : {}),
+      },
       notes: request.notes || {},
+      method: {
+        upi: true,
+        card: true,
+        netbanking: true,
+        wallet: true,
+      },
+      config: {
+        display: {
+          blocks: {
+            upi: {
+              name: "Pay by UPI",
+              instruments: [{ method: "upi" }],
+            },
+          },
+          sequence: ["block.upi"],
+          preferences: {
+            show_default_blocks: true,
+          },
+        },
+      },
+      retry: {
+        enabled: true,
+        max_count: 2,
+      },
       theme: {
         color: "#2563EB",
       },
@@ -131,3 +165,11 @@ export const verifySpecialBookingPayment = async (
   specialBookingId: number,
   response: RazorpayCheckoutResult
 ) => verifyPayment(`/special-bookings/${specialBookingId}/verify-payment`, response);
+
+export const verifyOnboardingPayment = async (
+  userId: number,
+  response: RazorpayCheckoutResult
+) => verifyPayment(`/onboarding/${userId}/verify-payment`, response);
+
+export const retryOnboardingPayment = async (userId: number) =>
+  apiFetch(`/onboarding/${userId}/retry-payment`, { method: "POST" });

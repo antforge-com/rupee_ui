@@ -24,6 +24,7 @@ interface Booking {
   meetingMode: string;
   paymentStatus?: string;
   refundStatus?: string;
+  refundAmount?: number;
   razorpayRefundId?: string;
   isSpecial?: boolean;
   duration?: string;        // e.g. "1 hr", "2 hrs"
@@ -85,6 +86,27 @@ const extractConsultantId = (b: any): number => Number(
   b?.provider?.id ||
   0
 ) || 0;
+
+const readMoney = (...values: any[]): number => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+};
+
+const readRefundAmount = (b: any): number => {
+  const explicit = readMoney(b.refundAmount, b.refund_amount, b.refund?.amount);
+  if (explicit > 0) return explicit;
+
+  const total = readMoney(b.totalAmount, b.total_amount, b.amount);
+  if (total > 0) return total;
+
+  const base = readMoney(b.baseAmount, b.base_amount);
+  const discount = readMoney(b.discountAmount, b.discount_amount);
+  return Math.max(base - discount, 0);
+};
 
 const extractUserName = (b: any, userNameMap: Record<number, string> = {}): string => {
   const uid = extractUserId(b);
@@ -358,6 +380,9 @@ export default function BookingsPage({ isAdmin = false }: Props) {
       patch = {
         status: (fresh.bookingStatus || fresh.BookingStatus || fresh.status || "CANCELLED").toUpperCase(),
         paymentStatus: (fresh.paymentStatus || fresh.payment_status || "").toUpperCase() || undefined,
+        refundStatus: String(fresh.refundStatus || fresh.refund_status || fresh.refund?.status || "").toUpperCase() || undefined,
+        amount: readMoney(fresh.totalAmount, fresh.total_amount, fresh.amount),
+        refundAmount: readRefundAmount(fresh) || undefined,
         razorpayRefundId: fresh.razorpayRefundId || fresh.razorpay_refund_id || undefined,
       };
     } catch {
@@ -384,6 +409,8 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         specialStatus: String(fresh.status || fresh.specialBookingStatus || "CANCELLED").toUpperCase(),
         paymentStatus: String(fresh.paymentStatus || fresh.payment_status || "").toUpperCase() || undefined,
         refundStatus: String(fresh.refundStatus || fresh.refund_status || fresh.refund?.status || "").toUpperCase() || undefined,
+        amount: readMoney(fresh.totalAmount, fresh.total_amount, fresh.amount),
+        refundAmount: readRefundAmount(fresh) || undefined,
         razorpayRefundId: fresh.razorpayRefundId || fresh.razorpay_refund_id || undefined,
       };
     } catch {
@@ -584,10 +611,11 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           date: scheduledDate,
           time: timeDisplay,
           status: displayStatus,
-          amount: Number(b.sessionAmount || b.totalAmount || b.total_amount || b.amount || b.charges || 0),
+          amount: readMoney(b.totalAmount, b.total_amount, b.amount),
           meetingMode: (b.meetingMode || b.meeting_mode || "ONLINE").toUpperCase(),
           paymentStatus: String(b.paymentStatus || b.payment_status || "").toUpperCase() || undefined,
           refundStatus: String(b.refundStatus || b.refund_status || b.refund?.status || "").toUpperCase() || undefined,
+          refundAmount: readRefundAmount(b) || undefined,
           razorpayRefundId: b.razorpayRefundId || b.razorpay_refund_id || undefined,
           isSpecial: true,
           duration,
@@ -744,9 +772,11 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         date,
         time,
         status,
-        amount: Number(b.totalAmount || b.amount || b.charges || b.fee || b.consultantCharges || 0),
+        amount: readMoney(b.totalAmount, b.total_amount, b.amount),
         meetingMode: b.meetingMode || b.meeting_mode || b.mode || "",
         paymentStatus: (b.paymentStatus || b.payment_status || "").toUpperCase(),
+        refundStatus: String(b.refundStatus || b.refund_status || b.refund?.status || "").toUpperCase() || undefined,
+        refundAmount: readRefundAmount(b) || undefined,
         razorpayRefundId: b.razorpayRefundId || b.razorpay_refund_id || undefined,
       };
     });
@@ -1027,6 +1057,21 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                       whiteSpace: "nowrap",
                     }}>
                       REFUND {b.refundStatus}
+                    </span>
+                  )}
+                  {b.refundAmount && b.refundAmount > 0 && (
+                    <span style={{
+                      padding: "4px 10px",
+                      borderRadius: 20,
+                      background: "#F0FDF4",
+                      color: "#15803D",
+                      border: "1px solid #BBF7D0",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: "0.04em",
+                      whiteSpace: "nowrap",
+                    }}>
+                      Refund ₹{b.refundAmount.toLocaleString("en-IN")}
                     </span>
                   )}
                   {b.razorpayRefundId && (

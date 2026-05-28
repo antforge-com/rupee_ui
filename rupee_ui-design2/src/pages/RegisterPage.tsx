@@ -17,6 +17,7 @@ import headerLogoImg from '../assests/MeetMastersHorizontalLogo.png';
 import logoImg from '../assests/MeetMastersMLogo.png';
 import { API_BASE_URL } from "../config/api";
 import { checkOtp as apiCheckOtp, sendRegistrationOtp } from "../services/api";
+import { openRazorpayOrder, verifyOnboardingPayment } from "../services/razorpay";
 import { formatNameLikeInput, startsWithNumber } from "../utils/formUtils";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -71,11 +72,28 @@ interface Plan {
   name: string;
   originalPrice: number;
   discountPrice: number;
-  //features: string;
+  features?: string;
   tag?: string;
+  validityInMonths?: number;
 }
 
 const isFree = (plan: Plan) => plan.discountPrice === 0;
+
+const normalizePlan = (plan: any): Plan => ({
+  id: Number(plan.id),
+  name: plan.name || plan.planName || "",
+  originalPrice: Number(plan.originalPrice ?? plan.price ?? plan.discountPrice ?? 0),
+  discountPrice: Number(plan.discountPrice ?? plan.price ?? plan.originalPrice ?? 0),
+  features: plan.features || "",
+  tag: plan.tag || "",
+  validityInMonths: Math.max(0, Number(plan.validityInMonths ?? plan.validity_in_months ?? 1) || 0),
+});
+
+const getValidityLabel = (plan?: Plan | null): string => {
+  const months = Number(plan?.validityInMonths ?? 0);
+  if (!months) return "";
+  return `${months} month${months === 1 ? "" : "s"}`;
+};
 
 const sanitizeEmail = (raw: string): string =>
   raw.trim().toLowerCase().replace(/[^\x21-\x7E]/g, "").replace(/\s/g, "");
@@ -83,6 +101,7 @@ const sanitizeEmail = (raw: string): string =>
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 const MOBILE_REGEX = /^[6-9]\d{9}$/;
 const MIN_TEXT_LENGTH = 2;
+const cleanMobileNumber = (value: string): string => value.replace(/\D/g, "").slice(0, 10);
 
 const capitalizeFirstLetter = (value: string): string => {
   const trimmed = value.trim();
@@ -110,6 +129,8 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [successTitle, setSuccessTitle] = useState("Account Created!");
+  const [successMessage, setSuccessMessage] = useState("Login credentials sent to your email. Redirecting to login...");
   const [apiError, setApiError] = useState("");
 
   // The backend validates the registration OTP only on /onboarding.
@@ -153,7 +174,7 @@ export default function RegisterPage() {
           let data: any = null;
           try { data = await publicFetch(endpoint); }
           catch { data = await apiFetch(endpoint); }
-          fetched = extractPlans(data);
+          fetched = extractPlans(data).map(normalizePlan).filter(plan => plan.id);
           if (fetched.length > 0) break;
         } catch (err) { }
       }
@@ -187,12 +208,16 @@ export default function RegisterPage() {
       setErrors(x => ({ ...x, email: "Enter a valid email address first" }));
       return;
     }
+    const cleanMobile = cleanMobileNumber(mobileNumber);
+    if (!MOBILE_REGEX.test(cleanMobile)) {
+      setErrors(x => ({ ...x, mobileNumber: "Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9" }));
+      return;
+    }
     setSendingOtp(true); setSendOtpError(""); setErrors(x => ({ ...x, email: "" }));
     try {
       // Pass the mobile number so the backend can also dispatch an SMS OTP when
       // SMS is enabled.  sendRegistrationOtp treats phoneNumber as optional -
       // if the user hasn't filled it in yet we simply omit it.
-      const cleanMobile = mobileNumber.replace(/\s/g, "");
       await sendRegistrationOtp(clean, cleanMobile || undefined);
       setOtpSentToEmail(clean);
       setInlineOtp(["", "", "", "", "", ""]);
@@ -284,9 +309,9 @@ export default function RegisterPage() {
     if (!cleanedName) e.name = "Full name is required";
     else if (startsWithNumber(cleanedName)) e.name = "Full name cannot start with a number";
     else if (cleanedName.length < MIN_TEXT_LENGTH) e.name = "Enter your full name";
-    const cleanMobile = mobileNumber.replace(/\s/g, "");
+    const cleanMobile = cleanMobileNumber(mobileNumber);
     if (!cleanMobile) e.mobileNumber = "Mobile number is required";
-    else if (!MOBILE_REGEX.test(cleanMobile)) e.mobileNumber = "Enter a valid 10-digit mobile number";
+    else if (!MOBILE_REGEX.test(cleanMobile)) e.mobileNumber = "Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9";
     const cleanedEmail = sanitizeEmail(email);
     if (!cleanedEmail) e.email = "Email is required";
     else if (!EMAIL_REGEX.test(cleanedEmail)) e.email = "Enter a valid email address";
@@ -307,18 +332,61 @@ export default function RegisterPage() {
     if (!validate()) return;
     setSubmitting(true); setApiError("");
     try {
-      const planId = selectedPlan && !isFree(selectedPlan) ? selectedPlan.id : null;
+      const selected = selectedPlan!;
+      const paidPlan = !isFree(selected);
+      const planId = paidPlan ? selected.id : null;
       const cleanEmail = sanitizeEmail(email);
-      const cleanMobile = mobileNumber.replace(/\s/g, "");
+      const cleanMobile = cleanMobileNumber(mobileNumber);
       const registerPayload = {
         name: name.trim().replace(/\s+/g, " "), email: cleanEmail, otp: confirmedOtp,
         phoneNumber: cleanMobile, mobileNumber: cleanMobile,
         location: location.trim().replace(/\s+/g, " "), subscriptionPlanId: planId,
-        subscribed: !isFree(selectedPlan!), isGuest: isFree(selectedPlan!),
+        subscribed: paidPlan, isGuest: !paidPlan,
       };
-      await publicFetch("/onboarding", { method: "POST", body: JSON.stringify(registerPayload) });
+      const created = await publicFetch("/onboarding", { method: "POST", body: JSON.stringify(registerPayload) });
+
+      if (paidPlan) {
+        const userId = Number(created?.userId ?? created?.id ?? created?.user?.id ?? 0);
+        const orderId = String(created?.razorpayOrderId ?? created?.razorpay_order_id ?? "").trim();
+        const amount = Number(created?.subscriptionPlan?.discountPrice ?? selected.discountPrice ?? 0);
+
+        if (!userId || !orderId) {
+          setSuccessTitle("Account Created");
+          setSuccessMessage("Payment could not be started. Sign in and retry the subscription from your profile.");
+          setSuccess(true);
+          setTimeout(() => navigate("/login"), 3500);
+          return;
+        }
+
+        try {
+          const checkoutResult = await openRazorpayOrder({
+            keyId: created?.razorpayKeyId ?? created?.razorpay_key_id,
+            orderId,
+            amount,
+            description: `${getPlanDisplayName(selected)} subscription`,
+            prefill: { name: name.trim(), email: cleanEmail, contact: cleanMobile },
+            notes: { userId, subscriptionPlanId: selected.id, source: "registration" },
+          });
+
+          try {
+            await verifyOnboardingPayment(userId, checkoutResult);
+            setSuccessTitle("Subscribed!");
+            setSuccessMessage("Payment verified. Login credentials sent to your email. Redirecting to login...");
+          } catch {
+            setSuccessTitle("Account Created");
+            setSuccessMessage("Payment completed, but subscription verification is pending. Sign in and check your profile.");
+          }
+        } catch (paymentErr: any) {
+          setSuccessTitle("Account Created");
+          setSuccessMessage(`${paymentErr?.message || "Payment was not completed."} Sign in to retry from your profile.`);
+        }
+      } else {
+        setSuccessTitle("Account Created!");
+        setSuccessMessage("Login credentials sent to your email. Redirecting to login...");
+      }
+
       setSuccess(true);
-      setTimeout(() => navigate("/login"), 2500);
+      setTimeout(() => navigate("/login"), 3500);
     } catch (err: any) {
       const raw = String(err?.message || "").toLowerCase();
       if (raw.includes("otp") || raw.includes("expired") || raw.includes("invalid") || raw.includes("incorrect")) {
@@ -338,8 +406,9 @@ export default function RegisterPage() {
   };
 
   const emailIsValid = EMAIL_REGEX.test(sanitizeEmail(email));
-  const cleanMobile = mobileNumber.replace(/\s/g, "");
+  const cleanMobile = cleanMobileNumber(mobileNumber);
   const mobileIsValid = MOBILE_REGEX.test(cleanMobile);
+  const mobileHasTenDigits = cleanMobile.length === 10;
   const cleanedName = name.trim().replace(/\s+/g, " ");
   const nameIsValid = !!cleanedName && cleanedName.length >= MIN_TEXT_LENGTH && !startsWithNumber(cleanedName);
   const canRegister =
@@ -378,10 +447,10 @@ export default function RegisterPage() {
           <div className="success-card">
             <div className="success-icon-circle"><CheckCircle size={40} /></div>
             <div style={{ fontSize: '24px', fontWeight: 900, color: 'var(--color-primary)', marginBottom: '8px' }}>
-              {selectedPlan && !isFree(selectedPlan) ? "Subscribed!" : "Account Created!"}
+              {successTitle}
             </div>
             <p style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>
-              Login credentials sent to your email. Redirecting to login...
+              {successMessage}
             </p>
             <div className="animate-spin" style={{ width: 24, height: 24, border: '3px solid var(--color-primary-light)', borderTopColor: 'var(--color-primary)', borderRadius: '50%', margin: '0 auto' }} />
           </div>
@@ -418,7 +487,7 @@ export default function RegisterPage() {
               <span className="phone-input-prefix" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "0 14px", background: "var(--bg-body)", border: "1.5px solid var(--border-color)", borderRight: "none", borderRadius: "var(--radius-md) 0 0 var(--radius-md)", fontSize: 14, color: "var(--text-muted)", fontWeight: 700, whiteSpace: "nowrap", flex: "0 0 54px", lineHeight: 1 }}>+91</span>
               <input
                 value={mobileNumber}
-                onChange={e => { setMobileNumber(e.target.value.replace(/\D/g, "").slice(0, 10)); setErrors(x => ({ ...x, mobileNumber: "" })); }}
+                onChange={e => { setMobileNumber(cleanMobileNumber(e.target.value)); setErrors(x => ({ ...x, mobileNumber: "" })); }}
                 placeholder="10-digit mobile number"
                 type="tel"
                 inputMode="numeric"
@@ -427,13 +496,19 @@ export default function RegisterPage() {
                 style={{ borderRadius: "0 var(--radius-md) var(--radius-md) 0" }}
               />
             </div>
-            {mobileNumber.replace(/\D/g, "").length > 0 && mobileNumber.replace(/\D/g, "").length < 10 && !errors.mobileNumber && (
+            {cleanMobile.length > 0 && cleanMobile.length < 10 && !errors.mobileNumber && (
               <div style={{ fontSize: 11, color: "#D97706", marginTop: 4, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
                 <AlertTriangle size={12} />
-                <span>Enter {10 - mobileNumber.replace(/\D/g, "").length} more digit{10 - mobileNumber.replace(/\D/g, "").length !== 1 ? "s" : ""}</span>
+                <span>Enter {10 - cleanMobile.length} more digit{10 - cleanMobile.length !== 1 ? "s" : ""}</span>
               </div>
             )}
-            {mobileNumber.replace(/\D/g, "").length === 10 && !errors.mobileNumber && (
+            {mobileHasTenDigits && !mobileIsValid && !errors.mobileNumber && (
+              <div style={{ fontSize: 11, color: "#EF4444", marginTop: 4, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
+                <AlertTriangle size={12} />
+                <span>Indian mobile number must start with 6, 7, 8, or 9</span>
+              </div>
+            )}
+            {mobileIsValid && !errors.mobileNumber && (
               <div style={{ fontSize: 11, color: "#16A34A", marginTop: 4, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
                 <CheckCircle size={12} />
                 <span>Valid mobile number</span>
@@ -605,7 +680,11 @@ export default function RegisterPage() {
                           {getPlanDisplayName(plan)}
                           {!free ? <span className="badge badge-success" style={{ fontSize: '9px', padding: '2px 8px' }}>PREMIUM</span> : null}
                         </div>
-                        {/* <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: 4 }}>{plan.features}</div> */}
+                        {getValidityLabel(plan) && (
+                          <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: 4, fontWeight: 700 }}>
+                            {getValidityLabel(plan)} validity
+                          </div>
+                        )}
                       </div>
                       <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                         <div style={{ fontSize: '20px', fontWeight: 900, color: isSelected ? activePriceColor : (free ? 'var(--text-light)' : 'var(--color-primary)') }}>

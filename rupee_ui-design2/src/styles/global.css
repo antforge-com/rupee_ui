@@ -130,6 +130,20 @@
     }
 }
 
+@media (max-width: 900px) {
+    .hp-desktop-nav {
+        display: none !important;
+    }
+
+    .hp-hamburger {
+        display: flex !important;
+    }
+
+    .hp-mobile-menu {
+        display: flex !important;
+    }
+}
+
 @media (max-width: 640px) {
     .hp-header-inner {
         justify-content: flex-end !important;

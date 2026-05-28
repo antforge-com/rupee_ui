@@ -72,7 +72,7 @@ import {
   updateTicketStatus,
 } from "../services/api";
 import { decryptLocal, encryptLocal } from "../services/crypto";
-import { openRazorpayOrder, verifyBookingPayment, verifySpecialBookingPayment } from "../services/razorpay";
+import { openRazorpayOrder, retryOnboardingPayment, verifyBookingPayment, verifyOnboardingPayment, verifySpecialBookingPayment } from "../services/razorpay";
 import { UserNotificationMonitor, markNotificationReadOnBackend } from "./NotificationSystem";
 import { PostBookingQuestionnaire } from "./Postbookingquestionnaire";
 
@@ -297,6 +297,7 @@ interface SubscriptionPlanDetail {
   discountPrice: number;
   features?: string;
   tag?: string;
+  validityInMonths?: number;
 }
 interface UserProfile {
   id?: number; name?: string; email?: string; location?: string; memberSince?: string;
@@ -304,7 +305,26 @@ interface UserProfile {
   subscriptionPlanId?: number;
   phone?: string; incomes?: IncomeItem[]; expenses?: ExpenseItem[]; createdAt?: string;
   designation?: string; organizationName?: string;
+  paymentStatus?: string;
+  subscriptionStartDate?: string;
+  subscriptionEndDate?: string;
 }
+
+const normalizeSubscriptionPlan = (plan: any): SubscriptionPlanDetail => ({
+  id: Number(plan.id),
+  name: plan.name || plan.planName || "",
+  originalPrice: Number(plan.originalPrice ?? plan.price ?? plan.discountPrice ?? 0),
+  discountPrice: Number(plan.discountPrice ?? plan.price ?? plan.originalPrice ?? 0),
+  features: plan.features || "",
+  tag: plan.tag || "",
+  validityInMonths: Math.max(0, Number(plan.validityInMonths ?? plan.validity_in_months ?? 1) || 0),
+});
+
+const getPlanValidityLabel = (plan?: Partial<SubscriptionPlanDetail> | null): string => {
+  const months = Number(plan?.validityInMonths ?? 0);
+  if (!months) return "";
+  return `${months} month${months === 1 ? "" : "s"}`;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TIME / DATE HELPERS
@@ -985,6 +1005,30 @@ const getGuestTrialDaysRemaining = (): number => {
   // Use floor so day 1 shows 59, day 2 shows 58 - each elapsed calendar day decrements
   const diff = twoMonthsLater.getTime() - Date.now();
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+};
+
+const getGuestTrialValidUntil = (): Date | null => {
+  const start = getGuestAccountStart();
+  if (!start) return null;
+  const validUntil = new Date(start);
+  validUntil.setMonth(validUntil.getMonth() + 2);
+  return validUntil;
+};
+
+const formatGuestTrialValidUntil = (): string => {
+  const validUntil = getGuestTrialValidUntil();
+  if (!validUntil) return "-";
+  return validUntil.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Kolkata",
+  });
+};
+
+const canCurrentUserCreateTicket = (): boolean => {
+  const role = (getLocalRole()).toUpperCase().replace(/^ROLE_/, "");
+  return role === "MEMBER" || role !== "GUEST" || isGuestInTrial();
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1788,6 +1832,9 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           incomes: (merged.incomes || merged.incomeItems || []).map((i: any) => ({ incomeType: i.incomeType || i.label || "Income", incomeAmount: i.incomeAmount ?? i.amount ?? 0 })),
           expenses: (merged.expenses || merged.expenseItems || []).map((e: any) => ({ expenseType: e.expenseType || e.label || "Expense", expenseAmount: e.expenseAmount ?? e.amount ?? 0 })),
           memberSince: merged.memberSince || merged.member_since || merged.createdAt || "",
+          paymentStatus: merged.paymentStatus || merged.payment_status || "",
+          subscriptionStartDate: merged.subscriptionStartDate || merged.subscription_start_date || "",
+          subscriptionEndDate: merged.subscriptionEndDate || merged.subscription_end_date || "",
         };
         const existingPhoto = merged.profileImageUrl || merged.profilePhoto || merged.photo || merged.avatarUrl || "";
         if (existingPhoto) setAvatarPreview(resolvePhotoUrl(existingPhoto));
@@ -1815,14 +1862,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               const data = await res.json();
               const arr: any[] = Array.isArray(data) ? data : (data?.content || data?.plans || []);
               if (arr.length > 0) {
-                setPlans(arr.map((p: any) => ({
-                  id: p.id,
-                  name: p.name || p.planName || "",
-                  originalPrice: Number(p.originalPrice ?? p.price ?? p.discountPrice ?? 0),
-                  discountPrice: Number(p.discountPrice ?? p.price ?? p.originalPrice ?? 0),
-                  features: p.features || "",
-                  tag: p.tag || "",
-                })));
+                setPlans(arr.map(normalizeSubscriptionPlan).filter(plan => plan.id));
                 break;
               }
             }
@@ -1872,32 +1912,135 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   // ── Change plan via PUT /onboarding/{id} with subscriptionPlanId ──
   const handleChangePlan = async (planId: number) => {
     if (!profile?.id) return;
+    const selectedPlan = plans.find(p => p.id === planId);
+    if (!selectedPlan) {
+      setSaveMsg("ERROR::Please select a valid subscription plan.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     if (!phoneIsValid) {
       setSaveMsg("ERROR::Add a valid 10-digit phone number before changing plan.");
       setTimeout(() => setSaveMsg(""), 5000);
       return;
     }
+    const currentPlan = plans.find(p => p.id === profile.subscriptionPlanId)
+      || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
+    const currentPrice = Number(currentPlan?.discountPrice ?? 0);
+    const nextPrice = Number(selectedPlan.discountPrice ?? 0);
+    if (nextPrice <= currentPrice) {
+      setSaveMsg("ERROR::Only upgrades to a higher subscription plan are allowed.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     setPlanSaving(true); setSaveMsg("");
     try {
-      const token = localStorage.getItem("fin_token");
-      const headers: Record<string, string> = { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+      const amountDue = Math.max(nextPrice - currentPrice, 0);
       // Use the onboarding PUT endpoint with subscriptionPlanId - matches backend UpdateUserRegistrationRequest
       const payload = { subscriptionPlanId: planId, phoneNumber: phoneDigitsForRequests };
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
-      const res = await fetch(`${BASE_URL}/onboarding/${profile.id}`, { method: "PUT", headers, body: fd });
-      if (res.ok) {
-        const data = await res.json();
-        const newPlanName = data?.subscriptionPlan?.name || plans.find(p => p.id === planId)?.name || "";
-        setSelectedPlanId(planId);
-        setProfile(prev => prev ? { ...prev, subscriptionPlanId: planId, subscriptionPlanName: newPlanName } : prev);
-        setSaveMsg(`SUCCESS::Plan changed to "${newPlanName}" successfully!`);
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setSaveMsg(`ERROR::${errData?.message || "Failed to update plan. Please try again."}`);
+
+      let data = await apiFetch(`${BASE_URL}/onboarding/${profile.id}`, { method: "PUT", body: fd });
+      let paymentStatus = String(data?.paymentStatus || data?.payment_status || "").toUpperCase();
+
+      if (amountDue > 0 && paymentStatus === "PENDING") {
+        const orderId = String(data?.razorpayOrderId ?? data?.razorpay_order_id ?? "").trim();
+        if (!orderId) {
+          throw new Error("Payment order was not created for this upgrade. Please try again.");
+        }
+
+        const checkoutResult = await openRazorpayOrder({
+          keyId: data?.razorpayKeyId ?? data?.razorpay_key_id,
+          orderId,
+          amount: amountDue,
+          description: `${selectedPlan.name} subscription upgrade`,
+          prefill: { name: profile.name, email: profile.email, contact: phoneDigitsForRequests },
+          notes: { userId: profile.id, subscriptionPlanId: planId, source: "profile-upgrade" },
+        });
+
+        data = await verifyOnboardingPayment(Number(profile.id), checkoutResult);
+        paymentStatus = String(data?.paymentStatus || data?.payment_status || "SUCCESS").toUpperCase();
       }
+
+      const responsePlan = data?.subscriptionPlan || {};
+      const newPlanName = responsePlan?.name || selectedPlan.name || "";
+      if (paymentStatus === "SUCCESS" && nextPrice > 0) {
+        localStorage.setItem("fin_role", "SUBSCRIBER");
+      }
+      setSelectedPlanId(planId);
+      setProfile(prev => prev ? {
+        ...prev,
+        role: paymentStatus === "SUCCESS" && nextPrice > 0 ? "SUBSCRIBER" : prev.role,
+        subscriptionPlanId: planId,
+        subscriptionPlanName: newPlanName,
+        subscribed: nextPrice > 0,
+        paymentStatus,
+        subscriptionStartDate: data?.subscriptionStartDate || data?.subscription_start_date || prev.subscriptionStartDate,
+        subscriptionEndDate: data?.subscriptionEndDate || data?.subscription_end_date || prev.subscriptionEndDate,
+      } : prev);
+      setSaveMsg(`SUCCESS::Plan changed to "${newPlanName}" successfully!`);
     } catch (err: any) {
       setSaveMsg(`ERROR::${err?.message || "Network error. Please try again."}`);
+    } finally {
+      setPlanSaving(false);
+      setTimeout(() => setSaveMsg(""), 5000);
+    }
+  };
+
+  const handleRetrySubscriptionPayment = async () => {
+    if (!profile?.id) return;
+    if (!phoneIsValid) {
+      setSaveMsg("ERROR::Add a valid 10-digit phone number before retrying payment.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
+
+    const plan = plans.find(p => p.id === (selectedPlanId ?? profile.subscriptionPlanId))
+      || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
+    if (!plan && !profile.subscriptionPlanId) {
+      setSaveMsg("ERROR::No paid subscription is pending for this account.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
+
+    setPlanSaving(true); setSaveMsg("");
+    try {
+      let data = await retryOnboardingPayment(Number(profile.id));
+      const responsePlan = data?.subscriptionPlan || {};
+      const retryPlan = plan || normalizeSubscriptionPlan(responsePlan);
+      const orderId = String(data?.razorpayOrderId ?? data?.razorpay_order_id ?? "").trim();
+      if (!orderId) throw new Error("Payment order was not created. Please try again.");
+      const amount = Number(responsePlan?.discountPrice ?? retryPlan?.discountPrice ?? 0);
+      if (!amount) throw new Error("Payment amount is missing for this subscription.");
+
+      const checkoutResult = await openRazorpayOrder({
+        keyId: data?.razorpayKeyId ?? data?.razorpay_key_id,
+        orderId,
+        amount,
+        description: `${retryPlan.name || currentPlanName || "Subscription"} payment`,
+        prefill: { name: profile.name, email: profile.email, contact: phoneDigitsForRequests },
+        notes: { userId: profile.id, subscriptionPlanId: retryPlan.id || profile.subscriptionPlanId, source: "profile-payment-retry" },
+      });
+
+      data = await verifyOnboardingPayment(Number(profile.id), checkoutResult);
+      const verifiedPlan = data?.subscriptionPlan || responsePlan || {};
+      const newPlanName = verifiedPlan?.name || retryPlan.name || "";
+      const verifiedPlanId = Number(verifiedPlan?.id ?? retryPlan.id ?? profile.subscriptionPlanId ?? 0);
+      localStorage.setItem("fin_role", "SUBSCRIBER");
+      setSelectedPlanId(verifiedPlanId || null);
+      setProfile(prev => prev ? {
+        ...prev,
+        role: "SUBSCRIBER",
+        subscriptionPlanId: verifiedPlanId || prev.subscriptionPlanId,
+        subscriptionPlanName: newPlanName,
+        subscribed: true,
+        paymentStatus: data?.paymentStatus || data?.payment_status || "SUCCESS",
+        subscriptionStartDate: data?.subscriptionStartDate || data?.subscription_start_date || prev.subscriptionStartDate,
+        subscriptionEndDate: data?.subscriptionEndDate || data?.subscription_end_date || prev.subscriptionEndDate,
+      } : prev);
+      setSaveMsg(`SUCCESS::Payment verified for "${newPlanName}".`);
+    } catch (err: any) {
+      setSaveMsg(`ERROR::${err?.message || "Payment retry failed. Please try again."}`);
     } finally {
       setPlanSaving(false);
       setTimeout(() => setSaveMsg(""), 5000);
@@ -1929,6 +2072,21 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const isSubscribedType = selectedPlanId != null
     ? plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() !== "guest"
     : isPremium;
+  const subscriptionPaymentPending = String(profile.paymentStatus || "").toUpperCase() === "PENDING";
+  const profileCurrentPlan = plans.find(p => p.id === profile.subscriptionPlanId)
+    || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
+  const profileCurrentPrice = Number(profileCurrentPlan?.discountPrice ?? 0);
+  const canSelectProfilePlan = (plan: Partial<SubscriptionPlanDetail>) => {
+    if (planSaving || subscriptionPaymentPending) return false;
+    const planPrice = Number(plan.discountPrice ?? 0);
+    if (planPrice <= 0) return false;
+    return planPrice > profileCurrentPrice;
+  };
+  const isSameProfilePlan = (plan?: Partial<SubscriptionPlanDetail> | null) =>
+    !!plan && (
+      Number(plan.id || 0) === Number(profile.subscriptionPlanId || 0) ||
+      String(plan.name || "").toLowerCase() === String(currentPlanName || "").toLowerCase()
+    );
 
   const parsedSaveMsg = (() => {
     if (!saveMsg) return null;
@@ -2059,6 +2217,13 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               { label: "Location", value: profile.location || "-" },
               { label: "Phone", value: profile.phone || "-" },
               { label: "Plan", value: currentPlanName || "-" },
+              ...(!isAdminMember ? [
+                { label: "Payment", value: profile.paymentStatus || "-" },
+                { label: "Valid Until", value: profile.subscriptionEndDate ? fmtDate(profile.subscriptionEndDate) : "-" },
+              ] : []),
+              ...((profile.role || "").toUpperCase() === "GUEST" ? [
+                { label: "Guest Ticket Until", value: formatGuestTrialValidUntil() },
+              ] : []),
               { label: "Member Since", value: (profile as any).memberSince ? new Date((profile as any).memberSince).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : "-" },
             ].map(d => (
               <div key={d.label} style={{ padding: "14px 20px", borderBottom: "1px solid #F1F5F9", borderRight: "1px solid #F1F5F9" }}>
@@ -2070,7 +2235,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── SUBSCRIPTION PLAN - styled like register page ── */}
+      {!isAdminMember && (
       <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16 }}>
         <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #F1F5F9" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -2104,13 +2269,31 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               ].map(plan => {
                 const isFree = plan.discountPrice === 0;
                 const isSelected = selectedPlanId === plan.id;
+                const canSelect = canSelectProfilePlan(plan);
+                const disabledReason = isFree
+                  ? "Guest plan cannot be selected after account creation."
+                  : isSameProfilePlan(plan)
+                    ? "Current plan"
+                    : "Only higher subscription plans can be selected.";
                 return (
-                  <div key={plan.id} onClick={() => { if (!planSaving) setSelectedPlanId(plan.id); }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: "pointer", transition: "all 0.2s", position: "relative" }}>
+                  <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
                     {isFree && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#E2E8F0", color: "#64748B", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 20, letterSpacing: "0.06em" }}>Guest</div>}
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
-                      {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
+                        {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+                      </div>
+                      {getPlanValidityLabel(plan) && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
+                          {getPlanValidityLabel(plan)} validity
+                        </div>
+                      )}
+                      {isSameProfilePlan(plan) && profile.subscriptionEndDate && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 700 }}>
+                          Valid Until: {fmtDate(profile.subscriptionEndDate)}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <div style={{ fontSize: 16, fontWeight: 800, color: isFree ? "#64748B" : "#0F172A" }}>
@@ -2123,12 +2306,21 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                   </div>
                 );
               })}
-              <button
-                onClick={() => { const plan = [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId); if (!plan || currentPlanName?.toLowerCase() === plan.name.toLowerCase()) return; setSaveMsg("INFO::Plan change requires backend subscription plan IDs. Please contact support."); setTimeout(() => setSaveMsg(""), 5000); }}
-                disabled={planSaving || !selectedPlanId || currentPlanName?.toLowerCase() === [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId)?.name?.toLowerCase()}
-                style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: planSaving ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1 }}>
-                {planSaving ? "Updating..." : "Change Plan"}
-              </button>
+              {subscriptionPaymentPending ? (
+                <button
+                  onClick={handleRetrySubscriptionPayment}
+                  disabled={planSaving || !phoneIsValid}
+                  style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1 }}>
+                  {planSaving ? "Opening..." : "Retry Payment"}
+                </button>
+              ) : (
+                <button
+                  onClick={() => { const plan = [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId); if (!plan || currentPlanName?.toLowerCase() === plan.name.toLowerCase()) return; setSaveMsg("INFO::Plan change requires backend subscription plan IDs. Please contact support."); setTimeout(() => setSaveMsg(""), 5000); }}
+                  disabled={planSaving || !selectedPlanId || !canSelectProfilePlan([{ id: -1, name: "Elite", discountPrice: 999 }, { id: -2, name: "Pro", discountPrice: 499 }, { id: -3, name: "Guest", discountPrice: 0 }].find(p => p.id === selectedPlanId) || {})}
+                  style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: planSaving ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1 }}>
+                  {planSaving ? "Updating..." : "Change Plan"}
+                </button>
+              )}
             </div>
           ) : (
             // Dynamic plans from backend
@@ -2136,13 +2328,31 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               {plans.map(plan => {
                 const isFree = plan.discountPrice === 0;
                 const isSelected = selectedPlanId === plan.id;
+                const canSelect = canSelectProfilePlan(plan);
+                const disabledReason = isFree
+                  ? "Guest plan cannot be selected after account creation."
+                  : isSameProfilePlan(plan)
+                    ? "Current plan"
+                    : "Only higher subscription plans can be selected.";
                 return (
-                  <div key={plan.id} onClick={() => { if (!planSaving) setSelectedPlanId(plan.id); }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: "pointer", transition: "all 0.2s", position: "relative" }}>
+                  <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
                     {isFree && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#E2E8F0", color: "#64748B", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 20, letterSpacing: "0.06em" }}>GUEST</div>}
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
-                      {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
+                        {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+                      </div>
+                      {getPlanValidityLabel(plan) && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
+                          {getPlanValidityLabel(plan)} validity
+                        </div>
+                      )}
+                      {isSameProfilePlan(plan) && profile.subscriptionEndDate && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 700 }}>
+                          Valid Until: {fmtDate(profile.subscriptionEndDate)}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <div style={{ fontSize: 16, fontWeight: 800, color: isFree ? "#64748B" : "#0F172A" }}>
@@ -2167,16 +2377,26 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                   )}
                 </div>
               )}
-              <button
-                onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
-                disabled={planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()}
-                style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() === currentPlanName?.toLowerCase()) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
-                {planSaving ? "Updating..." : "Change Plan"}
-              </button>
+              {subscriptionPaymentPending ? (
+                <button
+                  onClick={handleRetrySubscriptionPayment}
+                  disabled={planSaving || !phoneIsValid}
+                  style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
+                  {planSaving ? "Opening..." : "Retry Payment"}
+                </button>
+              ) : (
+                <button
+                  onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
+                  disabled={planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})}
+                  style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
+                  {planSaving ? "Updating..." : "Change Plan"}
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
+      )}
 
       {(profile.incomes?.length || profile.expenses?.length) ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -2294,21 +2514,43 @@ export default function UserPage() {
     return { total, commission, label };
   };
 
-  const calcSpecialBookingQuote = (basePerSlot: number, slotCount: number, offer?: any) => {
+  const calcSpecialBookingQuote = (basePerSlot: number, _slotCount: number, offer?: any) => {
     // Always charge 1 session fee regardless of slot count
     const combinedBase = basePerSlot; // 1 session only
-    const discountAmount = offer ? parseDiscountAmount(offer.discount || "0", combinedBase, offer) : 0;
-    const discountedBase = Math.max(combinedBase - discountAmount, 0);
     const feeValue = parseFloat(feeConfig.feeValue) || 0;
     const additionalCharges = feeConfig.feeType === "PERCENTAGE"
-      ? Math.round((discountedBase * feeValue / 100) * 100) / 100
+      ? Math.round((combinedBase * feeValue / 100) * 100) / 100
       : feeValue;
+    const totalBeforeDiscount = combinedBase + additionalCharges;
+    const discountAmount = offer ? parseDiscountAmount(offer.discount || "0", totalBeforeDiscount, offer) : 0;
+
     return {
       baseAmount: combinedBase,
       discountAmount,
       additionalCharges,
-      total: discountedBase + additionalCharges,
+      total: Math.max(totalBeforeDiscount - discountAmount, 0),
     };
+  };
+
+  const calcBookingQuote = (basePerSlot: number, slotCount: number, offer?: any) => {
+    const combinedBase = basePerSlot * Math.max(1, slotCount);
+    const feeValue = parseFloat(feeConfig.feeValue) || 0;
+    const additionalCharges = feeConfig.feeType === "PERCENTAGE"
+      ? Math.round((combinedBase * feeValue / 100) * 100) / 100
+      : feeValue;
+    const totalBeforeDiscount = combinedBase + additionalCharges;
+    const discountAmount = offer ? parseDiscountAmount(offer.discount || "0", totalBeforeDiscount, offer) : 0;
+
+    return {
+      baseAmount: combinedBase,
+      discountAmount,
+      additionalCharges,
+      total: Math.max(totalBeforeDiscount - discountAmount, 0),
+    };
+  };
+
+  const calcOfferAdjustedBaseAmount = (baseAmount: number): number => {
+    return baseAmount;
   };
 
   const [userNotifs, setUserNotifs] = useState<any[]>([]);
@@ -2331,13 +2573,12 @@ export default function UserPage() {
   const [showCalendarPopup, setShowCalendarPopup] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() }; });
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
-  const [deletingBookingId, setDeletingBookingId] = useState<number | null>(null);
   const [loading, setLoading] = useState({ consultants: true, bookings: false, slots: false, tickets: false });
 
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60_000); return () => clearInterval(t); }, []);
 
-  const [currentUser, setCurrentUser] = useState<{ id?: number; name?: string; email?: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id?: number; name?: string; email?: string; phone?: string } | null>(null);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
   // ── User Analytics state ──────────────────────────────────────────────────
@@ -3474,7 +3715,12 @@ export default function UserPage() {
             setUserNotifs(stored);
           } catch { }
         }
-        setCurrentUser({ id: uid ?? undefined, name: user?.name || user?.fullName || "", email: user?.email || user?.emailId || "" });
+        setCurrentUser({
+          id: uid ?? undefined,
+          name: user?.name || user?.fullName || "",
+          email: user?.email || user?.emailId || "",
+          phone: user?.phone || user?.phoneNumber || user?.mobile || user?.contactNumber || "",
+        });
         // ── Persist the normalized role for route guards and obfuscate only the identifier ──
         const freshRole = String(user?.role || "").trim();
         const freshIdentifier = String(user?.identifier || user?.username || user?.email || "").trim();
@@ -3726,46 +3972,6 @@ export default function UserPage() {
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
-  const handleDeleteBooking = async (bookingId: number) => {
-    setDeletingBookingId(bookingId);
-    // Get booking info before deleting for notification
-    const bookingToDelete = bookings.find(b => b.id === bookingId);
-    try {
-      if (bookingToDelete?.isSpecialBooking || bookingToDelete?.specialBookingId) {
-        await cancelSpecialBooking(Number(bookingToDelete.specialBookingId || bookingId));
-      } else {
-        await cancelBooking(bookingId);
-      }
-      {
-        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, BookingStatus: "CANCELLED", specialBookingStatus: "CANCELLED" } : b));
-        showToast("Booking cancelled.");
-        // Add cancellation notification
-        const consultantName = bookingToDelete?.consultantName || "Consultant";
-        const slotDate = (bookingToDelete as any)?.slotDate || (bookingToDelete as any)?.bookingDate || "";
-        addLocalNotification(currentUserId, {
-          type: "warning",
-          title: "Booking Cancelled",
-          message: `Your session with ${consultantName}${slotDate ? ` on ${slotDate}` : ""} has been cancelled.`,
-          bookingId,
-        });
-        // Update local state to show the new notification immediately
-        setUserNotifs(prev => {
-          const newNotif = {
-            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: "warning",
-            title: "Booking Cancelled",
-            message: `Your session with ${consultantName}${slotDate ? ` on ${slotDate}` : ""} has been cancelled.`,
-            bookingId,
-            timestamp: new Date().toISOString(),
-            read: false,
-          };
-          return [newNotif, ...prev].slice(0, 50);
-        });
-      }
-    } catch { showToast("Network error."); }
-    finally { setDeletingBookingId(null); }
-  };
-
   const handleOpenFeedback = async (b: any) => {
     // ── Guard: already submitted in this session ────────────────────────────
     if (submittedFeedbacks.has(b.id)) {
@@ -3949,6 +4155,15 @@ export default function UserPage() {
       } catch { }
 
       const bSet = new Set<string>();
+      const blockedSlotStatusByKey = new Map<string, "BOOKED" | "UNAVAILABLE">();
+      const markBlockedSlot = (date: string, timeKey: string, status: "BOOKED" | "UNAVAILABLE" = "BOOKED") => {
+        if (!date || !timeKey) return;
+        const key = `${date}|${timeKey}`;
+        bSet.add(key);
+        if (status === "UNAVAILABLE" || !blockedSlotStatusByKey.has(key)) {
+          blockedSlotStatusByKey.set(key, status);
+        }
+      };
 
       // --- FIX 1: Add user's OWN existing bookings to prevent double-booking ---
       // This prevents the user from trying to book a time they are already busy
@@ -3959,7 +4174,7 @@ export default function UserPage() {
         let timeKey = "";
         if (userBooking.slotTime) { timeKey = userBooking.slotTime.substring(0, 5); }
         else { timeKey = normalise24(userBooking.timeRange || ""); }
-        if (date && timeKey) bSet.add(`${date}|${timeKey}`);
+        markBlockedSlot(date, timeKey, "BOOKED");
       });
 
       // --- Add Consultant's existing bookings ---
@@ -3971,7 +4186,7 @@ export default function UserPage() {
         let timeKey = "";
         if (b.slotTime) { timeKey = b.slotTime.substring(0, 5); }
         else { const tr = b.timeSlot?.masterTimeSlot?.timeRange || b.masterTimeSlot?.timeRange || b.timeRange || ""; timeKey = normalise24(tr); }
-        if (date && timeKey) bSet.add(`${date}|${timeKey}`);
+        markBlockedSlot(date, timeKey, "BOOKED");
       });
 
       // --- Add Consultant's blocked/booked timeslots ---
@@ -3981,7 +4196,8 @@ export default function UserPage() {
         const st = (s.status || "").toUpperCase();
         if (st === "AVAILABLE") return;
         const timeKey = getTimeslotStartKey(s);
-        if (s.slotDate && timeKey) bSet.add(`${s.slotDate}|${timeKey}`);
+        const blockedStatus = st === "UNAVAILABLE" ? "UNAVAILABLE" : "BOOKED";
+        markBlockedSlot(s.slotDate, timeKey, blockedStatus);
       });
       setBookedSlotSet(bSet);
 
@@ -4057,9 +4273,10 @@ export default function UserPage() {
             const start24 = normalise24(rangeParts[0].trim());
             if (!start24) return;
             // FIX: Instead of hiding booked slots, show them as "BOOKED" so users see the slot is taken
-            const isBooked = bSet.has(`${day.iso}|${start24}`);
+            const blockedStatus = blockedSlotStatusByKey.get(`${day.iso}|${start24}`);
+            const isBlocked = !!blockedStatus;
             // Drop past AVAILABLE slots for today; always keep BOOKED ones visible
-            if (day.iso === todayIso && !isBooked) {
+            if (day.iso === todayIso && !isBlocked) {
               const [h, m] = start24.split(":").map(Number);
               if (h * 60 + m <= nowLocal.getHours() * 60 + nowLocal.getMinutes()) return;
             }
@@ -4069,7 +4286,7 @@ export default function UserPage() {
               id: -(master.id * 1000 + dayIdx),
               slotDate: day.iso,
               slotTime: start24,
-              status: isBooked ? "BOOKED" : "AVAILABLE",
+              status: blockedStatus || "AVAILABLE",
               masterTimeSlotId: master.id,
               timeRange: master.timeRange,
             });
@@ -4187,6 +4404,7 @@ export default function UserPage() {
         prefill: {
           name: currentUser?.name || "",
           email: currentUser?.email || "",
+          contact: currentUser?.phone || "",
         },
       });
 
@@ -4247,12 +4465,6 @@ export default function UserPage() {
         const slotCount = Math.max(1, effectiveSpecialBookingHours);
         // Always charge 1 session fee regardless of how many slots are requested
         const combinedBaseAmount = isAdminMember ? 0 : consultant.fee; // 1 session only (free for admin members)
-        const specialDiscountAmount = selectedOffer ? parseDiscountAmount(selectedOffer.discount || "0", combinedBaseAmount, selectedOffer) : 0;
-        const discountedBaseAmount = Math.max(combinedBaseAmount - specialDiscountAmount, 0);
-        const specialCharges = feeConfig.feeType === "PERCENTAGE"
-          ? { commission: Math.round((discountedBaseAmount * (parseFloat(feeConfig.feeValue) || 0) / 100) * 100) / 100, total: 0 }
-          : { commission: parseFloat(feeConfig.feeValue) || 0, total: 0 };
-        specialCharges.total = discountedBaseAmount + specialCharges.commission;
         const preferredTimeRange = specialDurationLabel;
         const preferredTime = specialStartTime || undefined;
         const specialMeta: SpecialBookingMeta = {
@@ -4268,10 +4480,13 @@ export default function UserPage() {
           preferredTimeRange,
         };
 
+        const payableSessionAmount = isAdminMember
+          ? 0
+          : calcOfferAdjustedBaseAmount(combinedBaseAmount);
         const specialPayload: any = {
           consultantId: consultant.id,
           durationInHours: slotCount,         // backend: SpecialBookingRequest.durationInHours
-          sessionAmount: combinedBaseAmount,   // backend: SpecialBookingRequest.sessionAmount (flat fee)
+          sessionAmount: payableSessionAmount, // backend free path is required for fully-discounted offers
           meetingMode,
           userNotes: notes || "Special booking request",
           requestNotes: notes || "Special booking request",
@@ -4431,12 +4646,15 @@ export default function UserPage() {
       const realTimeslotId = resolved.timeSlotId;
       const slot24 = resolved.slot.start24h;
       const dayIso = resolved.slot.dayIso;
+      const payableBaseAmount = isAdminMember
+        ? 0
+        : calcOfferAdjustedBaseAmount(selectedConsultant!.fee);
 
-      // Book it. Send the original base fee; the backend applies the offer and platform fee.
+      // Book it. For fully-discounted offers, use the backend's free-booking path.
       const payload: any = {
         consultantId: selectedConsultant!.id,
         timeSlotId: realTimeslotId,
-        baseAmount: isAdminMember ? 0 : selectedConsultant!.fee,
+        baseAmount: payableBaseAmount,
         originalAmount: isAdminMember ? 0 : selectedConsultant!.fee,
         meetingMode,
         userNotes: userNotes || "Booked via app",
@@ -4488,10 +4706,13 @@ export default function UserPage() {
 
       if (failed.length > 0) return failed;
 
+      const payableBaseAmount = isAdminMember
+        ? 0
+        : calcOfferAdjustedBaseAmount(selectedConsultant!.fee);
       const payload: any = {
         consultantId: selectedConsultant!.id,
         timeSlotIds: resolvedSlots.map(s => s.timeSlotId),
-        baseAmountPerSlot: isAdminMember ? 0 : selectedConsultant!.fee,
+        baseAmountPerSlot: payableBaseAmount,
         meetingMode,
         userNotes: userNotes || "Booked via app",
       };
@@ -5291,7 +5512,6 @@ export default function UserPage() {
                   const isCompleted = status === "COMPLETED";
                   const isCancelled = status === "CANCELLED";
                   const isExpiredConfirmed = !isCancelled && !isCompleted && isBookingExpired(bookingForTime, now);
-                  const canCancelBooking = !isCancelled && !isCompleted && !isExpiredConfirmed && !(special.isSpecial && !hasAssignedSpecialSlot);
                   const canLeaveFeedback = isCompleted || isExpiredConfirmed;
                   const hasFeedback = submittedFeedbacks.has(b.id);
                   const resolvedDisplayDate = special.isSpecial
@@ -5335,29 +5555,6 @@ export default function UserPage() {
                         <div className="up-status-badge-wrapper"><StatusBadge status={status as any} /></div>
                       </div>
                       <div className="up-card-actions">
-                        {/* ── Cancel Booking ── */}
-                        {canCancelBooking && (
-                          <button
-                            onClick={() => {
-                              if (window.confirm("Are you sure you want to cancel this booking?")) {
-                                handleDeleteBooking(b.id);
-                              }
-                            }}
-                            disabled={deletingBookingId === b.id}
-                            style={{
-                              padding: "10px 16px", borderRadius: 8,
-                              border: "1.5px solid #FECACA",
-                              background: "#FEF2F2", color: "#DC2626",
-                              fontWeight: 600, fontSize: 13,
-                              cursor: deletingBookingId === b.id ? "not-allowed" : "pointer",
-                              display: "flex", alignItems: "center", gap: 6,
-                              fontFamily: "inherit",
-                            }}
-                          >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
-                            {deletingBookingId === b.id ? "Cancelling..." : "Cancel"}
-                          </button>
-                        )}
                         {/* ── Join Meeting ── only for non-cancelled, non-completed, non-expired upcoming ONLINE sessions ── */}
                         {!isCancelled && !isCompleted && !(special.isSpecial && !hasAssignedSpecialSlot) && !isBookingExpired(bookingForTime, now) && (b.meetingMode === "ONLINE" || !b.meetingMode) && (() => {
                           const joinStatus = getJoinMeetingStatus(bookingForTime, now);
@@ -5496,7 +5693,7 @@ export default function UserPage() {
                   <div style={{ background: "linear-gradient(135deg,#FEF2F2,#FECACA)", border: "1.5px solid #FCA5A5", borderRadius: 14, padding: "18px 20px", marginBottom: 18, textAlign: "center" }}>
                     <Lock size={28} color="#DC2626" style={{ marginBottom: 8, display: "block", margin: "0 auto 10px" }} />
                     <div style={{ fontWeight: 800, fontSize: 15, color: "#DC2626", marginBottom: 6 }}>Free Trial Ended</div>
-                    <div style={{ fontSize: 13, color: "#7F1D1D", marginBottom: 14 }}>Your 2-month free guest access has expired. Upgrade to Pro or Elite to continue raising support tickets.</div>
+                    <div style={{ fontSize: 13, color: "#7F1D1D", marginBottom: 14 }}>Your 2-month free guest access expired on {formatGuestTrialValidUntil()}. Upgrade to a paid plan to continue raising support tickets.</div>
                     <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
                       <button onClick={() => setTab("settings")} style={{ padding: "10px 24px", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 7 }}>
                         <ArrowRight size={14} /> Upgrade Plan
@@ -5514,7 +5711,9 @@ export default function UserPage() {
                     <PartyPopper size={20} color="#2563EB" />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 700, fontSize: 13, color: "#1E40AF" }}>2-Month Free Guest Access Active</div>
-                      <div style={{ fontSize: 12, color: "#3B82F6", marginTop: 2 }}>You have full Pro/Elite ticket access - <strong>{daysLeft} day{daysLeft !== 1 ? "s" : ""}</strong> remaining in your free trial.</div>
+                      <div style={{ fontSize: 12, color: "#3B82F6", marginTop: 2 }}>
+                        You have full Pro/Elite ticket access until <strong>{formatGuestTrialValidUntil()}</strong> - <strong>{daysLeft} day{daysLeft !== 1 ? "s" : ""}</strong> remaining.
+                      </div>
                     </div>
                   </div>
                 );
@@ -5539,7 +5738,7 @@ export default function UserPage() {
               />
             )}
             {/* Create ticket modal */}
-            {showCreateTicket && (
+            {showCreateTicket && canCurrentUserCreateTicket() && (
               <CreateTicketModal
                 userId={currentUserId}
                 onCreated={t => {
@@ -5557,7 +5756,7 @@ export default function UserPage() {
                 onClose={() => setShowCreateTicket(false)}
               />
             )}
-            {showEmailToTicket && (
+            {showEmailToTicket && canCurrentUserCreateTicket() && (
               <EmailToTicketModal onClose={() => setShowEmailToTicket(false)} />
             )}
 
@@ -5566,8 +5765,9 @@ export default function UserPage() {
               <h2 className="up-section-title" style={{ margin: 0 }}>Support Tickets</h2>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={fetchTickets} disabled={loading.tickets} className="up-ticket-refresh-btn">{loading.tickets ? <><Clock size={12} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />Loading</> : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><RefreshCw size={12} /> Refresh</span>}</button>
-                <button onClick={() => setShowEmailToTicket(true)}
-                  style={{ padding: "8px 14px", borderRadius: 8, border: "1.5px solid #BFDBFE", background: "#EFF6FF", color: "#1E40AF", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <button onClick={() => { if (canCurrentUserCreateTicket()) setShowEmailToTicket(true); else setShowGuestTrialExpiredPopup(true); }}
+                  disabled={!canCurrentUserCreateTicket()}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: "1.5px solid #BFDBFE", background: canCurrentUserCreateTicket() ? "#EFF6FF" : "#F1F5F9", color: canCurrentUserCreateTicket() ? "#1E40AF" : "#94A3B8", fontSize: 12, fontWeight: 700, cursor: canCurrentUserCreateTicket() ? "pointer" : "not-allowed", display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <Mail size={12} /> Email to Ticket
                 </button>
                 {(() => {
@@ -5608,7 +5808,7 @@ export default function UserPage() {
             </div>
 
             {/* 🎉 2-Month Free Trial Alert Banner - only shown to GUEST users */}
-            {showFreeTrialAlert && (getLocalRole()).toUpperCase().replace(/^ROLE_/, "") === "GUEST" && (
+            {showFreeTrialAlert && (getLocalRole()).toUpperCase().replace(/^ROLE_/, "") === "GUEST" && isGuestInTrial() && (
               <div style={{
                 background: "linear-gradient(135deg,#F0FDF4 0%,#DCFCE7 50%,#D1FAE5 100%)",
                 border: "1.5px solid #6EE7B7",
@@ -5633,12 +5833,12 @@ export default function UserPage() {
                     <span style={{ background: "linear-gradient(135deg,#10B981,#059669)", color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 9px", borderRadius: 20, letterSpacing: "0.04em", textTransform: "uppercase", flexShrink: 0 }}>Limited Offer</span>
                   </div>
                   <div style={{ fontSize: 12, color: "#047857", lineHeight: 1.55 }}>
-                    Raise support tickets <strong>completely free</strong> for your first 2 months - no subscription needed. Get priority help from our team on any issue, anytime.
+                    Raise support tickets <strong>completely free</strong> until <strong>{formatGuestTrialValidUntil()}</strong> - no subscription needed.
                   </div>
                 </div>
                 {/* CTA Button */}
                 <button
-                  onClick={() => setShowCreateTicket(true)}
+                  onClick={() => { if (canCurrentUserCreateTicket()) setShowCreateTicket(true); }}
                   style={{ flexShrink: 0, padding: "8px 18px", background: "linear-gradient(135deg,#10B981,#059669)", color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 2px 8px rgba(16,185,129,0.3)" }}
                 >
                   <Zap size={13} /> Raise a Ticket
@@ -5691,11 +5891,15 @@ export default function UserPage() {
               <div className="up-empty-state">
                 <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}><TicketIcon size={40} color="#CBD5E1" strokeWidth={1.5} /></div>
                 <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>{tickets.length === 0 ? "No tickets yet." : "No tickets in this status."}</p>
-                {tickets.length === 0 && (
+                {tickets.length === 0 && (canCurrentUserCreateTicket() ? (
                   <button onClick={() => setShowCreateTicket(true)} style={{ marginTop: 16, padding: "10px 22px", background: "#2563EB", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
                     Raise your first ticket
                   </button>
-                )}
+                ) : (
+                  <button onClick={() => setShowGuestTrialExpiredPopup(true)} style={{ marginTop: 16, padding: "10px 22px", background: "#F1F5F9", color: "#94A3B8", border: "1px solid #E2E8F0", borderRadius: 8, fontWeight: 600, cursor: "not-allowed", fontSize: 13 }}>
+                    Guest ticket access expired
+                  </button>
+                ))}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -6299,8 +6503,12 @@ export default function UserPage() {
                           const isDayFreeFlowing = daySpecials.length > 0 && daySpecialDurations.every(h => h === 0);
                           const badgeDurations = isDayFreeFlowing ? [] : daySpecialDurations.filter(h => h > 0);
                           const isSpecialDay = daySpecials.length > 0;
-                          const isUnavailableDay = !isSpecialDay && daySlots.length === 0;
-                          const firstSlot = daySlots[0];
+                          const firstSlot = daySlots.find(slot => {
+                            const start = slot.slotTime;
+                            const status = String(slot.status || "AVAILABLE").toUpperCase();
+                            return status === "AVAILABLE" && !bookedSlotSet.has(`${d.iso}|${start}`);
+                          });
+                          const isUnavailableDay = !isSpecialDay && !firstSlot;
                           return (
                             <button
                               key={d.iso}
@@ -6422,8 +6630,9 @@ export default function UserPage() {
                           const [slotHour, slotMinute] = slotStart.split(":").map(Number);
                           const isPast = isToday && (slotHour < now.getHours() || (slotHour === now.getHours() && slotMinute <= now.getMinutes()));
                           const slotStatus = String(slot.status || "AVAILABLE").toUpperCase();
-                          const isBookedSlot = slotStatus === "BOOKED" || bookedSlotSet.has(`${selectedDay.iso}|${slotStart}`);
-                          const isUnavailableSlot = slotStatus !== "AVAILABLE" && !isBookedSlot;
+                          const slotKey = `${selectedDay.iso}|${slotStart}`;
+                          const isUnavailableSlot = slotStatus === "UNAVAILABLE" || (slotStatus !== "AVAILABLE" && slotStatus !== "BOOKED");
+                          const isBookedSlot = !isUnavailableSlot && (slotStatus === "BOOKED" || bookedSlotSet.has(slotKey));
                           const isSelected = selectedSlot?.start24h === slotStart;
                           const isDisabled = isPast || isBookedSlot || isUnavailableSlot;
                           return (
@@ -6627,7 +6836,7 @@ export default function UserPage() {
                                 No offer - Pay full price
                               </span>
                             </div>
-                            <span style={{ fontSize: 14, fontWeight: 800, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>₹{calcTotal(selectedConsultant.fee).total.toLocaleString()}</span>
+                            <span style={{ fontSize: 14, fontWeight: 800, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>₹{calcBookingQuote(selectedConsultant.fee, 1).total.toLocaleString()}</span>
                           </label>
 
                           {/* Available offers */}
@@ -6635,13 +6844,9 @@ export default function UserPage() {
                             consultantOffers.map(offer => {
                               const isUsed = usedOfferIds.includes(Number(offer.id));
                               const isSelected = selectedOfferId === offer.id;
-                              // Apply discount to the TOTAL (base + commission), not the raw base.
-                              // selectedConsultant.fee is raw; calcTotal adds commission.
-                              // Discount is on the final price user sees (e.g. 20% off ₹1,875 = ₹375 off)
-                              const totalWithCommission = calcTotal(selectedConsultant.fee).total;
-                              const discountAmt = parseDiscountAmount(offer.discount || "0", totalWithCommission, offer);
-                              const discountedTotal = Math.max(totalWithCommission - discountAmt, 0);
-                              const savings = totalWithCommission - discountedTotal;
+                              const fullPrice = calcBookingQuote(selectedConsultant.fee, 1).total;
+                              const offerPrice = calcBookingQuote(selectedConsultant.fee, 1, offer).total;
+                              const savings = Math.max(fullPrice - offerPrice, 0);
                               return (
                                 <label key={offer.id} style={{
                                   display: "flex", alignItems: "flex-start", gap: 12, padding: "14px 16px", borderRadius: 12,
@@ -6710,8 +6915,8 @@ export default function UserPage() {
                                     )}
                                   </div>
                                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                                    {savings > 0 && <div style={{ fontSize: 11, color: "#94A3B8", textDecoration: "line-through" }}>₹{totalWithCommission.toLocaleString()}</div>}
-                                    <div style={{ fontSize: 15, fontWeight: 800, color: isUsed ? "#92400E" : isSelected ? "#16A34A" : "#0F172A" }}>₹{discountedTotal.toLocaleString()}</div>
+                                    {savings > 0 && <div style={{ fontSize: 11, color: "#94A3B8", textDecoration: "line-through" }}>₹{fullPrice.toLocaleString()}</div>}
+                                    <div style={{ fontSize: 15, fontWeight: 800, color: isUsed ? "#92400E" : isSelected ? "#16A34A" : "#0F172A" }}>₹{offerPrice.toLocaleString()}</div>
                                   </div>
                                 </label>
                               );
@@ -6731,10 +6936,6 @@ export default function UserPage() {
 
                     {(selectedSlot || bookingMode === "SPECIAL") && (() => {
                       // ── Correct price calculation ──────────────────────────────────────────
-                      // selectedConsultant.fee = raw base (e.g. ₹1,500)
-                      // calcTotal(fee).total = base + platform fee = what user pays without offer (e.g. ₹1,875)
-                      // Discount applies to the TOTAL (₹1,875), NOT the raw base.
-                      // So 20% off ₹1,875 = ₹375 → user pays ₹1,500. No second commission added.
                       const rawBase = selectedConsultant.fee;
                       const offer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
                       const standardSessionsBooked = bookingMultiple && selectedSlots.length > 0 ? selectedSlots.length : 1;
@@ -6742,23 +6943,21 @@ export default function UserPage() {
                       const sessionsBooked = bookingMode === "SPECIAL"
                         ? 1
                         : standardSessionsBooked;
-                      const { total: baseTotal } = calcTotal(rawBase);
+                      const standardQuote = calcBookingQuote(rawBase, sessionsBooked, offer);
+                      const standardFullQuote = calcBookingQuote(rawBase, sessionsBooked);
                       let discountAmt = 0;
                       let grandTotal = 0;
-                      let displayFeeAmount = 0;
                       if (bookingMode === "SPECIAL") {
                         const quote = calcSpecialBookingQuote(rawBase, sessionsBooked, offer);
                         discountAmt = quote.discountAmount;
                         grandTotal = quote.total;
-                        displayFeeAmount = quote.baseAmount + quote.additionalCharges;
                       } else {
-                        if (offer && (offer.discount || offer.discountValue != null)) {
-                          discountAmt = parseDiscountAmount(offer.discount || "0", baseTotal, offer);
-                        }
-                        const finalTotal = Math.max(baseTotal - discountAmt, 0);
-                        grandTotal = finalTotal * sessionsBooked;
-                        displayFeeAmount = baseTotal * sessionsBooked;
+                        discountAmt = standardQuote.discountAmount;
+                        grandTotal = standardQuote.total;
                       }
+                      const sessionFeeDisplay = bookingMode === "SPECIAL"
+                        ? rawBase
+                        : standardFullQuote.baseAmount;
                       const displaySlots: { dayLabel: string; label: string }[] = [
                         {
                           dayLabel: `${selectedDay.date} ${selectedDay.month}`,
@@ -6793,7 +6992,6 @@ export default function UserPage() {
                           </div>
                           {/* Price breakdown */}
                           <div style={{ fontSize: 12, color: "#475569" }}>
-                            {/* Session fee - already includes platform commission */}
                             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                               <span>
                                 Session Fee
@@ -6801,7 +6999,7 @@ export default function UserPage() {
                                   ? <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6, fontWeight: 400 }}>(1 session)</span>
                                   : sessionsBooked > 1 ? ` × ${sessionsBooked}` : ""}
                               </span>
-                              <span style={{ fontWeight: 600 }}>₹{(baseTotal * sessionsBooked).toLocaleString()}</span>
+                              <span style={{ fontWeight: 600 }}>₹{sessionFeeDisplay.toLocaleString()}</span>
                             </div>
 
                             {/* Offer Discount row */}
@@ -6809,9 +7007,9 @@ export default function UserPage() {
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, color: "#16A34A", fontWeight: 600 }}>
                                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                   <span style={{ background: "#DCFCE7", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>OFFER</span>
-                                  {offer.title}{sessionsBooked > 1 && bookingMode !== "SPECIAL" ? ` × ${sessionsBooked}` : ""}
+                                  {offer.title}
                                 </span>
-                                <span>-₹{(discountAmt * sessionsBooked).toLocaleString()}</span>
+                                <span>-₹{discountAmt.toLocaleString()}</span>
                               </div>
                             )}
                           </div>
@@ -6827,7 +7025,7 @@ export default function UserPage() {
                           {/* Savings banner */}
                           {offer && discountAmt > 0 && (
                             <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "linear-gradient(135deg, #DCFCE7 0%, #BBF7D0 100%)", border: "1px solid #86EFAC", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#166534" }}>
-                              <Zap size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />You're saving ₹{(discountAmt * sessionsBooked).toLocaleString()} with this offer!
+                              <Zap size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />You're saving ₹{discountAmt.toLocaleString()} with this offer!
                             </div>
                           )}
                         </div>
@@ -6849,15 +7047,11 @@ export default function UserPage() {
                           ? "Send Special Booking Request (Free)"
                           : "Confirm & Book (Free)";
                       }
-                      const { total: bTotal } = calcTotal(selectedConsultant.fee);
                       const offerSel = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
-                      let da = 0;
-                      if (offerSel && (offerSel.discount || offerSel.discountValue != null)) {
-                        da = parseDiscountAmount(offerSel.discount || "0", bTotal, offerSel);
-                      }
-                      const fTotal = Math.max(bTotal - da, 0);
                       const count = bookingMode === "SPECIAL" ? 1 : (bookingMultiple && selectedSlots.length > 0 ? selectedSlots.length : 1);
-                      const gTotal = fTotal * count;
+                      const gTotal = bookingMode === "SPECIAL"
+                        ? calcSpecialBookingQuote(selectedConsultant.fee, count, offerSel).total
+                        : calcBookingQuote(selectedConsultant.fee, count, offerSel).total;
                       return bookingMode === "SPECIAL"
                         ? `Send Special Booking Request ₹${gTotal.toLocaleString()}`
                         : `Confirm & Pay ₹${gTotal.toLocaleString()}`;
@@ -7827,13 +8021,12 @@ export default function UserPage() {
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
               </button>
-              <div style={{ fontSize: 32, marginBottom: 10 }}>🎉</div>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>⚠️</div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-                <h3 style={{ fontSize: 17, fontWeight: 800, color: "#fff", margin: 0 }}>You have 2 Months FREE Ticket Support!</h3>
-                <span style={{ background: "rgba(255,255,255,0.25)", color: "#fff", fontSize: 10, fontWeight: 800, padding: "2px 10px", borderRadius: 20, letterSpacing: "0.04em", textTransform: "uppercase", flexShrink: 0 }}>Limited Offer</span>
+                <h3 style={{ fontSize: 17, fontWeight: 800, color: "#fff", margin: 0 }}>Guest Ticket Access Ended</h3>
               </div>
               <p style={{ fontSize: 13, color: "#D1FAE5", margin: 0, lineHeight: 1.65 }}>
-                Raise support tickets <strong style={{ color: "#fff" }}>completely free</strong> for your first 2 months - no subscription needed. Get priority help from our team on any issue, anytime.
+                Your 2-month free guest ticket window expired on <strong style={{ color: "#fff" }}>{formatGuestTrialValidUntil()}</strong>.
               </p>
             </div>
             {/* Body */}
@@ -7844,7 +8037,7 @@ export default function UserPage() {
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 13, color: "#DC2626", marginBottom: 3 }}>Your free trial has ended</div>
                   <div style={{ fontSize: 12, color: "#7F1D1D", lineHeight: 1.55 }}>
-                    Your 2-month free guest access has expired. Upgrade your plan to continue raising support tickets and get priority assistance.
+                    Upgrade your plan to continue raising support tickets and get priority assistance.
                   </div>
                 </div>
               </div>

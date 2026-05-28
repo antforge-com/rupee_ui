@@ -1615,10 +1615,12 @@ export default function HomePage() {
           .hp-section-header-centered { margin-bottom: 30px; }
           .hp-reviews-grid { grid-template-columns: repeat(2, 1fr); }
         }
-        @media (max-width: 640px) {
+        @media (max-width: 900px) {
           .hp-desktop-nav { display: none !important; }
           .hp-hamburger  { display: flex !important; }
           .hp-mobile-menu { display: flex !important; }
+        }
+        @media (max-width: 640px) {
           .hp-header-logo-img { height: 48px; max-width: 230px; }
           .hp-velorah-hero { padding: 120px 20px 80px; }
           .hp-velorah-title { letter-spacing: -1px; }
