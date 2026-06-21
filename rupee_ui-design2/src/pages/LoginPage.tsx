@@ -632,7 +632,7 @@ export default function LoginPage() {
         {loading && slowAuthHint && (
           <div className="badge badge-warning" style={{ marginTop: 12, width: "100%", justifyContent: "flex-start", padding: "10px 14px", textTransform: "none" }}>
             <AlertTriangle size={16} />
-            Authentication is taking longer than usual. If the password is incorrect, the server should return an error shortly.
+            Authentication is taking longer than usual. First login can take a moment while the server wakes up.
           </div>
         )}
 

@@ -86,12 +86,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
     setLoading(true);
     setError("");
     try {
-      let data: any;
-      try {
-        data = await apiFetch("/subscription-plans/all");
-      } catch (e) {
-        data = await apiFetch("/subscription-plans");
-      }
+      const data = await apiFetch("/subscription-plans");
       setPlans(extractPlans(data).map(normalizePlan).filter(plan => plan.id));
     } catch (err: any) {
       setError(err?.message || "Failed to load plans.");
@@ -371,7 +366,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
 
                 <div style={{ display: "flex", gap: 16 }}>
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 6 }}>Original Price (₹) *</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 6 }}>Original Label Price (₹) *</label>
                     <input
                       type="number"
                       value={formData.originalPrice}
@@ -382,7 +377,7 @@ export const SubscriptionPlansPanel: React.FC = () => {
                     />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 6 }}>Discount Price (₹) *</label>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#475569", marginBlockEnd: 6 }}>Discount Label Price (₹) *</label>
                     <input
                       type="number"
                       value={formData.discountPrice}
@@ -404,6 +399,9 @@ export const SubscriptionPlansPanel: React.FC = () => {
                     min="0"
                     required
                   />
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "#64748B", lineHeight: 1.45 }}>
+                    Changes apply to new purchases. Existing subscribers keep their selected plan until their current validity ends.
+                  </p>
                 </div>
 
                 <div>

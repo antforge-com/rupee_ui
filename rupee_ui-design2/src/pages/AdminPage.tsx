@@ -49,6 +49,7 @@ import {
   getAutoResponder,
   getBookingsPage,
   getBookingSummary,
+  getAllSpecialBookings,
   getBusinessHours,
   getConsultantSubmittedOffers,
   getEscalationBlocks,
@@ -74,11 +75,8 @@ import {
 } from "../services/api";
 import {
   canonicalTextKey,
-  capitalizeFirstCharacter,
   formatIndianCurrency,
   formatIndianNumber,
-  formatNameLikeInput,
-  formatNameLikeValue,
   sanitizeDecimalInput,
   sanitizeWholeNumberInput
 } from "../utils/formUtils";
@@ -1262,16 +1260,16 @@ const TicketDetailPanel: React.FC<TicketDetailProps> = ({
 
               <div>
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", marginBottom: 6, marginLeft: 2 }}>Content / Message Body</div>
-                <p style={{ 
-                  margin: 0, 
-                  fontSize: 13, 
-                  color: "#374151", 
-                  lineHeight: 1.8, 
-                  background: "#fff", 
-                  padding: "14px 18px", 
-                  borderRadius: 14, 
-                  border: "1.5px solid #F1F5F9", 
-                  borderLeft: "4px solid #0F766E", 
+                <p style={{
+                  margin: 0,
+                  fontSize: 13,
+                  color: "#374151",
+                  lineHeight: 1.8,
+                  background: "#fff",
+                  padding: "14px 18px",
+                  borderRadius: 14,
+                  border: "1.5px solid #F1F5F9",
+                  borderLeft: "4px solid #0F766E",
                   whiteSpace: "pre-wrap",
                   boxShadow: "0 2px 6px rgba(0,0,0,0.02)"
                 }}>
@@ -3400,9 +3398,7 @@ const CannedResponses: React.FC<{}> = () => {
               <input
                 value={form.title}
                 onChange={e => {
-                  const raw = e.target.value || "";
-                  const sanitized = raw.replace(/^[^A-Za-z]*/, "");
-                  setForm({ ...form, title: sanitized });
+                  setForm({ ...form, title: e.target.value });
                   if (formErrors.title) setFormErrors(p => ({ ...p, title: undefined }));
                 }}
                 placeholder="e.g. Billing Refund"
@@ -3531,7 +3527,7 @@ const CategoriesConfig: React.FC<{}> = () => {
   };
 
   const addCat = async () => {
-    const name = formatNameLikeValue(newCat.name);
+    const name = newCat.name.trim();
     if (!name || adding) return;
     if (cats.some((cat) => cat.name.trim().toLowerCase() === name.toLowerCase())) {
       showToast("Category already exists");
@@ -3594,19 +3590,19 @@ const CategoriesConfig: React.FC<{}> = () => {
       <div style={{ ...sc_styles.editorCard, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "flex-end" }}>
         <div>
           <label style={sc_styles.label}>Category name</label>
-          <input value={newCat.name} onChange={e => setNewCat({ name: formatNameLikeInput(e.target.value) })} placeholder="Category name" style={sc_styles.input} />
+          <input value={newCat.name} onChange={e => setNewCat({ name: e.target.value })} placeholder="Category name" style={sc_styles.input} />
         </div>
         <button
           onClick={addCat}
-          disabled={adding || !formatNameLikeValue(newCat.name)}
+          disabled={adding || !newCat.name.trim()}
           style={{
             ...sc_styles.primaryBtn,
             alignSelf: "flex-end",
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
-            opacity: (adding || !formatNameLikeValue(newCat.name)) ? 0.65 : 1,
-            cursor: (adding || !formatNameLikeValue(newCat.name)) ? "not-allowed" : "pointer",
+            opacity: (adding || !newCat.name.trim()) ? 0.65 : 1,
+            cursor: (adding || !newCat.name.trim()) ? "not-allowed" : "pointer",
           }}>
           {adding
             ? <><div style={{ width: 12, height: 12, border: "2px solid rgba(255,255,255,0.35)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Adding...</>
@@ -4351,8 +4347,8 @@ const AddMemberPanel: React.FC = () => {
 
   const validate = () => {
     const e: Record<string, string> = {};
-    const normalizedName = formatNameLikeValue(form.name);
-    const normalizedLocation = formatNameLikeValue(form.location);
+    const normalizedName = form.name.trim();
+    const normalizedLocation = form.location.trim();
     const normalizedEmail = form.email.trim().toLowerCase();
     const normalizedMobile = form.mobileNumber.replace(/\D/g, "").slice(0, 10);
 
@@ -4382,10 +4378,10 @@ const AddMemberPanel: React.FC = () => {
       // Backend auto-generates password from email prefix, sends welcome email with credentials
       // No manual password needed - backend handles bcrypt encryption via createCoreUser()
       const memberData = {
-        name: formatNameLikeValue(form.name),
+        name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         phoneNumber: form.mobileNumber.trim(),  // backend uses phoneNumber
-        location: formatNameLikeValue(form.location) || "",
+        location: form.location.trim() || "",
         profileImageUrl: null,
       };
 
@@ -4414,7 +4410,7 @@ const AddMemberPanel: React.FC = () => {
 
       const newMember = {
         id: data?.userId || data?.id || Date.now(),
-        name: formatNameLikeValue(form.name),
+        name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         role: "MEMBER",
         addedAt: new Date().toISOString(),
@@ -4455,7 +4451,7 @@ const AddMemberPanel: React.FC = () => {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 18px" }}>
             <div>
               <label style={labelStyle}>Full Name *</label>
-              <input value={form.name} onChange={e => { const val = e.target.value; if (val.length === 1 && /[^a-zA-Z]/.test(val)) return; setForm(f => ({ ...f, name: formatNameLikeInput(val) })); setErrors(x => ({ ...x, name: "" })); }} placeholder="Member's full name" style={inputStyle} />
+              <input value={form.name} onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setErrors(x => ({ ...x, name: "" })); }} placeholder="Member's full name" style={inputStyle} />
               {errors.name && <div style={errorStyle}>{errors.name}</div>}
             </div>
             <div>
@@ -4476,7 +4472,7 @@ const AddMemberPanel: React.FC = () => {
             </div>
             <div>
               <label style={labelStyle}>Location</label>
-              <input value={form.location} onChange={e => { setForm(f => ({ ...f, location: formatNameLikeInput(e.target.value) })); setErrors(x => ({ ...x, location: "" })); }} placeholder="City, State" style={inputStyle} />
+              <input value={form.location} onChange={e => { setForm(f => ({ ...f, location: e.target.value })); setErrors(x => ({ ...x, location: "" })); }} placeholder="City, State" style={inputStyle} />
               {errors.location && <div style={errorStyle}>{errors.location}</div>}
             </div>
           </div>
@@ -4753,7 +4749,7 @@ const AdminBookingsPanel: React.FC<{
       });
       if (res.ok || res.status === 204) {
         setLocallyCancelledIds(prev => new Set(prev).add(id));
-        showToast(`Booking #${id} cancelled successfully.`);
+        showToast(`Booking #${id} cancelled. Any eligible refund will be processed to the original payment method.`);
       } else {
         showToast(`Failed to cancel booking #${id}.`);
       }
@@ -4795,7 +4791,7 @@ const AdminBookingsPanel: React.FC<{
           <div style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 400, width: "90%", textAlign: "center", boxShadow: "0 16px 48px rgba(0,0,0,0.2)" }}>
             <div style={{ marginBottom: 12, display: "flex", justifyContent: "center" }}><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg></div>
             <div style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 8 }}>Cancel Booking #{confirmDeleteId}?</div>
-            <div style={{ fontSize: 13, color: "#64748B", marginBottom: 24 }}>The booking will remain in the list as Cancelled and the backend will process any eligible refund.</div>
+            <div style={{ fontSize: 13, color: "#64748B", marginBottom: 24 }}>The booking will remain in the list as Cancelled. Any eligible refund will be returned to the original payment method, with SMS confirmation after credit.</div>
             <div style={{ display: "flex", gap: 10 }}>
               <button onClick={() => setConfirmDeleteId(null)}
                 style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
@@ -5113,7 +5109,7 @@ const BookingsSectionWrapper: React.FC<{ allBookings: any[] }> = ({ allBookings 
 // SKILLS & QUESTIONS MANAGEMENT PANEL
 // Skills tab: full CRUD for skill categories (linked to consultant tags & onboarding)
 // Questions tab: post-booking questions shown to clients (NOT linked to skills)
-//   Question types: radio | multiselect | text | mobile (with 10-digit IN validation)
+//   Question types: radio | multiselect | text | mobile
 // â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const QuestionsManagementPanel: React.FC = () => {
   type QType = "radio" | "multiselect" | "text" | "mobile";
@@ -5180,7 +5176,7 @@ const QuestionsManagementPanel: React.FC = () => {
   const openEditSkill = (s: SkillItem) => { setSkillForm({ name: s.name, description: s.description || "" }); setEditingSkill(s); setShowSkillForm(true); };
 
   const handleSaveSkill = async () => {
-    const normalizedSkillName = formatNameLikeValue(skillForm.name);
+    const normalizedSkillName = skillForm.name.trim();
     if (!normalizedSkillName) { showToast("Skill name is required."); return; }
     if (skills.some((skill) => skill.id !== editingSkill?.id && canonicalTextKey(skill.name) === canonicalTextKey(normalizedSkillName))) {
       showToast("Duplicate skill names are not allowed.");
@@ -5190,7 +5186,7 @@ const QuestionsManagementPanel: React.FC = () => {
     try {
       const payload = {
         name: normalizedSkillName,
-        description: capitalizeFirstCharacter(skillForm.description).trim() || undefined,
+        description: skillForm.description.trim() || undefined,
       };
       if (editingSkill?.id) { await updateSkill(editingSkill.id, payload); showToast("Skill updated."); }
       else { await createSkill(payload); showToast("Skill created."); }
@@ -5272,7 +5268,7 @@ const QuestionsManagementPanel: React.FC = () => {
     mobile: { label: "Mobile number", iconKey: "mobile", color: "#D97706", bg: "#FFFBEB", border: "#FCD34D" },
   };
 
-  const normalizedSkillName = formatNameLikeValue(skillForm.name);
+  const normalizedSkillName = skillForm.name.trim();
   const canSaveSkillForm =
     !savingSkill &&
     !!normalizedSkillName &&
@@ -5362,8 +5358,8 @@ const QuestionsManagementPanel: React.FC = () => {
             <div style={{ background: "#F8FAFC", border: "1.5px solid #A5F3FC", borderRadius: 16, padding: 24, marginBottom: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 16 }}>{editingSkill ? "Edit Skill" : "Create New Skill"}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-                <div><label style={lbl}>Skill Name *</label><input value={skillForm.name} onChange={e => setSkillForm(f => ({ ...f, name: formatNameLikeInput(e.target.value) }))} placeholder="e.g. Tax Planning, Investment, Insurance" style={inp} /></div>
-                <div><label style={lbl}>Description</label><input value={skillForm.description} onChange={e => setSkillForm(f => ({ ...f, description: capitalizeFirstCharacter(e.target.value) }))} placeholder="Brief description (optional)" style={inp} /></div>
+                <div><label style={lbl}>Skill Name *</label><input value={skillForm.name} onChange={e => setSkillForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Tax Planning, Investment, Insurance" style={inp} /></div>
+                <div><label style={lbl}>Description</label><input value={skillForm.description} onChange={e => setSkillForm(f => ({ ...f, description: e.target.value }))} placeholder="Brief description (optional)" style={inp} /></div>
               </div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setShowSkillForm(false)} style={{ padding: "9px 20px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
@@ -5439,7 +5435,7 @@ const QuestionsManagementPanel: React.FC = () => {
               {/* Question text */}
               <div style={{ marginBottom: 14 }}>
                 <label style={lbl}>Question Text *</label>
-                <input value={qForm.text} onChange={e => setQForm(f => ({ ...f, text: capitalizeFirstCharacter(e.target.value) }))}
+                <input value={qForm.text} onChange={e => setQForm(f => ({ ...f, text: e.target.value }))}
                   placeholder="e.g. What is your primary goal for this consultation?"
                   style={inp} />
               </div>
@@ -5464,7 +5460,7 @@ const QuestionsManagementPanel: React.FC = () => {
                 {qForm.type === "mobile" && (
                   <div style={{ marginTop: 8, padding: "8px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", display: "flex", alignItems: "center", gap: 6 }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-                    Clients must enter a valid 10-digit Indian mobile number (starts with 6-9). Validated before submission.
+                    Clients can enter phone details in any format.
                   </div>
                 )}
               </div>
@@ -5490,7 +5486,7 @@ const QuestionsManagementPanel: React.FC = () => {
               {(qForm.type === "text" || qForm.type === "mobile") && (
                 <div style={{ marginBottom: 14 }}>
                   <label style={lbl}>Placeholder Text <span style={{ fontWeight: 400, textTransform: "none", color: "#94A3B8" }}>(optional)</span></label>
-                  <input value={qForm.placeholder} onChange={e => setQForm(f => ({ ...f, placeholder: capitalizeFirstCharacter(e.target.value) }))}
+                  <input value={qForm.placeholder} onChange={e => setQForm(f => ({ ...f, placeholder: e.target.value }))}
                     placeholder={qForm.type === "mobile" ? "e.g. 9876543210" : "e.g. Share any details the consultant should know..."}
                     style={inp} />
                 </div>
@@ -5536,7 +5532,7 @@ const QuestionsManagementPanel: React.FC = () => {
                           {q.type === "mobile" && (
                             <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A", display: "inline-flex", alignItems: "center", gap: 4 }}>
                               <SvgIcon d={SVGS.checkCircle} size={11} color="#92400E" strokeWidth={2.2} />
-                              10-digit validation
+                              Flexible phone details
                             </span>
                           )}
                           {q.updatedAt && <span style={{ fontSize: 11, color: "#CBD5E1" }}>Updated {new Date(q.updatedAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}</span>}
@@ -5563,7 +5559,7 @@ const QuestionsManagementPanel: React.FC = () => {
                             <div style={{ padding: "6px 14px", border: "1.5px solid #E2E8F0", borderRadius: 8, fontSize: 13, color: "#94A3B8", background: "#F8FAFC", fontFamily: "monospace" }}>
                               {q.placeholder || "9876543210"}
                             </div>
-                            <span style={{ fontSize: 11, color: "#94A3B8" }}>Validates: starts with 6-9, exactly 10 digits</span>
+                            <span style={{ fontSize: 11, color: "#94A3B8" }}>Accepts spaces, numbers, and symbols</span>
                           </div>
                         )}
 
@@ -6370,7 +6366,7 @@ const AdminOffersPanel: React.FC = () => {
               <label style={lbl}>Description</label>
               <textarea
                 value={form.description}
-                onChange={e => setForm(f => ({ ...f, description: capitalizeFirstCharacter(e.target.value) }))}
+                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                 rows={2}
                 placeholder="Describe what this offer includes..."
                 style={{ ...inp, resize: 'none' as any }}
@@ -6762,7 +6758,11 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
   const fetchDone = React.useRef(false);
 
   React.useEffect(() => { if (!fetchDone.current && tickets.length > 0) setLocalTickets(tickets); }, [tickets]);
-  React.useEffect(() => { if (!fetchDone.current && bookings.length > 0) setLocalBookings(bookings); }, [bookings]);
+  React.useEffect(() => {
+    if (bookings.length > 0 && (!fetchDone.current || bookings.length >= localBookings.length)) {
+      setLocalBookings(bookings);
+    }
+  }, [bookings, localBookings.length]);
   // Build name map from consultants prop
   React.useEffect(() => {
     const map: Record<number, string> = {};
@@ -6798,16 +6798,51 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
       const fetchAllBookings = async (): Promise<any[]> => {
         try {
           const firstPage = await getBookingsPage(0, 200);
+          let regularBookings: any[] = [];
           if (firstPage.totalPages <= 1) {
-            return firstPage.content.length > 0 ? firstPage.content : (await getAllBookings());
+            regularBookings = firstPage.content.length > 0 ? firstPage.content : (await getAllBookings());
+          } else {
+            const pagePromises = Array.from({ length: firstPage.totalPages - 1 }, (_, i) =>
+              getBookingsPage(i + 1, 200).then(p => p.content).catch(() => [] as any[])
+            );
+            const restPages = await Promise.all(pagePromises);
+            regularBookings = [...firstPage.content, ...restPages.flat()];
+            console.log(`[Analytics] Fetched ALL ${regularBookings.length} bookings across ${firstPage.totalPages} pages`);
           }
-          const pagePromises = Array.from({ length: firstPage.totalPages - 1 }, (_, i) =>
-            getBookingsPage(i + 1, 200).then(p => p.content).catch(() => [] as any[])
-          );
-          const restPages = await Promise.all(pagePromises);
-          const all = [...firstPage.content, ...restPages.flat()];
-          console.log(`[Analytics] Fetched ALL ${all.length} bookings across ${firstPage.totalPages} pages`);
-          return all;
+
+          let specialBookings: any[] = [];
+          try {
+            const firstSpecialPage = await getAllSpecialBookings(0, 500);
+            if (typeof firstSpecialPage?.totalPages === "number" && firstSpecialPage.totalPages > 1) {
+              const restSpecial = await Promise.all(
+                Array.from({ length: firstSpecialPage.totalPages - 1 }, (_, i) =>
+                  getAllSpecialBookings(i + 1, 500)
+                    .then((p: any) => p.content || extractArray(p))
+                    .catch(() => [] as any[])
+                )
+              );
+              specialBookings = [...(firstSpecialPage.content || extractArray(firstSpecialPage)), ...restSpecial.flat()];
+            } else {
+              specialBookings = Array.isArray(firstSpecialPage)
+                ? firstSpecialPage
+                : (firstSpecialPage?.content || extractArray(firstSpecialPage));
+            }
+          } catch { /* special bookings are optional for older backends */ }
+
+          const mappedSpecial = specialBookings.map((b: any) => ({
+            ...b,
+            id: `sp_${b.id}`,
+            isSpecial: true,
+            status: (b.status || b.specialBookingStatus || "REQUESTED").toUpperCase() === "SCHEDULED"
+              ? "CONFIRMED"
+              : (b.status || b.specialBookingStatus || "REQUESTED").toUpperCase(),
+            amount: Number(b.totalAmount || b.total_amount || b.sessionAmount || b.amount || b.charges || b.fee || 0),
+            totalAmount: Number(b.totalAmount || b.total_amount || b.sessionAmount || b.amount || b.charges || b.fee || 0),
+            consultantName: b.consultantName || b.consultant_name || b.advisorName || b.advisor_name || b.consultant?.name || b.advisor?.name,
+            date: b.scheduledDate || b.scheduled_date || b.preferredDate || b.preferred_date || b.specialDate || b.slotDate || b.bookingDate || b.date || "",
+          }));
+
+          return [...regularBookings, ...mappedSpecial];
         } catch {
           return getAllBookings();
         }
@@ -6829,7 +6864,7 @@ const AnalyticsDashboard: React.FC<{ tickets: any[]; consultants: any[]; booking
       if (bResult.status === "fulfilled") {
         const arr = Array.isArray(bResult.value) ? bResult.value : [];
         if (arr.length > 0) {
-          setLocalBookings(arr);
+          setLocalBookings(prev => arr.length >= prev.length ? arr : prev);
           // Resolve consultant names: start from consultants prop, then fetch unknowns
           const cids = [...new Set(arr.map((b: any) => b.consultantId).filter(Boolean))] as number[];
           const nameMap: Record<number, string> = { ...consultantNames };
@@ -7948,7 +7983,7 @@ const EmailToTicketInboxPanel: React.FC = () => {
         />
       )}
 
-      {toast && <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#0F172A", color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 13, fontWeight: 600, zIndex: 9999, boxShadow: "0 4px 16px rgba(0,0,0,0.3)" }}>{toast}</div>}
+      {toast && <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#0F172A", color: "#fff" }}>{toast}</div>}
 
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
@@ -8211,53 +8246,49 @@ function AdminPageInner() {
   // Consultant performance: bookings per consultant for the bar chart
   const [consultantChartData, setConsultantChartData] = useState<{ name: string; bookings: number; revenue: number }[]>([]);
 
+  const hasBookingChartActivity = (rows: { bookings?: number; revenue?: number }[] = []) =>
+    rows.some(row => Number(row.bookings || 0) > 0 || Number(row.revenue || 0) > 0);
+
+  const isCompletedBookingStatus = (status: any) =>
+    String(status || "").trim().toUpperCase() === "COMPLETED";
+
+  const readBookingAmount = (booking: any): number =>
+    Number(
+      booking?.totalAmount ||
+      booking?.total_amount ||
+      booking?.amount ||
+      booking?.charges ||
+      booking?.fee ||
+      booking?.sessionAmount ||
+      0
+    ) || 0;
+
   const currentAdminId = Number(localStorage.getItem("fin_user_id") ?? 0);
 
-  // â"€â"€ Contact submissions unread count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-  const [contactUnreadCount, setContactUnreadCount] = useState(() => {
-    try {
-      const raw = localStorage.getItem("fin_contact_submissions");
-      const arr = raw ? JSON.parse(raw) : [];
-      return arr.filter((s: any) => !s.read).length;
-    } catch { return 0; }
-  });
-
-  // â"€â"€ Email-to-ticket inbox unread count â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const [emailInboxUnreadCount, setEmailInboxUnreadCount] = useState(() => {
     try {
       const raw = localStorage.getItem("fin_email_to_ticket_messages");
       const arr = raw ? JSON.parse(raw) : [];
       return arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length;
-    } catch { return 0; }
+    } catch {
+      return 0;
+    }
   });
 
-  // Refresh unread count when navigating to contact-submissions
-  useEffect(() => {
-    if (activeSection === "contact-submissions") {
-      setContactUnreadCount(0);
-    } else {
-      try {
-        const raw = localStorage.getItem("fin_contact_submissions");
-        const arr = raw ? JSON.parse(raw) : [];
-        setContactUnreadCount(arr.filter((s: any) => !s.read).length);
-      } catch { }
-    }
-  }, [activeSection]);
-
-  // Refresh unread count when navigating to email-to-ticket-inbox
   useEffect(() => {
     if (activeSection === "email-to-ticket-inbox") {
       setEmailInboxUnreadCount(0);
-    } else {
-      try {
-        const raw = localStorage.getItem("fin_email_to_ticket_messages");
-        const arr = raw ? JSON.parse(raw) : [];
-        setEmailInboxUnreadCount(arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length);
-      } catch { }
+      return;
+    }
+
+    try {
+      const raw = localStorage.getItem("fin_email_to_ticket_messages");
+      const arr = raw ? JSON.parse(raw) : [];
+      setEmailInboxUnreadCount(arr.filter((m: any) => !m.read && !m.isRead && !m.hidden).length);
+    } catch {
+      setEmailInboxUnreadCount(0);
     }
   }, [activeSection]);
-
-  // â"€â"€ Logout handler â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   const handleLogout = () => {
     logoutUser();
     navigate("/login", { replace: true });
@@ -8286,12 +8317,16 @@ function AdminPageInner() {
     setLoading(true);
 
     try {
-      const advData = await getAllAdvisors();
+      const [advData, liveFeeConfig] = await Promise.all([
+        getAllAdvisors(),
+        getFeeConfig(),
+      ]);
       if (Array.isArray(advData) && advData.length > 0) {
         setAdvisors(advData.map((a: any) => {
-          const baseCharges = Number(a.charges || 0);
-          // PRD Â§5.3: Display price = base + â‚¹200 markup
-          const displayPrice = a.displayPrice ? Number(a.displayPrice) : (baseCharges > 0 ? baseCharges + 200 : 0);
+          const baseCharges = Number(a.charges || a.baseAmount || 0);
+          const displayPrice = a.displayPrice
+            ? Number(a.displayPrice)
+            : (baseCharges > 0 ? calculateTotalPrice(baseCharges, liveFeeConfig).total : 0);
           const rawAvatar =
             a.profileImageUrl ||
             a.avatarUrl ||
@@ -8348,8 +8383,17 @@ function AdminPageInner() {
       // Also fetch special bookings and merge them in
       let specialBookingsArr: any[] = [];
       try {
-        const specialRaw = await apiFetch("/special-bookings");
-        specialBookingsArr = Array.isArray(specialRaw) ? specialRaw : (specialRaw?.content || []);
+        const firstSpecialPage = await getAllSpecialBookings(0, 500);
+        if (typeof firstSpecialPage?.totalPages === "number" && firstSpecialPage.totalPages > 1) {
+          const rest = await Promise.all(
+            Array.from({ length: firstSpecialPage.totalPages - 1 }, (_, i) =>
+              getAllSpecialBookings(i + 1, 500).then((p: any) => p.content || extractArray(p)).catch(() => [] as any[])
+            )
+          );
+          specialBookingsArr = [...(firstSpecialPage.content || extractArray(firstSpecialPage)), ...rest.flat()];
+        } else {
+          specialBookingsArr = Array.isArray(firstSpecialPage) ? firstSpecialPage : (firstSpecialPage?.content || extractArray(firstSpecialPage));
+        }
       } catch { /* non-fatal */ }
 
       if (bookingsArr.length > 0 || specialBookingsArr.length > 0) {
@@ -8509,7 +8553,22 @@ function AdminPageInner() {
           const uid = getBookingUserId(b);
           const resolvedUser = (uid && userNameMap[uid]) ? userNameMap[uid] : extractUserName(b);
           const timeStr = slotDate && timeRange ? `${slotDate} * ${timeRange}` : slotDate || timeRange || "";
-          return { id: b.id, user: resolvedUser, advisor: advisorName, time: timeStr, status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(), amount: Number(b.amount || b.charges || b.fee || b.totalAmount || 0), _rawDate: slotDate };
+          const amount = readBookingAmount(b);
+          return {
+            id: b.id,
+            userId: uid || undefined,
+            consultantId: cid || undefined,
+            user: resolvedUser,
+            advisor: advisorName,
+            advisorName,
+            consultantName: advisorName,
+            date: slotDate,
+            time: timeStr,
+            status: (b.BookingStatus || b.bookingStatus || b.status || "PENDING").toUpperCase(),
+            amount,
+            totalAmount: amount,
+            _rawDate: slotDate,
+          };
         });
 
         // Map special bookings
@@ -8519,61 +8578,109 @@ function AdminPageInner() {
           const advisorName = b.consultant?.name || b.consultant?.fullName || b.advisor?.name || b.advisor?.fullName || b.consultantName || b.consultant_name || b.advisorName || b.advisor_name || consultantNameMap[cid] || "Consultant";
           const uid = getBookingUserId(b);
           const resolvedUser = (uid && userNameMap[uid]) ? userNameMap[uid] : extractUserName(b);
-          const timeRange = b.scheduledTimeRange || b.timeRange || b.preferredTimeRange || b.preferred_time_range || "Special";
+          const scheduledTimeRaw = b.scheduledTime || b.scheduled_time || "";
+          const scheduledTime =
+            typeof scheduledTimeRaw === "object" && scheduledTimeRaw?.hour !== undefined
+              ? `${String(scheduledTimeRaw.hour).padStart(2, "0")}:${String(scheduledTimeRaw.minute ?? 0).padStart(2, "0")}`
+              : String(scheduledTimeRaw || "").substring(0, 5);
+          const timeRange = b.scheduledTimeRange || b.timeRange || b.preferredTimeRange || b.preferred_time_range || scheduledTime || "Special";
           const timeStr = slotDate ? `${slotDate} * ${timeRange}` : "Special Booking";
-          return { id: `sp_${b.id}`, user: resolvedUser, advisor: advisorName, time: timeStr, status: (b.status || "CONFIRMED").toUpperCase(), amount: Number(b.sessionAmount || b.amount || b.charges || b.fee || 0), _rawDate: slotDate };
+          const amount = readBookingAmount(b);
+          const rawStatus = (b.status || b.specialBookingStatus || "CONFIRMED").toUpperCase();
+          return {
+            id: `sp_${b.id}`,
+            userId: uid || undefined,
+            consultantId: cid || undefined,
+            user: resolvedUser,
+            advisor: advisorName,
+            advisorName,
+            consultantName: advisorName,
+            date: slotDate,
+            time: timeStr,
+            status: rawStatus === "SCHEDULED" ? "CONFIRMED" : rawStatus,
+            amount,
+            totalAmount: amount,
+            isSpecial: true,
+            _rawDate: slotDate,
+          };
         });
 
         const allMapped = [...mapped, ...mappedSpecial].sort((a: any, b: any) => {
-          const dateCmp = parseBookingDate(a._rawDate || "").localeCompare(parseBookingDate(b._rawDate || ""));
+          const dateCmp = parseBookingDate(b._rawDate || "").localeCompare(parseBookingDate(a._rawDate || ""));
           if (dateCmp !== 0) return dateCmp;
-          const timeCmp = parseBookingStartMinutes(a.time || "") - parseBookingStartMinutes(b.time || "");
+          const timeCmp = parseBookingStartMinutes(b.time || "") - parseBookingStartMinutes(a.time || "");
           if (timeCmp !== 0) return timeCmp;
-          return String(a.id || "").localeCompare(String(b.id || ""));
+          return String(b.id || "").localeCompare(String(a.id || ""));
         });
 
         setAllBookings(allMapped);
         setTotalBookingsCount(prev => prev > 0 ? Math.max(prev, allMapped.length) : allMapped.length);
-        // Preserve summary revenue when available; otherwise fall back to derived list total
-        setTotalRevenue(prev => prev > 0 ? prev : allMapped.reduce((s: number, b: any) => s + (b.amount || 0), 0));
+        // Preserve summary revenue when available; otherwise derive revenue from completed bookings.
+        const derivedCompletedRevenue = allMapped.reduce(
+          (s: number, b: any) => s + (isCompletedBookingStatus(b.status) ? readBookingAmount(b) : 0),
+          0
+        );
+        setTotalRevenue(prev => prev > 0 ? prev : derivedCompletedRevenue);
         setDashBookings(allMapped.slice(0, 5));
 
-        // Build rolling 14-day chart (today Â± 7 days) so upcoming bookings always appear
-        // This avoids the "empty chart" when all bookings are future dates
+        // Build a 14-day chart from real bookings. Start near today, then fall back
+        // to the latest booking window so existing activity is never hidden.
         const chartNow = new Date();
         chartNow.setHours(0, 0, 0, 0);
         const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        // Generate 14 days: -3 past days + today + 10 future days
-        const chartDays: { iso: string; label: string }[] = [];
-        for (let i = -3; i <= 10; i++) {
-          const d = new Date(chartNow);
-          d.setDate(d.getDate() + i);
-          const iso = d.toISOString().split("T")[0];
-          const dow = DAY_NAMES_SHORT[d.getDay()];
-          const date = d.getDate();
-          chartDays.push({ iso, label: `${dow} ${date}` });
-        }
-        const dayCounts: Record<string, number> = {};
-        const dayRevenue: Record<string, number> = {};
-        chartDays.forEach(cd => { dayCounts[cd.iso] = 0; dayRevenue[cd.iso] = 0; });
 
-        allMapped.forEach((b: any) => {
-          const rawDate = b._rawDate || b.time?.split(" * ")[0]?.trim() || "";
-          const isoDate = parseBookingDate(rawDate);
-          if (!isoDate) return;
-          if (dayCounts[isoDate] !== undefined) {
-            dayCounts[isoDate]++;
-            dayRevenue[isoDate] = (dayRevenue[isoDate] || 0) + (b.amount || 0);
-          }
-        });
+        const buildChartDays = (start: Date): { iso: string; label: string }[] =>
+          Array.from({ length: 14 }, (_, i) => {
+            const d = new Date(start);
+            d.setDate(d.getDate() + i);
+            const iso = d.toISOString().split("T")[0];
+            return { iso, label: `${DAY_NAMES_SHORT[d.getDay()]} ${d.getDate()}` };
+          });
 
-        setBookingChartData(
-          chartDays.map(cd => ({
+        const buildChartRows = (chartDays: { iso: string; label: string }[]) => {
+          const dayCounts: Record<string, number> = {};
+          const dayRevenue: Record<string, number> = {};
+          chartDays.forEach(cd => { dayCounts[cd.iso] = 0; dayRevenue[cd.iso] = 0; });
+
+          allMapped.forEach((b: any) => {
+            const rawDate = b._rawDate || b.date || b.time?.split(" * ")[0]?.trim() || "";
+            const isoDate = parseBookingDate(rawDate);
+            if (!isoDate) return;
+            if (dayCounts[isoDate] !== undefined) {
+              dayCounts[isoDate]++;
+              dayRevenue[isoDate] = (dayRevenue[isoDate] || 0) + readBookingAmount(b);
+            }
+          });
+
+          return chartDays.map(cd => ({
             day: cd.label,
             bookings: dayCounts[cd.iso] || 0,
-            revenue: Math.round((dayRevenue[cd.iso] || 0) / 1000),
-          }))
-        );
+            revenue: Math.round(((dayRevenue[cd.iso] || 0) / 1000) * 100) / 100,
+          }));
+        };
+
+        const currentWindowStart = new Date(chartNow);
+        currentWindowStart.setDate(currentWindowStart.getDate() - 3);
+        let chartRows = buildChartRows(buildChartDays(currentWindowStart));
+
+        if (!hasBookingChartActivity(chartRows)) {
+          const datedIsoValues = allMapped
+            .map((b: any) => parseBookingDate(b._rawDate || b.date || b.time?.split(" * ")[0]?.trim() || ""))
+            .filter((iso: string) => /^\d{4}-\d{2}-\d{2}$/.test(iso) && !iso.startsWith("9999-"));
+
+          if (datedIsoValues.length > 0) {
+            const sortedIsoValues = datedIsoValues.sort();
+            const latestBookingDate = new Date(`${sortedIsoValues[sortedIsoValues.length - 1]}T00:00:00`);
+            if (!Number.isNaN(latestBookingDate.getTime())) {
+              const latestWindowStart = new Date(latestBookingDate);
+              latestWindowStart.setDate(latestWindowStart.getDate() - 13);
+              const latestRows = buildChartRows(buildChartDays(latestWindowStart));
+              if (hasBookingChartActivity(latestRows)) chartRows = latestRows;
+            }
+          }
+        }
+
+        setBookingChartData(chartRows);
 
         // Consultant performance chart: bookings and revenue per consultant
         const consultantMap: Record<string, { name: string; bookings: number; revenue: number }> = {};
@@ -8581,12 +8688,12 @@ function AdminPageInner() {
           const name = b.advisor || "Unknown";
           if (!consultantMap[name]) consultantMap[name] = { name, bookings: 0, revenue: 0 };
           consultantMap[name].bookings++;
-          consultantMap[name].revenue += (b.amount || 0);
+          consultantMap[name].revenue += readBookingAmount(b);
         });
         const consultantArr = Object.values(consultantMap)
           .sort((a, b) => b.bookings - a.bookings)
           .slice(0, 6) // top 6 consultants
-          .map(c => ({ ...c, name: c.name.split(" ")[0], revenue: Math.round(c.revenue / 1000) })); // first name only, revenue in K
+          .map(c => ({ ...c, name: c.name.split(" ")[0], revenue: Math.round((c.revenue / 1000) * 100) / 100 })); // first name only, revenue in K
         setConsultantChartData(consultantArr);
       }
     } catch (err: any) { console.warn("[Admin] Bookings failed (non-fatal):", err?.message); }
@@ -8612,20 +8719,32 @@ function AdminPageInner() {
 
       if (adminOverview.status === "fulfilled") {
         const d = adminOverview.value;
-        setTotalRevenue(prev => Number(d.platformRevenue || 0) > 0 ? Number(d.platformRevenue) : prev);
-        setAdminStats(d);
+        const overviewRevenue = Number(d.platformRevenue || 0);
+        setTotalRevenue(prev => overviewRevenue > 0 ? overviewRevenue : prev);
+        setAdminStats({
+          ...d,
+          platformRevenue: overviewRevenue > 0 ? overviewRevenue : undefined,
+        });
       }
 
       if (adminCharts.status === "fulfilled") {
         const c = adminCharts.value;
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         const revenueArr: number[] = c.platformRevenueChart || [];
-        if (revenueArr.length > 0) {
-          setBookingChartData(revenueArr.map((v: number, i: number) => ({
-            day: months[i],
-            bookings: (c.userGrowthChart?.[i] || 0),
-            revenue: Math.round(v / 1000),
-          })));
+        const bookingActivityArr: number[] =
+          c.platformBookingActivityChart ||
+          c.platformMonthlyBookingActivity ||
+          c.bookingActivityChart ||
+          c.monthlyBookingActivity ||
+          c.bookingsChart ||
+          [];
+        const analyticsRows = revenueArr.map((v: number, i: number) => ({
+          day: months[i],
+          bookings: Number(bookingActivityArr[i] || 0),
+          revenue: Math.round((Number(v || 0) / 1000) * 100) / 100,
+        }));
+        if (revenueArr.length > 0 && bookingActivityArr.length > 0 && hasBookingChartActivity(analyticsRows)) {
+          setBookingChartData(prev => hasBookingChartActivity(prev) ? prev : analyticsRows);
         }
       }
     } catch (err) { console.warn("[Admin] Analytics enrichment failed (non-fatal):", err); }
@@ -8656,7 +8775,7 @@ function AdminPageInner() {
     setDeletingId(id);
     setDeleteConfirmModal(null);
     try { await deleteAdvisor(id); fetchDashboardData(); }
-    catch { alert("Failed to delete consultant. Please try again."); }
+    catch (err: any) { alert(err?.message || "Failed to delete consultant. Please try again."); }
     finally { setDeletingId(null); }
   };
 
@@ -8732,14 +8851,17 @@ function AdminPageInner() {
         </svg>
       ),
     },
-    { id: "contact-submissions", label: "Contact Messages", badge: contactUnreadCount > 0 ? contactUnreadCount : undefined, icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg> },
+    { id: "contact-submissions", label: "Contact Messages", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg> },
     { id: "settings", label: "Settings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" strokeWidth="2" /></svg> },
   ];
+
+  const overviewPlatformRevenue = Number(adminStats?.platformRevenue || 0);
+  const displayPlatformRevenue = overviewPlatformRevenue > 0 ? overviewPlatformRevenue : totalRevenue;
 
   const stats = [
     { label: "TOTAL USERS", value: loading ? "..." : String(adminStats?.totalUsers ?? (advisors.length + (adminStats?.totalClients ?? 0))), change: `${adminStats?.totalUsers ?? advisors.length} registered`, positive: true, color: "#2563EB", bg: "#EFF6FF" },
     { label: "ACTIVE CONSULTANTS", value: loading ? "..." : String(adminStats?.totalConsultants ?? advisors.length), change: `${adminStats?.totalConsultants ?? advisors.length} registered`, positive: true, color: "#0D9488", bg: "#ECFEFF" },
-    { label: "PLATFORM REVENUE", value: loading ? "..." : `₹${(adminStats?.platformRevenue ?? totalRevenue).toLocaleString("en-IN")}`, change: "from completed bookings", positive: true, color: "#059669", bg: "#F0FDF4" },
+    { label: "PLATFORM REVENUE", value: loading ? "..." : `₹${displayPlatformRevenue.toLocaleString("en-IN")}`, change: "from completed bookings", positive: true, color: "#059669", bg: "#F0FDF4" },
   ];
   const hasOpenTickets = ticketCount > 0;
   const openTicketsHeading = loading
@@ -9125,7 +9247,7 @@ function AdminPageInner() {
               <div id="dash-section-ticket-summary" className={`adm-card `} style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ padding: "16px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <h3 className="adm-card-title" style={{ margin: 0 }}>Ticket Analytics</h3>
-                  <button onClick={() => setActiveSection("support-config")} style={{ background: "none", border: "none", color: "#0F766E", fontWeight: 600, fontSize: 12, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>Full Reports <ArrowRight size={13} /></button>
+                  <button onClick={() => setActiveSection("summary")} style={{ background: "none", border: "none", color: "#0F766E", fontWeight: 600, fontSize: 12, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>Full Reports <ArrowRight size={13} /></button>
                 </div>
                 <div style={{ padding: "8px 16px 16px" }}>
                   <TicketSummaryChart tickets={allTickets} consultantNameMap={consultantNameMap} />

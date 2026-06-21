@@ -147,13 +147,16 @@ const verifyPayment = async (
   endpoint: string,
   response: RazorpayCheckoutResult
 ) => {
-  const params = new URLSearchParams({
+  const payload = {
     razorpayPaymentId: response.razorpay_payment_id,
     razorpayOrderId: response.razorpay_order_id,
     razorpaySignature: response.razorpay_signature,
-  });
+  };
 
-  return apiFetch(`${endpoint}?${params.toString()}`, { method: "POST" });
+  return apiFetch(endpoint, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 };
 
 export const verifyBookingPayment = async (
@@ -173,3 +176,12 @@ export const verifyOnboardingPayment = async (
 
 export const retryOnboardingPayment = async (userId: number) =>
   apiFetch(`/onboarding/${userId}/retry-payment`, { method: "POST" });
+
+export const syncBookingPayment = async (bookingId: number) =>
+  apiFetch(`/bookings/${bookingId}/sync-payment`);
+
+export const syncSpecialBookingPayment = async (specialBookingId: number) =>
+  apiFetch(`/special-bookings/${specialBookingId}/sync-payment`);
+
+export const syncOnboardingPayment = async (userId: number) =>
+  apiFetch(`/onboarding/${userId}/sync-payment`);

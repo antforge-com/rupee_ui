@@ -5,6 +5,7 @@ import { API_ORIGIN } from "../config/api";
 import {
   extractArray,
   getBookingsPage,
+  getAllSpecialBookings,
   getConsultantId,
   getSpecialBookingsByConsultant,
   getToken,
@@ -29,6 +30,7 @@ interface Booking {
   isSpecial?: boolean;
   duration?: string;        // e.g. "1 hr", "2 hrs"
   specialStatus?: string;   // raw SpecialBookingStatus: REQUESTED | SCHEDULED | CONFIRMED | COMPLETED | CANCELLED
+  day?: string;
 }
 
 interface Props {
@@ -225,17 +227,47 @@ const bookingStartMinutes = (booking: Pick<Booking, "time">): number => {
   return parseTimeLabelToMinutes(booking.time || "") ?? Number.MAX_SAFE_INTEGER;
 };
 
+const getBookingTimeWindow = (booking: Pick<Booking, "date" | "time">): { start: Date; end: Date } | null => {
+  const dateStr = normaliseBookingDateKey(booking.date || "");
+  const rawTime = String(booking.time || "").trim();
+  if (!dateStr || dateStr === "9999-12-31" || !rawTime) return null;
+
+  const parts = rawTime
+    .split(/\s*(?:-|–|—|to)\s*/i)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const startMinutes = parseTimeLabelToMinutes(parts[0] || rawTime);
+  if (startMinutes == null) return null;
+
+  let endMinutes = parts.length > 1 ? parseTimeLabelToMinutes(parts[parts.length - 1]) : null;
+  if (endMinutes == null) endMinutes = startMinutes + 60;
+  if (endMinutes <= startMinutes) endMinutes += 24 * 60;
+
+  const base = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+  const start = new Date(base);
+  start.setMinutes(startMinutes);
+  const end = new Date(base);
+  end.setMinutes(endMinutes);
+  return { start, end };
+};
+
+const canCompleteBooking = (booking: Pick<Booking, "date" | "time">, now = new Date()): boolean => {
+  const window = getBookingTimeWindow(booking);
+  return !!window && now >= window.end;
+};
+
 const sortBookingsChronologically = (items: Booking[]): Booking[] =>
   [...items].sort((a, b) => {
-    const dateCmp = normaliseBookingDateKey(a.date || "").localeCompare(
-      normaliseBookingDateKey(b.date || "")
+    const dateCmp = normaliseBookingDateKey(b.date || "").localeCompare(
+      normaliseBookingDateKey(a.date || "")
     );
     if (dateCmp !== 0) return dateCmp;
 
-    const timeCmp = bookingStartMinutes(a) - bookingStartMinutes(b);
+    const timeCmp = bookingStartMinutes(b) - bookingStartMinutes(a);
     if (timeCmp !== 0) return timeCmp;
 
-    return Number(a.id || 0) - Number(b.id || 0);
+    return Number(b.id || 0) - Number(a.id || 0);
   });
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; border: string }> = {
@@ -437,6 +469,10 @@ export default function BookingsPage({ isAdmin = false }: Props) {
       showMsg(`${STATUS_DISPLAY_LABELS[current.status] || current.status} bookings cannot be changed.`, false);
       return;
     }
+    if (newStatus === "COMPLETED" && current && !canCompleteBooking(current)) {
+      showMsg("You can complete this booking only after the scheduled session time has ended.", false);
+      return;
+    }
     setChangingStatusId(bookingId);
     try {
       if (isSpecial) {
@@ -482,6 +518,10 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     if (FINAL_BOOKING_STATUSES.has(editingBooking.status)) {
       showMsg(`${STATUS_DISPLAY_LABELS[editingBooking.status] || editingBooking.status} bookings cannot be changed.`, false);
       setEditingBooking(null);
+      return;
+    }
+    if (editForm.status === "COMPLETED" && !canCompleteBooking(editingBooking)) {
+      showMsg("You can complete this booking only after the scheduled session time has ended.", false);
       return;
     }
     setSavingEdit(true);
@@ -535,9 +575,16 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     try {
       let raw: any[] = [];
       if (isAdmin) {
-        // Admin: try a few endpoint variants for all special bookings
-        for (const ep of ["/special-bookings?page=0&size=200", "/special-bookings/all", "/special-bookings"]) {
-          try { raw = extractArray(await authFetch(`/api${ep}`)); if (raw.length >= 0) break; } catch { }
+        const firstPage = await getAllSpecialBookings(0, 500);
+        if (typeof firstPage?.totalPages === "number" && firstPage.totalPages > 1) {
+          const rest = await Promise.all(
+            Array.from({ length: firstPage.totalPages - 1 }, (_, i) =>
+              getAllSpecialBookings(i + 1, 500).then((p: any) => p.content || extractArray(p)).catch(() => [] as any[])
+            )
+          );
+          raw = [...(firstPage.content || extractArray(firstPage)), ...rest.flat()];
+        } else {
+          raw = Array.isArray(firstPage) ? firstPage : (firstPage?.content || extractArray(firstPage));
         }
       } else if (consultantId) {
         raw = await getSpecialBookingsByConsultant(consultantId);
@@ -546,14 +593,52 @@ export default function BookingsPage({ isAdmin = false }: Props) {
     } catch { return []; }
   };
 
-  const mapSpecialRaw = (raw: any[], consultantId?: number): Booking[] => {
+  const mapSpecialRaw = async (raw: any[], consultantId?: number): Promise<Booking[]> => {
     if (!Array.isArray(raw)) return [];
+    const uncachedCids = [...new Set(
+      raw.map(extractConsultantId).filter((id: any) => id && !_consultantCache[id])
+    )] as number[];
+    const consultantFetches = uncachedCids.map(async (id) => {
+      try {
+        const c = await authFetch(`/api/consultants/${id}`);
+        if (c?.name || c?.fullName) { _consultantCache[id] = c.name || c.fullName; return; }
+      } catch { }
+      try {
+        const u = await authFetch(`/api/users/${id}`);
+        _consultantCache[id] = u?.name || u?.fullName || u?.username || "Consultant";
+      } catch { _consultantCache[id] = "Consultant"; }
+    });
+
+    const uncachedUids = [...new Set(
+      raw.map(extractUserId).filter((id: any) => id && !_userCache[id])
+    )] as number[];
+    const userFetches = uncachedUids.map(async (uid) => {
+      for (const endpoint of [`/api/onboarding/${uid}`, `/api/users/${uid}`, `/api/members/${uid}`]) {
+        try {
+          const u = await authFetch(endpoint);
+          const name = prettifyName(u?.name || u?.fullName || u?.displayName || u?.email || u?.username || u?.identifier || "");
+          if (name) { _userCache[uid] = name; return; }
+        } catch { }
+      }
+      _userCache[uid] = "Client";
+    });
+
+    await Promise.all([...consultantFetches, ...userFetches]);
+
+    const dateDay = (isoDate: string): string => {
+      if (!isoDate) return "";
+      const d = new Date(`${isoDate}T00:00:00`);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleDateString("en-IN", { weekday: "short" });
+    };
+
     return raw
       .map((b: any) => {
         const hrs = Number(b.durationInHours || b.duration_in_hours || 1);
         const duration = hrs === 1 ? "1 hr" : `${hrs} hrs`;
         const rawStatus = (b.status || "REQUESTED").toUpperCase();
         const meta = parseSpecialBookingMeta(b.userNotes);
+        const hasScheduledSpecialSlot = rawStatus === "SCHEDULED" || rawStatus === "CONFIRMED" || rawStatus === "COMPLETED";
         // Map SpecialBookingStatus → display status
         const displayStatus =
           rawStatus === "REQUESTED"
@@ -562,17 +647,13 @@ export default function BookingsPage({ isAdmin = false }: Props) {
               ? "CONFIRMED"
               : rawStatus;
         const scheduledDate =
-          b.scheduledDate ||
-          b.scheduled_date ||
-          meta?.scheduledDate ||
-          meta?.preferredDate ||
-          "";
+          hasScheduledSpecialSlot
+            ? (b.scheduledDate || b.scheduled_date || meta?.scheduledDate || "")
+            : (meta?.preferredDate || b.preferredDate || b.preferred_date || "");
         const scheduledTimeRaw =
-          b.scheduledTime ||
-          b.scheduled_time ||
-          meta?.scheduledTime ||
-          meta?.preferredTime ||
-          "";
+          hasScheduledSpecialSlot
+            ? (b.scheduledTime || b.scheduled_time || meta?.scheduledTime || "")
+            : (meta?.preferredTime || b.preferredTime || b.preferred_time || "");
         const scheduledTime =
           typeof scheduledTimeRaw === "object" && scheduledTimeRaw?.hour !== undefined
             ? `${String(scheduledTimeRaw.hour).padStart(2, "0")}:${String(scheduledTimeRaw.minute ?? 0).padStart(2, "0")}`
@@ -585,11 +666,9 @@ export default function BookingsPage({ isAdmin = false }: Props) {
         };
         let timeDisplay =
           String(
-            b.scheduledTimeRange ||
-            b.timeRange ||
-            meta?.scheduledTimeRange ||
-            meta?.preferredTimeRange ||
-            ""
+            hasScheduledSpecialSlot
+              ? (b.scheduledTimeRange || b.timeRange || meta?.scheduledTimeRange || "")
+              : (meta?.preferredTimeRange || b.preferredTimeRange || b.preferred_time_range || "")
           ).trim();
         if (!timeDisplay && scheduledTime) {
           try {
@@ -609,6 +688,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
           userInitial: userName.charAt(0).toUpperCase(),
           advisor: advisorName,
           date: scheduledDate,
+          day: dateDay(scheduledDate),
           time: timeDisplay,
           status: displayStatus,
           amount: readMoney(b.totalAmount, b.total_amount, b.amount),
@@ -860,7 +940,9 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                 <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}
                   disabled={FINAL_BOOKING_STATUSES.has(editingBooking.status)}
                   style={{ width: "100%", padding: "10px 13px", border: "1.5px solid #E2E8F0", borderRadius: 10, fontSize: 13, background: FINAL_BOOKING_STATUSES.has(editingBooking.status) ? "#F8FAFC" : "#fff", fontFamily: "inherit", outline: "none", cursor: FINAL_BOOKING_STATUSES.has(editingBooking.status) ? "not-allowed" : "pointer" }}>
-                  {(FINAL_BOOKING_STATUSES.has(editingBooking.status) ? [editingBooking.status] : BOOKING_STATUS_OPTIONS).map(s => (
+                  {(FINAL_BOOKING_STATUSES.has(editingBooking.status) ? [editingBooking.status] : BOOKING_STATUS_OPTIONS)
+                    .filter(s => s !== "COMPLETED" || canCompleteBooking(editingBooking))
+                    .map(s => (
                     <option key={s} value={s}>{s === editingBooking.status ? (STATUS_DISPLAY_LABELS[s] || s) : (STATUS_ACTION_LABELS[s] || s)}</option>
                   ))}
                 </select>
@@ -991,6 +1073,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                     ) : b.date ? (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Calendar size={13} /> {b.date}</span>
                     ) : null}
+                    {b.day && <span style={{ background: "#F8FAFC", color: "#475569", fontWeight: 700, padding: "2px 8px", borderRadius: 20, fontSize: 12 }}>{b.day}</span>}
                     {b.time && <span style={{ background: "#ECFEFF", color: "#0F766E", fontWeight: 600, padding: "2px 10px", borderRadius: 20, fontSize: 12 }}>{b.time}</span>}
                     {b.isSpecial && b.duration && !b.time && (
                       <span style={{ background: "#FFF7ED", color: "#C2410C", fontWeight: 600, padding: "2px 10px", borderRadius: 20, fontSize: 12 }}>{b.duration}</span>
@@ -1012,6 +1095,7 @@ export default function BookingsPage({ isAdmin = false }: Props) {
                       <select value={b.status} disabled={changingStatusId === b.id || statusIsFinal} onChange={e => handleStatusChange(b.id, e.target.value, !!b.isSpecial)}
                         style={{ padding: "5px 28px 5px 12px", borderRadius: 20, border: `1.5px solid ${sc.border}`, background: (changingStatusId === b.id || statusIsFinal) ? "#F8FAFC" : sc.bg, color: changingStatusId === b.id ? "#94A3B8" : sc.color, fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", cursor: (changingStatusId === b.id || statusIsFinal) ? "not-allowed" : "pointer", outline: "none", appearance: "none", WebkitAppearance: "none", fontFamily: "inherit", transition: "all 0.15s", minWidth: 110 }}>
                         {(statusIsFinal ? [b.status] : b.isSpecial ? [b.status, "CANCELLED"] : BOOKING_STATUS_OPTIONS)
+                          .filter(s => s !== "COMPLETED" || canCompleteBooking(b))
                           .filter((s, i, arr) => s && arr.indexOf(s) === i)
                           .map(s => {
                             const isCurrent = s === b.status;

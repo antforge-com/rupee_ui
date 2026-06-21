@@ -6,10 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useEffect, useState } from "react";
-import { API_BASE_URL } from "../config/api";
 import { getAllActiveQuestions, submitAnswers } from "../services/api";
-
-const BASE_URL = API_BASE_URL;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -112,7 +109,7 @@ const parseOptions = (raw: string | string[] | undefined): string[] => {
   return raw.split("|||").map(s => s.trim()).filter(Boolean);
 };
 
-const isValidMobile = (val: string) => /^[6-9]\d{9}$/.test(val.trim());
+const hasMobileAnswer = (val: string) => String(val ?? "").length > 0;
 
 // ─── SVG Icons ────────────────────────────────────────────────────────────────
 
@@ -223,7 +220,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
     if (isIntro) return true;
     if (!currentQ) return true;
     if (currentQ.type === "text") return true; // optional
-    if (currentQ.type === "mobile") return isValidMobile(answers[qKey(currentQ)] || "");
+    if (currentQ.type === "mobile") return true;
     return !!(answers[qKey(currentQ)]);
   };
 
@@ -256,11 +253,6 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
 
     // 1️⃣ Submit to backend
     let backendOk = false;
-    const token = localStorage.getItem("fin_token");
-    const authHeaders: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
     const flatAnswers = questions.map(q => ({
       questionId: q.id,
       text: answers[qKey(q)] || "",
@@ -269,28 +261,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
       try {
         await submitAnswers(flatAnswers, bookingId, consultantId, "NORMAL");
         backendOk = true;
-      } catch {
-        const attempts: Array<{ url: string; body: any }> = [
-          { url: `${BASE_URL}/booking-answers`, body: payload },
-          { url: `${BASE_URL}/answers`, body: { bookingId, bookingType: "NORMAL", consultantId, answers: flatAnswers } },
-        ];
-
-        for (const attempt of attempts) {
-          try {
-            const res = await fetch(attempt.url, {
-              method: "POST",
-              headers: authHeaders,
-              body: JSON.stringify(attempt.body),
-            });
-            if (res.ok) {
-              backendOk = true;
-              break;
-            }
-          } catch {
-            // try next endpoint variant
-          }
-        }
-      }
+      } catch { /* localStorage fallback below */ }
     } else {
       // ── Special booking: backend AnswerService.submitAnswers stores the
       // special booking ID as the bookingId field. The canonical endpoint is
@@ -298,30 +269,7 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
       try {
         await submitAnswers(flatAnswers, specialBookingId!, consultantId, "SPECIAL");
         backendOk = true;
-      } catch {
-        const attempts: Array<{ url: string; body: any }> = [
-          // Canonical: uses special booking ID as bookingId (matches AnswerService logic)
-          { url: `${BASE_URL}/answers`, body: { bookingId: specialBookingId, bookingType: "SPECIAL", consultantId, answers: flatAnswers } },
-          { url: `${BASE_URL}/special-bookings/${specialBookingId}/answers`, body: { specialBookingId, consultantId, answers: flatAnswers } },
-          { url: `${BASE_URL}/booking-answers`, body: { ...payload, specialBookingId } },
-        ];
-
-        for (const attempt of attempts) {
-          try {
-            const res = await fetch(attempt.url, {
-              method: "POST",
-              headers: authHeaders,
-              body: JSON.stringify(attempt.body),
-            });
-            if (res.ok) {
-              backendOk = true;
-              break;
-            }
-          } catch {
-            // try next endpoint variant
-          }
-        }
-      }
+      } catch { /* localStorage fallback below */ }
     }
 
     // 2️⃣ Always save to localStorage as cache / fallback
@@ -524,26 +472,21 @@ export const PostBookingQuestionnaire: React.FC<Props> = ({
               {currentQ.type === "mobile" && (
                 <div style={{ marginBottom: 24 }}>
                   <div style={{ position: "relative" }}>
-                    <div style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 13, fontWeight: 700, color: "#374151", pointerEvents: "none", userSelect: "none" }}>+91</div>
                     <input
-                      type="tel" inputMode="numeric" maxLength={10}
+                      type="tel"
                       value={answers[qKey(currentQ)] || ""}
-                      onChange={e => { const val = e.target.value.replace(/\D/g, "").slice(0, 10); handleAnswer(qKey(currentQ), val); }}
-                      placeholder={currentQ.placeholder || "9876543210"}
-                      style={{ width: "100%", padding: "12px 14px 12px 52px", border: `1.5px solid ${!answers[qKey(currentQ)] ? "#E2E8F0" : isValidMobile(answers[qKey(currentQ)]) ? "#16A34A" : "#EF4444"}`, borderRadius: 12, fontSize: 15, outline: "none", fontFamily: "monospace", letterSpacing: "0.08em", boxSizing: "border-box", background: "#FAFAFA", transition: "border-color 0.15s" }}
+                      onChange={e => handleAnswer(qKey(currentQ), e.target.value)}
+                      placeholder={currentQ.placeholder || "Phone / WhatsApp / alternate contact"}
+                      style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${!answers[qKey(currentQ)] ? "#E2E8F0" : hasMobileAnswer(answers[qKey(currentQ)]) ? "#16A34A" : "#E2E8F0"}`, borderRadius: 12, fontSize: 15, outline: "none", fontFamily: "inherit", boxSizing: "border-box", background: "#FAFAFA", transition: "border-color 0.15s" }}
                     />
                     {answers[qKey(currentQ)] && (
                       <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)" }}>
-                        {isValidMobile(answers[qKey(currentQ)])
-                          ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
-                          : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2.5" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="2.5" strokeLinecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
                       </div>
                     )}
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 12, color: answers[qKey(currentQ)] && !isValidMobile(answers[qKey(currentQ)]) ? "#EF4444" : "#94A3B8" }}>
-                    {answers[qKey(currentQ)] && !isValidMobile(answers[qKey(currentQ)])
-                      ? `Invalid - must be 10 digits starting with 6-9 (${answers[qKey(currentQ)].length}/10)`
-                      : "10-digit Indian mobile number starting with 6, 7, 8, or 9"}
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#94A3B8" }}>
+                    Spaces, numbers, and symbols are accepted.
                   </div>
                 </div>
               )}

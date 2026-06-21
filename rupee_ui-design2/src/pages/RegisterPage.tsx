@@ -17,7 +17,7 @@ import headerLogoImg from '../assests/MeetMastersHorizontalLogo.png';
 import logoImg from '../assests/MeetMastersMLogo.png';
 import { API_BASE_URL } from "../config/api";
 import { checkOtp as apiCheckOtp, sendRegistrationOtp } from "../services/api";
-import { openRazorpayOrder, verifyOnboardingPayment } from "../services/razorpay";
+import { openRazorpayOrder, RazorpayCheckoutResult } from "../services/razorpay";
 import { formatNameLikeInput, startsWithNumber } from "../utils/formUtils";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -42,6 +42,16 @@ const publicFetch = async (endpoint: string, options: RequestInit = {}) => {
   }
   return data;
 };
+
+const verifyRegistrationPayment = (userId: number, response: RazorpayCheckoutResult) =>
+  publicFetch(`/onboarding/${userId}/verify-payment`, {
+    method: "POST",
+    body: JSON.stringify({
+      razorpayPaymentId: response.razorpay_payment_id,
+      razorpayOrderId: response.razorpay_order_id,
+      razorpaySignature: response.razorpay_signature,
+    }),
+  });
 
 const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   const token = localStorage.getItem("fin_token");
@@ -369,7 +379,11 @@ export default function RegisterPage() {
           });
 
           try {
-            await verifyOnboardingPayment(userId, checkoutResult);
+            const verified = await verifyRegistrationPayment(userId, checkoutResult);
+            const status = String(verified?.paymentStatus || verified?.payment_status || "").toUpperCase();
+            if (status && status !== "SUCCESS") {
+              throw new Error(`Payment verification returned ${status}.`);
+            }
             setSuccessTitle("Subscribed!");
             setSuccessMessage("Payment verified. Login credentials sent to your email. Redirecting to login...");
           } catch {
@@ -560,6 +574,9 @@ export default function RegisterPage() {
                   <div style={{ color: 'var(--text-muted)', textTransform: 'none', lineHeight: 1.4 }}>
                     <span style={{ fontSize: '12px' }}>OTP sent to </span>
                     <span className="register-otp-email" style={{ fontSize: '11px', fontWeight: 700 }}>{otpSentToEmail}</span>
+                    <div style={{ fontSize: '11px', marginTop: 4, color: 'var(--text-light)' }}>
+                      If it is not in your inbox, check Spam or Junk.
+                    </div>
                   </div>
                 </div>
                 <button onClick={() => setOtpBoxVisible(false)} className="icon-button-circle" style={{ width: 28, height: 28 }}><X size={14} /></button>

@@ -316,13 +316,8 @@ const normaliseDurationMinutes = (value: any, fallback?: number): number | undef
   return Math.round(parsed);
 };
 
-const SPECIAL_DAYS_STORAGE_PREFIX = "fin_special_days_consultant_";
-
 const clampSpecialDayDurationHours = (value: any): number =>
   Math.max(1, Math.min(3, Number(value ?? 1) || 1));
-
-const specialDaysStorageKey = (consultantId: number) =>
-  `${SPECIAL_DAYS_STORAGE_PREFIX}${Number(consultantId || 0)}`;
 
 const createLocalSpecialDayId = () =>
   -Number(`${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`);
@@ -366,105 +361,6 @@ const normaliseSpecialDayRecord = (record: any, consultantId: number): any | nul
   };
 };
 
-const specialDayFingerprint = (record: any): string => {
-  const specialDate = String(record?.specialDate || "");
-  const durationHours = clampSpecialDayDurationHours(record?.durationHours ?? 1);
-  return `${specialDate}|${durationHours}`;
-};
-
-const writeStoredSpecialDaysByConsultant = (consultantId: number, records: any[]) => {
-  const resolvedConsultantId = Number(consultantId || 0);
-  if (!resolvedConsultantId) return;
-  try {
-    const normalised = records
-      .map((record) => normaliseSpecialDayRecord(record, resolvedConsultantId))
-      .filter((record): record is any => !!record)
-      .sort((a, b) => a.specialDate.localeCompare(b.specialDate) || a.durationHours - b.durationHours);
-    localStorage.setItem(specialDaysStorageKey(resolvedConsultantId), JSON.stringify(normalised));
-  } catch {
-    // Ignore storage errors and keep UI functional from API data only.
-  }
-};
-
-export const getStoredSpecialDaysByConsultant = (consultantId: number): any[] => {
-  const resolvedConsultantId = Number(consultantId || 0);
-  if (!resolvedConsultantId) return [];
-  try {
-    const raw = JSON.parse(localStorage.getItem(specialDaysStorageKey(resolvedConsultantId)) || "[]");
-    return (Array.isArray(raw) ? raw : [])
-      .map((record) => normaliseSpecialDayRecord(record, resolvedConsultantId))
-      .filter((record): record is any => !!record)
-      .sort((a, b) => a.specialDate.localeCompare(b.specialDate) || a.durationHours - b.durationHours);
-  } catch {
-    return [];
-  }
-};
-
-const mergeSpecialDayRecords = (consultantId: number, ...sources: any[][]): any[] => {
-  const normalisedRecords = sources.flat()
-    .map((record) => normaliseSpecialDayRecord(record, consultantId))
-    .filter((record): record is any => !!record);
-  const datesWithExplicitDurations = new Set(
-    normalisedRecords
-      .filter((record) => record.durationExplicit)
-      .map((record) => String(record.specialDate))
-  );
-  const merged = new Map<string, any>();
-  normalisedRecords.forEach((normalised) => {
-    if (!normalised.durationExplicit && datesWithExplicitDurations.has(String(normalised.specialDate))) {
-      return;
-    }
-    merged.set(specialDayFingerprint(normalised), normalised);
-  });
-  return Array.from(merged.values()).sort((a, b) =>
-    a.specialDate.localeCompare(b.specialDate) || a.durationHours - b.durationHours
-  );
-};
-
-export const saveStoredSpecialDay = (payload: {
-  id?: number;
-  consultantId: number;
-  specialDate: string;
-  durationHours: number;
-  status?: string;
-  note?: string;
-}): any | null => {
-  const resolvedConsultantId = Number(payload.consultantId || 0);
-  if (!resolvedConsultantId) return null;
-  const nextRecord = normaliseSpecialDayRecord(payload, resolvedConsultantId);
-  if (!nextRecord) return null;
-  const existing = getStoredSpecialDaysByConsultant(resolvedConsultantId).filter((record) => (
-    Number(record?.id || 0) !== Number(nextRecord.id || 0) &&
-    specialDayFingerprint(record) !== specialDayFingerprint(nextRecord)
-  ));
-  const next = [...existing, nextRecord].sort((a, b) =>
-    a.specialDate.localeCompare(b.specialDate) || a.durationHours - b.durationHours
-  );
-  writeStoredSpecialDaysByConsultant(resolvedConsultantId, next);
-  return nextRecord;
-};
-
-export const removeStoredSpecialDay = (
-  consultantId: number,
-  matcher: { id?: number | null; specialDate?: string; durationHours?: number | null }
-) => {
-  const resolvedConsultantId = Number(consultantId || 0);
-  if (!resolvedConsultantId) return;
-  const targetId = Number(matcher?.id || 0);
-  const targetDate = String(matcher?.specialDate || "").trim();
-  const hasDuration = matcher?.durationHours != null && !Number.isNaN(Number(matcher.durationHours));
-  const targetDuration = hasDuration ? clampSpecialDayDurationHours(matcher.durationHours) : null;
-  const next = getStoredSpecialDaysByConsultant(resolvedConsultantId).filter((record) => {
-    const sameId = targetId !== 0 && Number(record?.id || 0) === targetId;
-    const sameDateDuration = !!targetDate
-      && targetDuration !== null
-      && String(record?.specialDate || "") === targetDate
-      && clampSpecialDayDurationHours(record?.durationHours) === targetDuration;
-    return !(sameId || sameDateDuration);
-  });
-  writeStoredSpecialDaysByConsultant(resolvedConsultantId, next);
-};
-
 const tryApiVariants = async <T>(attempts: Array<() => Promise<T>>): Promise<T> => {
   let lastError: any = new Error("No API variants provided");
   for (const attempt of attempts) {
@@ -486,8 +382,8 @@ export const loginUser = async (identifier: string, password: string) => {
   const data = await publicFetch("/users/authenticate", {
     method: "POST",
     body: JSON.stringify({ identifier, password }),
-    timeoutMs: 10000,
-    timeoutMessage: "Login is taking too long. Please try again or use Forgot Password.",
+    timeoutMs: 45000,
+    timeoutMessage: "Login is taking too long. Please try again after a moment or use Forgot Password.",
   });
   if (data?.token) setToken(data.token);
   if (data?.role) setRole(data.role);   // setRole now strips ROLE_ prefix automatically
@@ -517,10 +413,29 @@ export const getCurrentUser = async () => apiFetch("/users/me");
 export const sendRegistrationOtp = async (email: string, phoneNumber?: string): Promise<void> => {
   // Backend AuthService.sendRegistrationOtp(email, phoneNumber) will also dispatch
   // an SMS OTP if SMS is enabled and a phone number is provided.
-  await publicFetch("/users/send-otp", {
-    method: "POST",
-    body: JSON.stringify({ email, phoneNumber: phoneNumber || undefined }),
-  });
+  const cleanPhone = String(phoneNumber || "").replace(/\D/g, "").slice(-10);
+  const attempts = [
+    { email, phoneNumber: cleanPhone || undefined },
+    { email, mobileNumber: cleanPhone || undefined },
+    { email },
+  ];
+
+  let lastError: any = null;
+  for (const body of attempts) {
+    try {
+      await publicFetch("/users/send-otp", {
+        method: "POST",
+        body: JSON.stringify(stripUndefinedFields(body)),
+      });
+      return;
+    } catch (err: any) {
+      lastError = err;
+      const message = String(err?.message || "").toLowerCase();
+      if (!message.includes("400") && !message.includes("bad request")) break;
+    }
+  }
+
+  throw lastError || new Error("Failed to send OTP. Please try again.");
 };
 
 // ── POST /api/users/check-otp  - NO AUTH ──────────────────────────────────────
@@ -673,17 +588,8 @@ export const getTimeslotsByConsultant = async (consultantId: number) => {
 export const getTimeslotsByAdvisor = getTimeslotsByConsultant;
 
 export const getAvailableTimeslotsByConsultant = async (consultantId: number) => {
-  try {
-    const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
-    return extractArray(data);
-  } catch {
-    // FIX: Filter fallback to AVAILABLE slots only - prevents showing already-booked slots
-    const all = await getTimeslotsByConsultant(consultantId);
-    const filtered = extractArray(all).filter(
-      (s: any) => (s.status || "").toUpperCase() === "AVAILABLE"
-    );
-    return filtered.length > 0 ? filtered : extractArray(all);
-  }
+  const data = await apiFetch(`/timeslots/consultant/${consultantId}/available`);
+  return extractArray(data);
 };
 export const getAvailableTimeslotsByAdvisor = getAvailableTimeslotsByConsultant;
 
@@ -707,6 +613,13 @@ export const deleteTimeslot = async (id: number) =>
 export const getConsultantMasterSlots = async (consultantId: number) =>
   extractArray(await apiFetch(`/consultants/${consultantId}/master-timeslots`));
 
+const DEFAULT_CLIENT_NOTES = "No client notes provided";
+
+const normaliseClientNotes = (value?: string): string => {
+  const notes = String(value || "").trim();
+  return notes || DEFAULT_CLIENT_NOTES;
+};
+
 // POST /api/bookings - BookingRequest DTO:
 // { consultantId, timeSlotId, baseAmount (required), offerId?, meetingMode, userNotes }
 // BookingService calculates: total = (baseAmount - discount) + platformFee automatically
@@ -728,7 +641,7 @@ export const createBooking = async (payload: {
     timeSlotId: payload.timeSlotId,
     baseAmount: payload.baseAmount,
     meetingMode: payload.meetingMode || "ONLINE",
-    userNotes: payload.userNotes || "Booked via app",
+    userNotes: normaliseClientNotes(payload.userNotes),
   };
   if (payload.offerId != null) body.offerId = payload.offerId;
   return apiFetch("/bookings", { method: "POST", body: JSON.stringify(body) });
@@ -750,7 +663,7 @@ export const createBulkBooking = async (payload: {
     timeSlotIds: payload.timeSlotIds,
     baseAmountPerSlot: payload.baseAmountPerSlot,
     meetingMode: payload.meetingMode || "ONLINE",
-    userNotes: payload.userNotes || "Booked via app",
+    userNotes: normaliseClientNotes(payload.userNotes),
   };
   if (payload.offerId != null) body.offerId = payload.offerId;
   return apiFetch("/bookings/bulk", { method: "POST", body: JSON.stringify(body) });
@@ -775,12 +688,36 @@ export interface SpecialBookingRequestPayload {
   preferredTimeRange?: string;
 }
 
+const SPECIAL_BOOKING_PREFIX = "[[SPECIAL_BOOKING_META]]";
+
+const cleanSpecialRequestNotes = (value?: string): string | undefined => {
+  const raw = String(value || "").trim();
+  if (!raw) return undefined;
+  if (!raw.startsWith(SPECIAL_BOOKING_PREFIX)) return raw;
+
+  const jsonText = raw.slice(SPECIAL_BOOKING_PREFIX.length).split("\n")[0]?.trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (parsed?.requestNotes) return String(parsed.requestNotes).trim();
+  } catch {
+    // Fall through to the readable summary below.
+  }
+
+  const summary = raw.split("\n").slice(1).join("\n").trim();
+  const notesMatch = summary.match(/(?:^|\|\s*)Notes:\s*([^|]+)/i);
+  return (notesMatch?.[1] || summary || "Special booking request").trim();
+};
+
 export const createSpecialBooking = async (
   payload: SpecialBookingRequestPayload
 ): Promise<any> => {
   if (payload.sessionAmount == null || Number.isNaN(Number(payload.sessionAmount))) {
     throw new Error("Session amount is required");
   }
+  const cleanedNotes =
+    cleanSpecialRequestNotes(payload.requestNotes) ||
+    cleanSpecialRequestNotes(payload.userNotes) ||
+    DEFAULT_CLIENT_NOTES;
 
   // Payload shape matches SpecialBookingRequest DTO exactly
   const body = stripUndefinedFields({
@@ -788,9 +725,9 @@ export const createSpecialBooking = async (
     durationInHours: Math.max(1, Number(payload.durationInHours || 1)),
     sessionAmount: Number(payload.sessionAmount),
     meetingMode: payload.meetingMode || "ONLINE",
-    userNotes: payload.userNotes || "Special booking request",
+    userNotes: cleanedNotes,
     offerId: payload.offerId ?? undefined,
-    requestNotes: payload.requestNotes || payload.userNotes,
+    requestNotes: cleanedNotes,
     preferredDate: payload.preferredDate,
     preferredTime: payload.preferredTime,
     preferredTimeRange: payload.preferredTimeRange,
@@ -800,83 +737,77 @@ export const createSpecialBooking = async (
 };
 
 export const getMySpecialBookings = async (): Promise<any[]> => {
-  const uid = Number(getUserId() || 0);
-  const attempts: Array<() => Promise<any>> = [
-    () => apiFetch("/special-bookings/me"),
-    () => apiFetch("/special-bookings/my"),
-  ];
-  if (uid > 0) {
-    attempts.push(
-      () => apiFetch(`/special-bookings/user/${uid}`),
-      () => apiFetch(`/special-bookings/users/${uid}`),
-      () => apiFetch(`/users/${uid}/special-bookings`)
-    );
-  }
-  attempts.push(() => apiFetch("/special-bookings"));
-
-  for (const attempt of attempts) {
-    try {
-      const data = await attempt();
-      const arr = extractArray(data);
-      if (Array.isArray(arr)) return arr;
-    } catch {
-      // try next endpoint variant
-    }
-  }
-  return [];
+  const data = await apiFetch("/special-bookings/me?page=0&size=500");
+  return extractArray(data);
 };
 
 export const getSpecialBookingsByConsultant = async (consultantId: number): Promise<any[]> => {
-  try {
-    const data = await apiFetch(`/special-bookings/consultant/${consultantId}`, { suppressErrorLog: true });
-    return extractArray(data);
-  } catch {
-    // Optional availability data; older backend builds may restrict this endpoint.
-  }
-  return [];
+  const data = await apiFetch(`/special-bookings/consultant/${consultantId}?page=0&size=500`);
+  return extractArray(data);
 };
 
 export const getSpecialDaysByConsultant = async (consultantId: number): Promise<any[]> => {
-  const fallbackRecords = getStoredSpecialDaysByConsultant(consultantId);
-  const attempts: Array<() => Promise<any>> = [
-    () => apiFetch(`/consultants/${consultantId}/special-days`),
-    () => apiFetch(`/special-days/consultant/${consultantId}`),
-    () => apiFetch(`/special-days?consultantId=${consultantId}`),
-    () => apiFetch(`/consultant-special-days?consultantId=${consultantId}`),
-  ];
+  const data = await apiFetch(`/consultants/${consultantId}/special-days`);
+  return extractArray(data)
+    .map((record) => normaliseSpecialDayRecord(record, consultantId))
+    .filter((record): record is any => !!record);
+};
 
-  for (const attempt of attempts) {
-    try {
-      const data = await attempt();
-      const arr = extractArray(data);
-      if (Array.isArray(arr)) {
-        const apiDates = new Set(
-          arr
-            .map((record: any) => {
-              if (typeof record === "string") return record.trim();
-              return String(record?.specialDate || record?.special_date || record?.date || record?.slotDate || "").trim();
-            })
-            .filter(Boolean)
-        );
-        const matchingFallbackRecords = fallbackRecords.filter((record) =>
-          apiDates.has(String(record?.specialDate || "").trim())
-        );
-        const merged = mergeSpecialDayRecords(consultantId, arr, matchingFallbackRecords);
-        writeStoredSpecialDaysByConsultant(consultantId, merged);
-        return merged;
-      }
-    } catch {
-      // try next endpoint variant
-    }
+const STORED_SPECIAL_DAYS_KEY = "rupee_consultant_special_days";
+
+const readStoredSpecialDays = (): any[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORED_SPECIAL_DAYS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-  return fallbackRecords;
+};
+
+export const saveStoredSpecialDay = (record: {
+  consultantId: number;
+  specialDate: string;
+  durationHours?: number;
+  status?: string;
+  id?: number;
+}) => {
+  if (!record?.consultantId || !record?.specialDate) return;
+  const normalized = normaliseSpecialDayRecord(record, record.consultantId);
+  if (!normalized) return;
+
+  const next = readStoredSpecialDays().filter((item) =>
+    !(Number(item?.consultantId) === Number(record.consultantId) && String(item?.specialDate) === String(record.specialDate))
+  );
+  next.push(normalized);
+  localStorage.setItem(STORED_SPECIAL_DAYS_KEY, JSON.stringify(next));
+};
+
+export const removeStoredSpecialDay = (
+  consultantId: number,
+  record: { id?: number; specialDate?: string; durationHours?: number }
+) => {
+  if (!consultantId || (!record?.id && !record?.specialDate)) return;
+  const next = readStoredSpecialDays().filter((item) => {
+    if (Number(item?.consultantId) !== Number(consultantId)) return true;
+    if (record.id != null && Number(item?.id) === Number(record.id)) return false;
+    return String(item?.specialDate || "") !== String(record.specialDate || "");
+  });
+  localStorage.setItem(STORED_SPECIAL_DAYS_KEY, JSON.stringify(next));
 };
 
 export const updateSpecialBooking = async (
   id: number,
   payload: Record<string, any>
 ): Promise<any> => {
-  const body = stripUndefinedFields(payload || {});
+  const body = stripUndefinedFields({
+    status: payload?.status ?? payload?.specialBookingStatus,
+    paymentStatus: payload?.paymentStatus,
+    consultantId: payload?.consultantId,
+    meetingMode: payload?.meetingMode,
+    meetingLink: payload?.meetingLink,
+    meetingId: payload?.meetingId,
+    userNotes: payload?.userNotes,
+  });
   return tryApiVariants<any>([
     () => apiFetch(`/special-bookings/${id}`, { method: "PUT", body: JSON.stringify(body) }),
     () => apiFetch(`/special-bookings/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
@@ -937,18 +868,20 @@ export const getSpecialBookingById = async (id: number) =>
 export const verifyNormalBookingPayment = async (
   bookingId: number,
   payload: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string }
-) => {
-  const params = new URLSearchParams(payload);
-  return apiFetch(`/bookings/${bookingId}/verify-payment?${params.toString()}`, { method: "POST" });
-};
+) =>
+  apiFetch(`/bookings/${bookingId}/verify-payment`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export const verifySpecialBookingPayment = async (
   specialBookingId: number,
   payload: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string }
-) => {
-  const params = new URLSearchParams(payload);
-  return apiFetch(`/special-bookings/${specialBookingId}/verify-payment?${params.toString()}`, { method: "POST" });
-};
+) =>
+  apiFetch(`/special-bookings/${specialBookingId}/verify-payment`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 // Swagger: GET /api/onboarding/{id} - returns full profile (name, email, phone, etc.)
 export const getUserProfile = async (userId: number): Promise<any> => {
@@ -1072,7 +1005,7 @@ export const getMyBookings = async (): Promise<any[]> => {
 };
 
 export const getBookingsByConsultant = async (consultantId: number) =>
-  apiFetch(`/bookings/consultant/${consultantId}`);
+  apiFetch(`/bookings/consultant/${consultantId}?page=0&size=500`);
 export const getBookingsByAdvisor = getBookingsByConsultant;
 
 // ── Server-side paginated bookings (page is 0-based for Spring) ───────────────
@@ -2326,7 +2259,13 @@ export const emailOnSpecialBookingRequestConsultant = async (payload: {
   userNotes?: string;
 }): Promise<void> => {
   try {
-    await apiFetch("/notifications/email/special-booking-request-consultant", { method: "POST", body: JSON.stringify(payload) });
+    await apiFetch("/notifications/email/special-booking-request-consultant", {
+      method: "POST",
+      body: JSON.stringify({
+        ...payload,
+        userNotes: cleanSpecialRequestNotes(payload.userNotes) || payload.userNotes,
+      }),
+    });
   } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRequestConsultant (non-fatal):", err?.message); }
 };
 
@@ -2388,6 +2327,30 @@ export const emailOnSpecialBookingRescheduledConsultant = async (payload: {
   try {
     await apiFetch("/notifications/email/special-booking-rescheduled-consultant", { method: "POST", body: JSON.stringify(payload) });
   } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingRescheduledConsultant (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingCancelledUser = async (payload: {
+  to: string;
+  bookingId: number;
+  hours?: number;
+  consultantEmail?: string;
+  meetingMode?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-cancelled-user", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingCancelledUser (non-fatal):", err?.message); }
+};
+
+export const emailOnSpecialBookingCancelledConsultant = async (payload: {
+  to: string;
+  bookingId: number;
+  hours?: number;
+  clientEmail?: string;
+  meetingMode?: string;
+}): Promise<void> => {
+  try {
+    await apiFetch("/notifications/email/special-booking-cancelled-consultant", { method: "POST", body: JSON.stringify(payload) });
+  } catch (err: any) { console.warn("⚠️  emailOnSpecialBookingCancelledConsultant (non-fatal):", err?.message); }
 };
 
 export const SLA_HOURS: Record<string, number> = {
@@ -3862,17 +3825,9 @@ export const getRevenueAnalytics = async (days = 30): Promise<{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * GET /special-bookings/admin/all?page=&size=
+ * GET /special-bookings?page=&size=
  * Admin: get all special bookings with pagination.
  */
 export const getAllSpecialBookings = async (page = 0, size = 10): Promise<any> => {
-  const attempts = [
-    () => apiFetch(`/special-bookings/admin/all?page=${page}&size=${size}`),
-    () => apiFetch(`/special-bookings/all?page=${page}&size=${size}`),
-    () => apiFetch(`/special-bookings?page=${page}&size=${size}`),
-  ];
-  for (const attempt of attempts) {
-    try { return await attempt(); } catch { /* try next */ }
-  }
-  return { content: [], totalElements: 0 };
+  return apiFetch(`/special-bookings?page=${page}&size=${size}`);
 };

@@ -11,10 +11,15 @@ import { HourRangeClockPicker as _HourRangeClock, SimpleHourPicker } from "../pa
 import {
   cancelBooking,
   cancelSpecialBooking,
+  emailOnBookingCancelledConsultant,
+  emailOnBookingCancelledUser,
+  emailOnSpecialBookingCancelledConsultant,
+  emailOnSpecialBookingCancelledUser,
   emailOnTicketUpdated,
   extractArray,
   getAdvisorById,
   getAllSkills,
+  getAvailableTimeslotsByConsultant,
   getBookingsByConsultant,
   getConsultantMasterSlots,
   getCurrentUser,
@@ -26,6 +31,7 @@ import {
   getStatusStyle,
   getTicketComments,
   getTicketsByConsultant,
+  getTimeslotById,
   getUserDisplayName,
   giveSlotSpecialBooking,
   logoutUser,
@@ -34,6 +40,9 @@ import {
   postTicketComment,
   recordEscalationBlock,
   removeStoredSpecialDay,
+  rescheduleBooking,
+  rescheduleBulkBooking,
+  rescheduleSpecialBooking,
   saveStoredSpecialDay,
   sendTicketEscalatedEmail,
   SLA_HOURS,
@@ -584,6 +593,20 @@ const toPositiveNumber = (value: any): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const getBookingTimeSlotIds = (booking: any): string[] => {
+  const raw = booking?.timeSlotIds ?? booking?.timeSlotId ?? booking?.timeslotId ?? booking?.slotId ?? booking?.timeSlot?.id ?? booking?.slot?.id;
+  if (Array.isArray(raw)) {
+    return raw.map((id) => String(id).trim()).filter(Boolean);
+  }
+  return String(raw || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+};
+
+const isBulkNormalBooking = (booking: any): boolean =>
+  !resolveSpecialBookingMeta(booking) && getBookingTimeSlotIds(booking).length > 1;
+
 const formatDurationLabel = (hours: number): string => {
   const safeHours = Math.max(1, Number(hours || 1));
   return `${safeHours} hr${safeHours !== 1 ? 's' : ''}`;
@@ -616,7 +639,7 @@ const getDedicatedSpecialBookingId = (booking: any): number | null => {
     booking?.preferredTime != null ||
     booking?.preferredTimeRange != null ||
     booking?.paymentStatus != null;
-  const hasDedicatedStatus = ['REQUESTED', 'SCHEDULED', 'CONFIRMED', 'CANCELLED'].includes(rawStatus);
+  const hasDedicatedStatus = ['REQUESTED', 'SCHEDULED', 'CONFIRMED', 'COMPLETED', 'CANCELLED'].includes(rawStatus);
 
   const rawId = toPositiveNumber(booking?.id);
   if (rawId && hasDedicatedShape && hasDedicatedStatus) return rawId;
@@ -808,6 +831,31 @@ const deepFindClientName = (b: any): string => {
   }
 
   return "Client";
+};
+
+const deepFindClientEmail = (b: any): string => {
+  const candidates = [
+    b?.userEmail,
+    b?.clientEmail,
+    b?.email,
+    b?.user?.email,
+    b?.client?.email,
+    b?.customerEmail,
+    b?.user?.identifier,
+    b?.client?.identifier,
+  ];
+  return candidates.map(v => String(v || "").trim()).find(v => /\S+@\S+\.\S+/.test(v)) || "";
+};
+
+const deepFindConsultantEmail = (b: any): string => {
+  const candidates = [
+    b?.consultantEmail,
+    b?.advisorEmail,
+    b?.consultant?.email,
+    b?.advisor?.email,
+    b?.assignedToEmail,
+  ];
+  return candidates.map(v => String(v || "").trim()).find(v => /\S+@\S+\.\S+/.test(v)) || "";
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1214,7 +1262,7 @@ const AdvisorTicketsView: React.FC<{ consultantId: number }> = ({ consultantId }
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
               { v: filterStatus, s: setFilterStatus, opts: ['ALL', 'NEW', 'OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'ESCALATED'] },
-              { v: filterPriority, s: setFilterPriority, opts: ['ALL', 'LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
+              { v: filterPriority, s: setFilterPriority, opts: ['ALL', 'LOW', 'MEDIUM', 'HIGH', 'URGENT', 'CRITICAL'] },
               { v: filterCategory, s: setFilterCategory, opts: ['ALL', ...categories] },
             ].map((f, i) => (
               <select key={i} value={f.v} onChange={e => f.s(e.target.value)}
@@ -2114,6 +2162,191 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
     return () => window.clearInterval(timer);
   }, []);
 
+  // Rescheduling states
+  const [reschedulingBooking, setReschedulingBooking] = useState<any | null>(null);
+  const [availableSlots, setAvailableSlots] = useState<any[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [selectedSlotId, setSelectedSlotId] = useState<string>('');
+  
+  // Bulk booking specific: which slot to replace?
+  const [selectedOldSlotId, setSelectedOldSlotId] = useState<string>('');
+  const [bulkSlotsInfo, setBulkSlotsInfo] = useState<any[]>([]);
+  const [loadingBulkSlotsInfo, setLoadingBulkSlotsInfo] = useState(false);
+
+  // Special booking specific: Date and Time values
+  const [specialDate, setSpecialDate] = useState('');
+  const [specialTime, setSpecialTime] = useState('');
+
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+  const [reschedulingInProgress, setReschedulingInProgress] = useState(false);
+
+  const initiateReschedule = async (booking: any) => {
+    setReschedulingBooking(booking);
+    setRescheduleError(null);
+    setSelectedSlotId('');
+    setSelectedOldSlotId('');
+    setBulkSlotsInfo([]);
+    setSpecialDate('');
+    setSpecialTime('');
+
+    const isSpecial = !!resolveSpecialBookingMeta(booking);
+    
+    if (isSpecial) {
+      const meta = resolveSpecialBookingMeta(booking);
+      setSpecialDate(meta?.scheduledDate || meta?.preferredDate || '');
+      setSpecialTime(meta?.scheduledTime || meta?.preferredTime || '');
+      return;
+    }
+
+    const isBulk = isBulkNormalBooking(booking);
+    if (isBulk) {
+      setLoadingBulkSlotsInfo(true);
+      const slotIds = getBookingTimeSlotIds(booking);
+      try {
+        const slotsDetails = await Promise.all(
+          slotIds.map(async (id) => {
+            try {
+              const ts = await getTimeslotById(Number(id));
+              return ts;
+            } catch {
+              return { id: Number(id), slotDate: '', slotTime: '', timeRange: `Slot #${id}` };
+            }
+          })
+        );
+        setBulkSlotsInfo(slotsDetails);
+        if (slotsDetails.length > 0) {
+          setSelectedOldSlotId(String(slotsDetails[0].id));
+        }
+      } catch (err: any) {
+        setRescheduleError('Failed to fetch details for current slots.');
+      } finally {
+        setLoadingBulkSlotsInfo(false);
+      }
+    }
+
+    setLoadingSlots(true);
+    try {
+      const slots = await getAvailableTimeslotsByConsultant(consultantId);
+      setAvailableSlots(slots);
+    } catch (err: any) {
+      setRescheduleError(err?.message || 'Failed to fetch available slots.');
+    } finally {
+      setLoadingSlots(false);
+    }
+  };
+
+  const updateSpecialBookingMetaInNotes = (rawNotes: string, newDate: string, newTime: string): string => {
+    if (typeof rawNotes !== 'string' || !rawNotes.startsWith('[[SPECIAL_BOOKING_META]]')) {
+      return rawNotes;
+    }
+    const parts = rawNotes.split('\n');
+    const jsonText = parts[0].slice('[[SPECIAL_BOOKING_META]]'.length).trim();
+    try {
+      const meta = JSON.parse(jsonText);
+      meta.scheduledDate = newDate;
+      meta.scheduledTime = newTime;
+      meta.scheduledTimeRange = newTime;
+      parts[0] = `[[SPECIAL_BOOKING_META]]${JSON.stringify(meta)}`;
+      return parts.join('\n');
+    } catch {
+      return rawNotes;
+    }
+  };
+
+  const handleConfirmReschedule = async () => {
+    if (!reschedulingBooking) return;
+    setReschedulingInProgress(true);
+    setRescheduleError(null);
+
+    const isSpecial = !!resolveSpecialBookingMeta(reschedulingBooking);
+    const id = reschedulingBooking.id;
+
+    try {
+      if (isSpecial) {
+        if (!specialDate || !specialTime) {
+          throw new Error('Please select both a date and a time.');
+        }
+        await rescheduleSpecialBooking(id, { newDate: specialDate, newTime: specialTime });
+        
+        setBookings(prev => prev.map(item => {
+          if (item.id === id && !!resolveSpecialBookingMeta(item)) {
+            const updatedNotes = updateSpecialBookingMetaInNotes(item.userNotes || '', specialDate, specialTime);
+            return {
+              ...item,
+              userNotes: updatedNotes,
+              slotDate: specialDate,
+              bookingDate: specialDate,
+              slotTime: specialTime,
+              timeRange: specialTime,
+            };
+          }
+          return item;
+        }));
+      } else {
+        const isBulk = isBulkNormalBooking(reschedulingBooking);
+        
+        if (isBulk) {
+          if (!selectedOldSlotId || !selectedSlotId) {
+            throw new Error('Please select the slot to replace and the new slot.');
+          }
+          const oldId = Number(selectedOldSlotId);
+          const newId = Number(selectedSlotId);
+          
+          await rescheduleBulkBooking(id, oldId, newId);
+
+          const newSlotDetails = availableSlots.find(s => s.id === newId);
+          setBookings(prev => prev.map(item => {
+            if (item.id === id && !resolveSpecialBookingMeta(item)) {
+              const currentSlotIds = getBookingTimeSlotIds(item);
+              const updatedSlotIds = currentSlotIds.map(s => s === String(oldId) ? String(newId) : s);
+              
+              return {
+                ...item,
+                timeSlotIds: updatedSlotIds,
+                ...(currentSlotIds[0] === String(oldId) && newSlotDetails ? {
+                  slotDate: newSlotDetails.slotDate || newSlotDetails.date || item.slotDate,
+                  bookingDate: newSlotDetails.slotDate || newSlotDetails.date || item.bookingDate,
+                  slotTime: newSlotDetails.timeRange || newSlotDetails.slotTime || item.slotTime,
+                  timeRange: newSlotDetails.timeRange || newSlotDetails.slotTime || item.timeRange,
+                } : {}),
+              };
+            }
+            return item;
+          }));
+        } else {
+          if (!selectedSlotId) {
+            throw new Error('Please select a new time slot.');
+          }
+          const newId = Number(selectedSlotId);
+          await rescheduleBooking(id, newId);
+
+          const newSlotDetails = availableSlots.find(s => s.id === newId);
+          setBookings(prev => prev.map(item => {
+            if (item.id === id && !resolveSpecialBookingMeta(item)) {
+              return {
+                ...item,
+                timeSlotIds: [newId],
+                ...(newSlotDetails ? {
+                  slotDate: newSlotDetails.slotDate || newSlotDetails.date || item.slotDate,
+                  bookingDate: newSlotDetails.slotDate || newSlotDetails.date || item.bookingDate,
+                  slotTime: newSlotDetails.timeRange || newSlotDetails.slotTime || item.slotTime,
+                  timeRange: newSlotDetails.timeRange || newSlotDetails.slotTime || item.timeRange,
+                } : {}),
+              };
+            }
+            return item;
+          }));
+        }
+      }
+
+      setReschedulingBooking(null);
+    } catch (err: any) {
+      setRescheduleError(err?.message || 'Rescheduling failed.');
+    } finally {
+      setReschedulingInProgress(false);
+    }
+  };
+
   // AFTER - fetches both regular AND dedicated special bookings in parallel
   useEffect(() => {
     (async () => {
@@ -2239,10 +2472,16 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
     const isSpecial = !!resolveSpecialBookingMeta(booking);
     const specialScheduled = isScheduledSpecialStatus(resolveSpecialBookingMeta(booking)?.status);
     if (status === 'COMPLETED' || status === 'CANCELLED') return [];
-    const actions = isSpecial && !specialScheduled
-      ? [{ status: 'CANCELLED', label: 'Cancel' }]
-      : [
-        { status: 'PENDING', label: 'Mark Pending' },
+    if (isSpecial) {
+      const actions = specialScheduled
+        ? [
+          { status: 'COMPLETED', label: 'Complete' },
+          { status: 'CANCELLED', label: 'Cancel' },
+        ]
+        : [{ status: 'CANCELLED', label: 'Cancel' }];
+      return actions.filter(action => action.status !== status);
+    }
+    const actions = [
         { status: 'CONFIRMED', label: 'Confirm' },
         { status: 'COMPLETED', label: 'Complete' },
         { status: 'CANCELLED', label: 'Cancel' },
@@ -2270,10 +2509,41 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
     setError(null);
     try {
       if (nextStatus === 'CANCELLED') {
-        if (isSpecial) await cancelSpecialBooking(id);
-        else await cancelBooking(id);
+        if (isSpecial) {
+          await cancelSpecialBooking(id);
+          const meta = resolveSpecialBookingMeta(booking);
+          const clientEmail = deepFindClientEmail(booking);
+          const consultantEmail = deepFindConsultantEmail(booking) || localStorage.getItem('fin_user_email') || '';
+          if (clientEmail) {
+            emailOnSpecialBookingCancelledUser({
+              to: clientEmail,
+              bookingId: id,
+              hours: meta?.hours,
+              consultantEmail,
+              meetingMode: meta?.requestedMeetingMode || '',
+            }).catch(() => null);
+          }
+          if (consultantEmail) {
+            emailOnSpecialBookingCancelledConsultant({
+              to: consultantEmail,
+              bookingId: id,
+              hours: meta?.hours,
+              clientEmail,
+              meetingMode: meta?.requestedMeetingMode || '',
+            }).catch(() => null);
+          }
+        } else {
+          await cancelBooking(id);
+          const clientEmail = deepFindClientEmail(booking);
+          const consultantEmail = deepFindConsultantEmail(booking) || localStorage.getItem('fin_user_email') || '';
+          if (clientEmail) emailOnBookingCancelledUser({ to: clientEmail, bookingId: id }).catch(() => null);
+          if (consultantEmail) emailOnBookingCancelledConsultant({ to: consultantEmail, bookingId: id }).catch(() => null);
+        }
       } else if (isSpecial) {
-        await updateSpecialBooking(id, { status: nextStatus, specialBookingStatus: nextStatus });
+        if (nextStatus !== 'COMPLETED') {
+          throw new Error('Special bookings can only be completed or cancelled here.');
+        }
+        await updateSpecialBooking(id, { status: nextStatus });
       } else {
         await updateBooking(id, { bookingStatus: nextStatus, status: nextStatus });
       }
@@ -2508,11 +2778,11 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
                       </div>
                     );
                   })()}
-                  {/* Reschedule button for confirmed/booked bookings */}
-                  {(status === 'CONFIRMED' || status === 'BOOKED' || specialScheduled) && (
+                  {/* Reschedule button for bookings accepted by the backend reschedule endpoints */}
+                  {((!isSpecial && status === 'CONFIRMED') || (isSpecial && specialScheduled)) && (
                     <button
                       onClick={() => {
-                        if (onNavigateToSchedule) onNavigateToSchedule();
+                        initiateReschedule(booking);
                       }}
                       title="Request a different time slot for this session"
                       style={{
@@ -2536,6 +2806,283 @@ const BookingsView: React.FC<{ consultantId: number; onNavigateToSchedule?: () =
               </div>
             );
           })}
+        </div>
+      )}
+
+      {reschedulingBooking && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.3)',
+          backdropFilter: 'blur(12px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+        }}>
+          <div style={{
+            background: 'rgba(255, 255, 255, 0.85)',
+            backdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.5)',
+            boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+            borderRadius: '28px',
+            width: '90%',
+            maxWidth: '500px',
+            padding: '32px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '24px',
+            position: 'relative',
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: '-10%',
+              left: '-10%',
+              width: '120%',
+              height: '120%',
+              background: 'radial-gradient(circle at 10% 10%, rgba(13, 148, 136, 0.05), transparent 40%), radial-gradient(circle at 90% 90%, rgba(59, 130, 246, 0.05), transparent 40%)',
+              pointerEvents: 'none',
+              borderRadius: '28px',
+            }} />
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 12, background: 'var(--color-primary-gradient, linear-gradient(135deg, #0d9488, #0f766e))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 8px 16px rgba(13, 148, 136, 0.25)' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ margin: 'auto' }}><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                </div>
+                <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.02em' }}>Reschedule Session</h3>
+              </div>
+              <button
+                onClick={() => setReschedulingBooking(null)}
+                style={{
+                  background: '#F1F5F9',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 8,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <X size={16} color="#475569" />
+              </button>
+            </div>
+
+            <div style={{ fontSize: '14px', color: '#475569', lineHeight: 1.5, position: 'relative', zIndex: 1 }}>
+              You are updating the schedule for the session with <span style={{ fontWeight: 700, color: '#0F172A' }}>{deepFindClientName(reschedulingBooking)}</span>.
+            </div>
+
+            {rescheduleError && (
+              <div style={{
+                background: '#FEF2F2',
+                border: '1px solid #FCA5A5',
+                borderRadius: '16px',
+                padding: '12px 16px',
+                color: '#991B1B',
+                fontSize: '13px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                position: 'relative',
+                zIndex: 1,
+              }}>
+                <AlertTriangle size={16} color="#EF4444" />
+                <span>{rescheduleError}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'relative', zIndex: 1 }}>
+              {(() => {
+                const isSpecial = !!resolveSpecialBookingMeta(reschedulingBooking);
+                if (isSpecial) {
+                  return (
+                    <>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>New Date</label>
+                        <input
+                          type="date"
+                          value={specialDate}
+                          onChange={e => setSpecialDate(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '12px 16px',
+                            borderRadius: '14px',
+                            border: '1.5px solid #CBD5E1',
+                            fontSize: '14px',
+                            fontWeight: 500,
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>New Time</label>
+                        <input
+                          type="time"
+                          value={specialTime}
+                          onChange={e => setSpecialTime(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '12px 16px',
+                            borderRadius: '14px',
+                            border: '1.5px solid #CBD5E1',
+                            fontSize: '14px',
+                            fontWeight: 500,
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                    </>
+                  );
+                }
+
+                const isBulk = isBulkNormalBooking(reschedulingBooking);
+                return (
+                  <>
+                    {isBulk && (
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Select slot to replace</label>
+                        {loadingBulkSlotsInfo ? (
+                          <div style={{ fontSize: '13px', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            Loading slot details...
+                          </div>
+                        ) : (
+                          <select
+                            value={selectedOldSlotId}
+                            onChange={e => setSelectedOldSlotId(e.target.value)}
+                            style={{
+                              width: '100%',
+                              padding: '12px 16px',
+                              borderRadius: '14px',
+                              border: '1.5px solid #CBD5E1',
+                              fontSize: '14px',
+                              fontWeight: 500,
+                              outline: 'none',
+                              background: '#fff',
+                            }}
+                          >
+                            {bulkSlotsInfo.map(slot => (
+                              <option key={slot.id} value={slot.id}>
+                                {slot.slotDate || slot.date || `Slot #${slot.id}`} @ {slot.timeRange || slot.slotTime || slot.time || 'N/A'}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    )}
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Select New Time Slot</label>
+                      {loadingSlots ? (
+                        <div style={{ fontSize: '13px', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          Loading available slots...
+                        </div>
+                      ) : availableSlots.length === 0 ? (
+                        <div style={{
+                          padding: '16px',
+                          background: '#ECFEFF',
+                          border: '1px solid #A5F3FC',
+                          borderRadius: '16px',
+                          fontSize: '13px',
+                          color: '#0F766E',
+                          lineHeight: 1.6,
+                        }}>
+                          No available time slots found for rescheduling.
+                          <button
+                            onClick={() => {
+                              setReschedulingBooking(null);
+                              if (onNavigateToSchedule) onNavigateToSchedule();
+                            }}
+                            style={{
+                              display: 'block',
+                              marginTop: 10,
+                              padding: '8px 16px',
+                              background: 'linear-gradient(135deg, #0d9488, #0f766e)',
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '10px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              boxShadow: '0 4px 10px rgba(13, 148, 136, 0.2)',
+                            }}
+                          >
+                            Go to Calendar to Create Slots
+                          </button>
+                        </div>
+                      ) : (
+                        <select
+                          value={selectedSlotId}
+                          onChange={e => setSelectedSlotId(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '12px 16px',
+                            borderRadius: '14px',
+                            border: '1.5px solid #CBD5E1',
+                            fontSize: '14px',
+                            fontWeight: 500,
+                            outline: 'none',
+                            background: '#fff',
+                          }}
+                        >
+                          <option value="" disabled>-- Choose a slot --</option>
+                          {availableSlots.map(slot => (
+                            <option key={slot.id} value={slot.id}>
+                              {slot.slotDate || slot.date} @ {slot.timeRange || slot.slotTime || slot.time}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 8, position: 'relative', zIndex: 1 }}>
+              <button
+                disabled={reschedulingInProgress}
+                onClick={() => setReschedulingBooking(null)}
+                style={{
+                  padding: '12px 20px',
+                  border: '1px solid #CBD5E1',
+                  borderRadius: '14px',
+                  background: '#fff',
+                  color: '#475569',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={reschedulingInProgress || (
+                  !!resolveSpecialBookingMeta(reschedulingBooking)
+                    ? (!specialDate || !specialTime)
+                    : (isBulkNormalBooking(reschedulingBooking) ? (!selectedOldSlotId || !selectedSlotId) : !selectedSlotId)
+                )}
+                onClick={handleConfirmReschedule}
+                style={{
+                  padding: '12px 24px',
+                  background: 'linear-gradient(135deg, #0d9488, #0f766e)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '14px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  boxShadow: '0 8px 16px rgba(13, 148, 136, 0.2)',
+                }}
+              >
+                {reschedulingInProgress ? 'Rescheduling...' : 'Confirm Reschedule'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -2777,6 +3324,27 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
         // Fallback: update status via updateSpecialBooking
         await updateSpecialBooking(idToCancel, { status: 'CANCELLED' });
       }
+      const meta = resolveSpecialBookingMeta(booking);
+      const clientEmail = deepFindClientEmail(booking);
+      const consultantEmail = deepFindConsultantEmail(booking) || localStorage.getItem('fin_user_email') || '';
+      if (clientEmail) {
+        emailOnSpecialBookingCancelledUser({
+          to: clientEmail,
+          bookingId: idToCancel,
+          hours: meta?.hours,
+          consultantEmail,
+          meetingMode: meta?.requestedMeetingMode || '',
+        }).catch(() => null);
+      }
+      if (consultantEmail) {
+        emailOnSpecialBookingCancelledConsultant({
+          to: consultantEmail,
+          bookingId: idToCancel,
+          hours: meta?.hours,
+          clientEmail,
+          meetingMode: meta?.requestedMeetingMode || '',
+        }).catch(() => null);
+      }
       // Notify the user
       const userId = booking.userId || booking.user?.id || booking.clientId;
       if (userId) {
@@ -2792,7 +3360,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
             type: 'error',
             title: 'Special Booking Cancelled',
             message:
-              'Your special booking request has been cancelled by the consultant.',
+              'Your special booking request has been cancelled by the consultant. If you have already paid, your refund will be processed to the original payment method and you will receive an SMS once it is credited.',
             // Store the booking that was cancelled – useful for later look‑ups
             bookingId: idToCancel,
             timestamp: new Date().toISOString(),
@@ -2852,19 +3420,7 @@ const SpecialBookingsView: React.FC<{ consultantId: number; consultantName?: str
             giveSlotErr.message.toLowerCase().includes('already given') ||
             giveSlotErr.message.toLowerCase().includes('already scheduled'));
         if (!alreadyGiven) {
-          try {
-            await updateSpecialBooking(dedicatedSpecialId, {
-              scheduledDate: requestedDate,
-              scheduledTime: startTimeWithSeconds,
-              scheduledTimeRange,
-              numberOfSlots: computedHours,
-              meetingLink,
-              meetingId,
-              status: 'SCHEDULED',
-            });
-          } catch {
-            throw new Error('Could not confirm the booking with the server. Please try again or contact support.');
-          }
+          throw new Error('Could not confirm the booking with the server. Please try again or contact support.');
         }
         // If already given - slot is confirmed, continue to send notification
       }
@@ -4671,7 +5227,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
         localStorage.setItem(durationLockKey, lockUntil.toISOString());
       }
       setIsEditing(false); setPhotoFile(null);
-      showSaveToast('Profile saved!');
+      showSaveToast('Profile saved. Updated availability applies to new bookings only.');
     } catch (e: any) { setFormError(e?.message || 'Failed to save.'); }
     finally { setSaving(false); }
   };
@@ -4846,6 +5402,9 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
               </div>
             </div>
           </div>
+          <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.45, marginTop: -6 }}>
+            Availability changes are used for new bookings only. Existing bookings keep their confirmed date and time.
+          </div>
           <div>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
               Session Duration *
@@ -4857,7 +5416,7 @@ const ProfileView: React.FC<{ profile: Consultant | null; onUpdate: () => void }
             </label>
             {isSessionDurationLocked ? (
               <div style={{ padding: '10px 14px', borderRadius: 8, background: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 13, color: '#92400E', fontWeight: 700 }}>
-                {formData.durationHours} hr - Session duration is locked for 1 month after each change to ensure booking consistency.
+                {formData.durationHours} hr - Session duration is locked for 1 month after each change to keep existing and new booking schedules consistent.
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>

@@ -291,41 +291,6 @@ const fetchAnswersFromBackend = async (
     }
   }
 
-  // ── Priority 2: Fallback URL variants ──────────────────────────────────────
-  const urls: string[] = [];
-  if (specialBookingId) {
-    urls.push(
-      `${BASE_URL}/booking-answers/special-booking/${specialBookingId}`,
-      `${BASE_URL}/booking-answers?specialBookingId=${specialBookingId}`,
-      `${BASE_URL}/special-bookings/${specialBookingId}/answers`
-    );
-    if (userId) {
-      urls.push(`${BASE_URL}/users/${userId}/special-bookings/${specialBookingId}/answers`);
-    }
-  }
-  if (bookingId) {
-    urls.push(
-      `${BASE_URL}/booking-answers/booking/${bookingId}`,
-      `${BASE_URL}/booking-answers?bookingId=${bookingId}`
-    );
-  }
-  if (!bookingId && !specialBookingId) return null;
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { headers: getAuthHeaders() });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const norm = normaliseAnswers(Array.isArray(data) ? data : data?.content ?? data, {
-        bookingId,
-        specialBookingId,
-        questionTextMap,
-      });
-      if (norm) return norm;
-    } catch {
-      // try next endpoint variant
-    }
-  }
   return null;
 };
 
@@ -351,24 +316,12 @@ export const BookingAnswersButton: React.FC<{
       setHasAnswers(true);
       return;
     }
-    const probeUrls = [
-      ...(specialBookingId
-        ? [
-          `${BASE_URL}/booking-answers/special-booking/${specialBookingId}`,
-          `${BASE_URL}/booking-answers?specialBookingId=${specialBookingId}`,
-          `${BASE_URL}/special-bookings/${specialBookingId}/answers`,
-          ...(userId ? [`${BASE_URL}/users/${userId}/bookings/${specialBookingId}/answers?type=SPECIAL`] : []),
-          ...(userId ? [`${BASE_URL}/users/${userId}/special-bookings/${specialBookingId}/answers`] : []),
-        ]
-        : []),
-      ...(bookingId
-        ? [
-          `${BASE_URL}/booking-answers/booking/${bookingId}`,
-          `${BASE_URL}/booking-answers?bookingId=${bookingId}`,
-          ...(userId ? [`${BASE_URL}/users/${userId}/bookings/${bookingId}/answers?type=${bookingType ?? "NORMAL"}`] : []),
-        ]
-        : []),
-    ];
+    const probeUrls = userId
+      ? [
+        ...(specialBookingId ? [`${BASE_URL}/users/${userId}/bookings/${specialBookingId}/answers?type=SPECIAL`] : []),
+        ...(bookingId ? [`${BASE_URL}/users/${userId}/bookings/${bookingId}/answers?type=${bookingType ?? "NORMAL"}`] : []),
+      ]
+      : [];
     (async () => {
       for (const url of probeUrls) {
         try {

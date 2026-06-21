@@ -1394,17 +1394,13 @@ const BookingAnalyticsModule: React.FC<{
 
   const { totalBookings, completedBookings, totalRevenue, avgTicketSize } = useMemo(() => {
     const currentChart = chartData; // already computed based on period
-    let count = 0;
     let rev = 0;
     currentChart.forEach(d => {
-      count += d.bookings;
       rev += d.revenue;
     });
-    // For completed/success count, we can derive it from the revenue-generating points or just use the proportion
-    // Actually, it's better to just use the sums from chartData as that's what the user sees
-    const completed = bookings.filter(b => ["COMPLETED", "SUCCESS"].includes(getBookingStatus(b))).length;
-    const avg = count > 0 ? Math.round(rev / count) : 0;
-    return { totalBookings: count, totalRevenue: rev, completedBookings: completed, avgTicketSize: avg };
+    const completed = bookings.filter(b => ["COMPLETED", "SUCCESS", "CONFIRMED"].includes(getBookingStatus(b))).length;
+    const avg = completed > 0 ? Math.round(rev / completed) : 0;
+    return { totalBookings: bookings.length, totalRevenue: rev, completedBookings: completed, avgTicketSize: avg };
   }, [chartData, bookings]);
 
   return (
@@ -1538,9 +1534,11 @@ const AnalyticsDashboard: React.FC<Props> = ({
     setBookings(prev => {
       if (prev.length > 0) return prev;
       const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const currentYear = new Date().getFullYear();
       const synthetic = (chartsData.monthlyRevenueChart as number[]).map((rev: number, i: number) => ({
         status: "COMPLETED",
         amount: rev,
+        date: `${currentYear}-${String(i + 1).padStart(2, '0')}-01`,
         time: months[i],
         consultantName: consultantName || "",
       }));

@@ -115,6 +115,51 @@ const apiFetch = async (url: string, options?: RequestInit) => {
 // BOOKING TIMING HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+const parseBookingTimeLabelToMinutes = (value: string): number | null => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const match = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!match) return null;
+  let hour = parseInt(match[1], 10);
+  const minute = parseInt(match[2] || "0", 10);
+  const period = (match[3] || "").toUpperCase();
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+  if (period === "PM" && hour !== 12) hour += 12;
+  if (period === "AM" && hour === 12) hour = 0;
+  return hour * 60 + minute;
+};
+
+const getBookingTimeWindow = (
+  dateValue: string,
+  timeValue: string,
+  fallbackDurationMinutes = 60
+): { start: Date; end: Date } | null => {
+  const dateStr = String(dateValue || "").substring(0, 10);
+  const rawTime = String(timeValue || "").trim();
+  if (!dateStr || !rawTime) return null;
+
+  const parts = rawTime
+    .split(/\s*(?:-|–|—|to)\s*/i)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const startMinutes = parseBookingTimeLabelToMinutes(parts[0] || rawTime);
+  if (startMinutes == null) return null;
+
+  let endMinutes = parts.length > 1
+    ? parseBookingTimeLabelToMinutes(parts[parts.length - 1])
+    : null;
+  if (endMinutes == null) endMinutes = startMinutes + Math.max(1, fallbackDurationMinutes);
+  if (endMinutes <= startMinutes) endMinutes += 24 * 60;
+
+  const base = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+  const start = new Date(base);
+  start.setMinutes(startMinutes);
+  const end = new Date(base);
+  end.setMinutes(endMinutes);
+  return { start, end };
+};
+
 /**
  * Parses a booking's date + timeRange/slotTime and returns whether the user
  * can join the Jitsi meeting right now.
@@ -125,42 +170,20 @@ const apiFetch = async (url: string, options?: RequestInit) => {
 const getJoinMeetingStatus = (b: any, now: Date = new Date()): "active" | "too_early" | "ended" => {
   const dateStr = b?.slotDate || b?.bookingDate || b?.date || "";
   const timeStr = b?.timeRange || b?.slotTime || "";
-  if (!dateStr || !timeStr) return "active"; // can't determine → allow
+  if (!dateStr || !timeStr) return "too_early";
 
   try {
-    // ── Parse start time ─────────────────────────────────────────────────────
-    const startMatch = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
-    if (!startMatch) return "active";
-    let startH = parseInt(startMatch[1]);
-    const startM = parseInt(startMatch[2] || "0");
-    const startAp = (startMatch[3] || "").toUpperCase();
-    if (startAp === "PM" && startH !== 12) startH += 12;
-    if (startAp === "AM" && startH === 12) startH = 0;
-
-    // ── Parse end time (from range "X AM - Y PM" or default +1 h) ────────────
-    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
-    let endH = startH + 1;
-    let endM = startM;
-    if (rangeMatch) {
-      endH = parseInt(rangeMatch[1]);
-      endM = parseInt(rangeMatch[2] || "0");
-      const endAp = (rangeMatch[3] || "").toUpperCase();
-      if (endAp === "PM" && endH !== 12) endH += 12;
-      if (endAp === "AM" && endH === 12) endH = 0;
-    }
-
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const sessionStart = new Date(`${dateStr}T${pad(startH)}:${pad(startM)}:00`);
-    const sessionEnd = new Date(`${dateStr}T${pad(endH)}:${pad(endM)}:00`);
+    const window = getBookingTimeWindow(dateStr, timeStr, Number(b?.durationMinutes || 60));
+    if (!window) return "too_early";
 
     // Allow joining 15 minutes before start
-    const joinFrom = new Date(sessionStart.getTime() - 15 * 60 * 1000);
+    const joinFrom = new Date(window.start.getTime() - 15 * 60 * 1000);
 
     if (now < joinFrom) return "too_early";
-    if (now > sessionEnd) return "ended";
+    if (now > window.end) return "ended";
     return "active";
   } catch {
-    return "active";
+    return "too_early";
   }
 };
 
@@ -169,32 +192,9 @@ const isBookingExpired = (b: any, now: Date = new Date()): boolean => {
   const timeStr = b?.timeRange || b?.slotTime || "";
   if (!dateStr) return false;
   try {
-    const rangeMatch = timeStr.match(/[--]\s*(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-    let endH = -1, endM = 0;
-    if (rangeMatch) {
-      endH = parseInt(rangeMatch[1]);
-      endM = parseInt(rangeMatch[2]);
-      const ap = rangeMatch[3]?.toUpperCase();
-      if (ap === "PM" && endH !== 12) endH += 12;
-      if (ap === "AM" && endH === 12) endH = 0;
-    } else {
-      const startMatch = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
-      if (startMatch) {
-        let sh = parseInt(startMatch[1]);
-        const sm = parseInt(startMatch[2]);
-        const ap = startMatch[3]?.toUpperCase();
-        if (ap === "PM" && sh !== 12) sh += 12;
-        if (ap === "AM" && sh === 12) sh = 0;
-        const totalEnd = sh * 60 + sm + 60;
-        endH = Math.floor(totalEnd / 60) % 24;
-        endM = totalEnd % 60;
-      }
-    }
-    if (endH === -1) return new Date(`${dateStr}T23:59:59`) < now;
-    const sessionEnd = new Date(
-      `${dateStr}T${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}:00`
-    );
-    return sessionEnd < now;
+    const window = getBookingTimeWindow(dateStr, timeStr, Number(b?.durationMinutes || 60));
+    if (!window) return new Date(`${String(dateStr).substring(0, 10)}T23:59:59`) < now;
+    return window.end < now;
   } catch { return false; }
 };
 
@@ -300,14 +300,19 @@ interface SubscriptionPlanDetail {
   validityInMonths?: number;
 }
 interface UserProfile {
-  id?: number; name?: string; email?: string; location?: string; memberSince?: string;
+  id?: number; userId?: number; registrationId?: number; name?: string; email?: string; location?: string; memberSince?: string;
   identifier?: string; role?: string; subscribed?: boolean; subscriptionPlanName?: string;
   subscriptionPlanId?: number;
+  pendingSubscriptionPlanId?: number;
+  razorpayOrderId?: string;
+  pendingRazorpayOrderId?: string;
   phone?: string; incomes?: IncomeItem[]; expenses?: ExpenseItem[]; createdAt?: string;
   designation?: string; organizationName?: string;
   paymentStatus?: string;
   subscriptionStartDate?: string;
   subscriptionEndDate?: string;
+  subscriptionPaidAmount?: number;
+  subscriptionOriginalAmount?: number;
 }
 
 const normalizeSubscriptionPlan = (plan: any): SubscriptionPlanDetail => ({
@@ -320,10 +325,104 @@ const normalizeSubscriptionPlan = (plan: any): SubscriptionPlanDetail => ({
   validityInMonths: Math.max(0, Number(plan.validityInMonths ?? plan.validity_in_months ?? 1) || 0),
 });
 
+const getOnboardingUserId = (profile?: Pick<UserProfile, "userId" | "id"> | null): number =>
+  Number(profile?.userId ?? profile?.id ?? localStorage.getItem("fin_user_id") ?? 0) || 0;
+
+const getPendingSubscriptionPlanId = (data: any): number | undefined =>
+  Number(data?.pendingSubscriptionPlanId ?? data?.pending_subscription_plan_id ?? 0) || undefined;
+
+const getOnboardingOrderId = (data: any): string =>
+  String(
+    data?.pendingRazorpayOrderId ??
+    data?.pending_razorpay_order_id ??
+    data?.razorpayOrderId ??
+    data?.razorpay_order_id ??
+    ""
+  ).trim();
+
 const getPlanValidityLabel = (plan?: Partial<SubscriptionPlanDetail> | null): string => {
   const months = Number(plan?.validityInMonths ?? 0);
   if (!months) return "";
   return `${months} month${months === 1 ? "" : "s"}`;
+};
+
+const firstPositiveNumber = (...values: any[]): number | undefined => {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return undefined;
+};
+
+const getPurchasedSubscriptionAmount = (data: any): number | undefined =>
+  firstPositiveNumber(
+    data?.subscriptionPaidAmount,
+    data?.subscription_paid_amount,
+    data?.subscriptionAmount,
+    data?.subscription_amount,
+    data?.paidAmount,
+    data?.paid_amount,
+    data?.amountPaid,
+    data?.amount_paid,
+    data?.paymentAmount,
+    data?.payment_amount,
+    data?.subscriptionPayment?.amount,
+    data?.subscription_payment?.amount,
+    data?.payment?.amount,
+    data?.payment?.paidAmount,
+    data?.payment?.paid_amount,
+    data?.order?.amount,
+    data?.razorpayOrderAmount,
+    data?.razorpay_order_amount
+  );
+
+const parseLocalDateOnly = (value?: string): Date | null => {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+};
+
+const addMonths = (date: Date, months: number): Date => {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+};
+
+const startOfToday = (): Date => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+const isSubscriptionExpired = (endDate?: string): boolean => {
+  const parsed = parseLocalDateOnly(endDate);
+  return !!parsed && parsed < startOfToday();
+};
+
+const hasActiveSubscription = (profile?: Pick<UserProfile, "subscriptionPlanId" | "subscriptionEndDate" | "subscribed"> | null): boolean =>
+  !!profile?.subscriptionPlanId && profile.subscribed !== false && !isSubscriptionExpired(profile.subscriptionEndDate);
+
+const getSubscriptionPayableAmount = (
+  profile: UserProfile,
+  currentPlan: Partial<SubscriptionPlanDetail> | undefined,
+  nextPlan: Partial<SubscriptionPlanDetail>
+): number => {
+  const currentPrice = Number(profile.subscriptionPaidAmount ?? currentPlan?.discountPrice ?? 0);
+  const nextPrice = Number(nextPlan.discountPrice ?? 0);
+  if (nextPrice <= 0) return 0;
+  if (!profile.subscriptionPlanId || currentPrice <= 0 || isSubscriptionExpired(profile.subscriptionEndDate)) {
+    return nextPrice;
+  }
+
+  const startDate = parseLocalDateOnly(profile.subscriptionStartDate);
+  const nextValidityMonths = Number(nextPlan.validityInMonths ?? 0);
+  if (startDate && nextValidityMonths > 0) {
+    const projectedEndDate = addMonths(startDate, nextValidityMonths);
+    if (projectedEndDate <= startOfToday()) return nextPrice;
+  }
+
+  return Math.max(nextPrice - currentPrice, 0);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -501,6 +600,20 @@ const stripSpecialBookingMeta = (rawNotes: any): string => {
   return rawNotes.split("\n").slice(1).join("\n").trim();
 };
 
+const getCleanSpecialRequestNotes = (...values: any[]): string => {
+  for (const rawNotes of values) {
+    if (typeof rawNotes !== "string") continue;
+    const raw = rawNotes.trim();
+    if (!raw) continue;
+    const meta = parseSpecialBookingMeta(raw);
+    if (meta?.requestNotes) return meta.requestNotes.trim();
+    const stripped = stripSpecialBookingMeta(raw);
+    const notesMatch = stripped.match(/(?:^|\|\s*)Notes:\s*([^|]+)/i);
+    return (notesMatch?.[1] || stripped).trim();
+  }
+  return "";
+};
+
 const formatSpecialTimeRange = (startTime: string, hours: number): string => {
   if (!startTime) return "";
   const [h, m] = startTime.split(":").map(Number);
@@ -657,22 +770,21 @@ const getDedicatedSpecialMeta = (booking: any): SpecialBookingMeta | null => {
     (preferredTime ? formatSpecialTimeRange(preferredTime, hours) : "");
   const scheduledTimeRange =
     booking?.scheduledTimeRange ||
-    booking?.timeRange ||
-    (scheduledTime ? formatSpecialTimeRange(scheduledTime, hours) : preferredTimeRange);
+    (scheduledTime ? (booking?.timeRange || formatSpecialTimeRange(scheduledTime, hours)) : "");
 
   const status = normaliseSpecialBookingStatus(rawStatus);
   return {
     kind: "SPECIAL_BOOKING",
     version: 1,
     hours,
-    requestNotes: booking?.requestNotes || stripSpecialBookingMeta(booking?.userNotes),
+    requestNotes: getCleanSpecialRequestNotes(booking?.requestNotes, booking?.request_notes, booking?.userNotes),
     requestedMeetingMode: (booking?.meetingMode || booking?.requestedMeetingMode || "ONLINE") as "ONLINE" | "PHYSICAL" | "PHONE",
     status,
     preferredDate: preferredDate || undefined,
     preferredTime: preferredTime || undefined,
     preferredTimeRange: preferredTimeRange || undefined,
     preferredSlotId: booking?.preferredSlotId || booking?.preferred_slot_id || booking?.timeSlotId || undefined,
-    scheduledDate: booking?.scheduledDate || booking?.scheduled_date || booking?.slotDate || preferredDate || undefined,
+    scheduledDate: booking?.scheduledDate || booking?.scheduled_date || undefined,
     scheduledTime: scheduledTime || undefined,
     scheduledTimeRange: scheduledTimeRange || undefined,
     meetingId: booking?.meetingId || undefined,
@@ -733,7 +845,7 @@ const getSpecialBookingDisplay = (booking: any): {
       date: booking?.slotDate || booking?.bookingDate || booking?.date || "",
       time: booking?.timeRange || booking?.slotTime || "",
       meetingMode: booking?.meetingMode || "",
-      requestNotes: stripSpecialBookingMeta(booking?.userNotes),
+      requestNotes: getCleanSpecialRequestNotes(booking?.userNotes),
       joinLink: booking?.meetingLink || booking?.jitsiLink || booking?.joinUrl || "",
     };
   }
@@ -748,7 +860,7 @@ const getSpecialBookingDisplay = (booking: any): {
       ? (meta.scheduledTimeRange || meta.scheduledTime || meta.preferredTimeRange || meta.preferredTime || "")
       : (meta.preferredTimeRange || meta.preferredTime || `${meta.hours} hour${meta.hours > 1 ? "s" : ""}`),
     meetingMode: meta.requestedMeetingMode || booking?.meetingMode || "",
-    requestNotes: meta.requestNotes || stripSpecialBookingMeta(booking?.userNotes),
+    requestNotes: meta.requestNotes || getCleanSpecialRequestNotes(booking?.userNotes),
     joinLink: meta.meetingLink || booking?.meetingLink || booking?.jitsiLink || booking?.joinUrl || "",
   };
 };
@@ -830,7 +942,7 @@ const parseDiscountAmount = (discountStr: string, baseAmount: number, offer?: an
       return Math.min(val, baseAmount);
     }
     // Default: percentage
-    return Math.round(baseAmount * Math.min(val, 100) / 100);
+    return Math.round((baseAmount * Math.min(val, 100) / 100) * 100) / 100;
   }
   // Fallback: parse from label string
   if (!discountStr) return 0;
@@ -838,7 +950,7 @@ const parseDiscountAmount = (discountStr: string, baseAmount: number, offer?: an
   const numMatch = s.match(/(\d+(?:\.\d+)?)/);
   if (!numMatch) return 0;
   const num = parseFloat(numMatch[1]);
-  if (s.includes("%")) return Math.round(baseAmount * Math.min(num, 100) / 100);
+  if (s.includes("%")) return Math.round((baseAmount * Math.min(num, 100) / 100) * 100) / 100;
   return Math.min(num, baseAmount); // treat as flat ₹ amount
 };
 
@@ -1815,8 +1927,14 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         let onboard: any = null;
         if (userId) { try { onboard = await apiFetch(`${BASE_URL}/onboarding/${userId}`); } catch { } }
         const merged = { ...raw, ...(onboard || {}) };
+        const coreUserId = Number(merged.userId ?? raw.userId ?? raw.id ?? 0) || undefined;
+        const registrationId = Number(onboard?.id ?? merged.registrationId ?? 0) || undefined;
+        const purchasedAmount = getPurchasedSubscriptionAmount(merged);
         const normalized: UserProfile = {
-          id: merged.id || merged.userId, name: merged.name || merged.fullName || "",
+          id: coreUserId,
+          userId: coreUserId,
+          registrationId,
+          name: merged.name || merged.fullName || "",
           email: merged.email || merged.emailId || "",
 
           location: merged.location || merged.city || "",
@@ -1825,6 +1943,12 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           subscribed: merged.subscribed ?? merged.isSubscribed ?? false,
           subscriptionPlanName: merged.subscriptionPlanName || merged.planName || merged.subscriptionPlan?.name || "",
           subscriptionPlanId: merged.subscriptionPlanId || merged.subscriptionPlan?.id || null,
+          pendingSubscriptionPlanId: getPendingSubscriptionPlanId(merged),
+          razorpayOrderId: getOnboardingOrderId({ razorpayOrderId: merged.razorpayOrderId, razorpay_order_id: merged.razorpay_order_id }) || undefined,
+          pendingRazorpayOrderId: getOnboardingOrderId({
+            pendingRazorpayOrderId: merged.pendingRazorpayOrderId,
+            pending_razorpay_order_id: merged.pending_razorpay_order_id,
+          }) || undefined,
           phone: merged.phone || merged.phoneNumber || merged.mobile || "",
           designation: merged.designation || "",
           organizationName: merged.organizationName || merged.organization_name || "",
@@ -1835,11 +1959,23 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           paymentStatus: merged.paymentStatus || merged.payment_status || "",
           subscriptionStartDate: merged.subscriptionStartDate || merged.subscription_start_date || "",
           subscriptionEndDate: merged.subscriptionEndDate || merged.subscription_end_date || "",
+          subscriptionPaidAmount: purchasedAmount,
+          subscriptionOriginalAmount: firstPositiveNumber(
+            merged.subscriptionOriginalAmount,
+            merged.subscription_original_amount,
+            merged.subscriptionPlanOriginalAmount,
+            merged.subscription_plan_original_amount,
+            merged.subscriptionPlan?.originalPrice,
+            merged.subscriptionPlan?.price
+          ),
         };
         const existingPhoto = merged.profileImageUrl || merged.profilePhoto || merged.photo || merged.avatarUrl || "";
         if (existingPhoto) setAvatarPreview(resolvePhotoUrl(existingPhoto));
+        const refreshedRole = String(normalized.role || "").toUpperCase().replace(/^ROLE_/, "");
+        if (refreshedRole) localStorage.setItem("fin_role", refreshedRole);
+        if (coreUserId) localStorage.setItem("fin_user_id", String(coreUserId));
         setProfile(normalized);
-        setSelectedPlanId(normalized.subscriptionPlanId ?? null);
+        setSelectedPlanId(normalized.pendingSubscriptionPlanId ?? normalized.subscriptionPlanId ?? null);
         setForm({ name: normalized.name || "", email: normalized.email || "", location: normalized.location || "", phone: normalized.phone || "", designation: normalized.designation || "", organizationName: normalized.organizationName || "" });
       } catch { setProfile(null); }
       finally { setLoading(false); }
@@ -1882,7 +2018,8 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   };
 
   const handleSave = async () => {
-    if (!profile?.id) return;
+    const userId = getOnboardingUserId(profile);
+    if (!userId) return;
     if (!phoneIsValid) {
       setSaveMsg("ERROR::Phone number is mandatory (10 digits).");
       setTimeout(() => setSaveMsg(""), 5000);
@@ -1901,8 +2038,8 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       const onboardingForm = new FormData();
       onboardingForm.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
       if (avatarFile) onboardingForm.append("file", avatarFile);
-      try { await apiFetch(`${BASE_URL}/onboarding/${profile.id}`, { method: "PUT", body: onboardingForm }); }
-      catch { await apiFetch(`${BASE_URL}/users/${profile.id}`, { method: "PUT", body: JSON.stringify(payload) }); }
+      try { await apiFetch(`${BASE_URL}/onboarding/${userId}`, { method: "PUT", body: onboardingForm }); }
+      catch { await apiFetch(`${BASE_URL}/users/${userId}`, { method: "PUT", body: JSON.stringify(payload) }); }
       setProfile(prev => prev ? { ...prev, ...form } : prev);
       setEditing(false); setSaveMsg("SUCCESS::🙌 Profile updated successfully!"); setTimeout(() => setSaveMsg(""), 4000);
     } catch (err: any) { setSaveMsg(`ERROR::${err.message}`); }
@@ -1911,7 +2048,12 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   // ── Change plan via PUT /onboarding/{id} with subscriptionPlanId ──
   const handleChangePlan = async (planId: number) => {
-    if (!profile?.id) return;
+    const userId = getOnboardingUserId(profile);
+    if (!profile || !userId) {
+      setSaveMsg("ERROR::User ID is missing. Please sign in again.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     const selectedPlan = plans.find(p => p.id === planId);
     if (!selectedPlan) {
       setSaveMsg("ERROR::Please select a valid subscription plan.");
@@ -1925,29 +2067,38 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
     const currentPlan = plans.find(p => p.id === profile.subscriptionPlanId)
       || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
-    const currentPrice = Number(currentPlan?.discountPrice ?? 0);
+    const currentPlanId = profile.subscriptionPlanId ?? currentPlan?.id ?? null;
+    const currentPrice = Number(profile.subscriptionPaidAmount ?? currentPlan?.discountPrice ?? 0);
     const nextPrice = Number(selectedPlan.discountPrice ?? 0);
-    if (nextPrice <= currentPrice) {
-      setSaveMsg("ERROR::Only upgrades to a higher subscription plan are allowed.");
+    if (hasActiveSubscription(profile) && nextPrice <= currentPrice) {
+      setSaveMsg("ERROR::Your current subscription remains active until its validity ends. Lower or same-priced plan changes are not allowed during the active period.");
       setTimeout(() => setSaveMsg(""), 5000);
       return;
     }
     setPlanSaving(true); setSaveMsg("");
     try {
-      const amountDue = Math.max(nextPrice - currentPrice, 0);
+      const amountDue = getSubscriptionPayableAmount(profile, currentPlan, selectedPlan);
       // Use the onboarding PUT endpoint with subscriptionPlanId - matches backend UpdateUserRegistrationRequest
       const payload = { subscriptionPlanId: planId, phoneNumber: phoneDigitsForRequests };
       const fd = new FormData();
       fd.append("data", new Blob([JSON.stringify(payload)], { type: "application/json" }));
 
-      let data = await apiFetch(`${BASE_URL}/onboarding/${profile.id}`, { method: "PUT", body: fd });
+      let data = await apiFetch(`${BASE_URL}/onboarding/${userId}`, { method: "PUT", body: fd });
       let paymentStatus = String(data?.paymentStatus || data?.payment_status || "").toUpperCase();
+      let pendingPlanId = getPendingSubscriptionPlanId(data);
+      let orderId = getOnboardingOrderId(data);
 
-      if (amountDue > 0 && paymentStatus === "PENDING") {
-        const orderId = String(data?.razorpayOrderId ?? data?.razorpay_order_id ?? "").trim();
+      if (amountDue > 0) {
         if (!orderId) {
           throw new Error("Payment order was not created for this upgrade. Please try again.");
         }
+        setProfile(prev => prev ? {
+          ...prev,
+          pendingSubscriptionPlanId: pendingPlanId || planId,
+          pendingRazorpayOrderId: orderId,
+          razorpayOrderId: orderId,
+          paymentStatus,
+        } : prev);
 
         const checkoutResult = await openRazorpayOrder({
           keyId: data?.razorpayKeyId ?? data?.razorpay_key_id,
@@ -1955,11 +2106,18 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           amount: amountDue,
           description: `${selectedPlan.name} subscription upgrade`,
           prefill: { name: profile.name, email: profile.email, contact: phoneDigitsForRequests },
-          notes: { userId: profile.id, subscriptionPlanId: planId, source: "profile-upgrade" },
+          notes: { userId, subscriptionPlanId: planId, source: "profile-upgrade" },
         });
 
-        data = await verifyOnboardingPayment(Number(profile.id), checkoutResult);
+        data = await verifyOnboardingPayment(userId, checkoutResult);
+        try {
+          data = await apiFetch(`${BASE_URL}/onboarding/${userId}`);
+        } catch {
+          // Keep the verification response if the refresh is unavailable.
+        }
         paymentStatus = String(data?.paymentStatus || data?.payment_status || "SUCCESS").toUpperCase();
+        pendingPlanId = getPendingSubscriptionPlanId(data);
+        orderId = getOnboardingOrderId(data);
       }
 
       const responsePlan = data?.subscriptionPlan || {};
@@ -1975,12 +2133,34 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         subscriptionPlanName: newPlanName,
         subscribed: nextPrice > 0,
         paymentStatus,
+        pendingSubscriptionPlanId: getPendingSubscriptionPlanId(data),
+        pendingRazorpayOrderId: data?.pendingRazorpayOrderId || data?.pending_razorpay_order_id || undefined,
+        razorpayOrderId: getOnboardingOrderId(data) || prev.razorpayOrderId,
         subscriptionStartDate: data?.subscriptionStartDate || data?.subscription_start_date || prev.subscriptionStartDate,
         subscriptionEndDate: data?.subscriptionEndDate || data?.subscription_end_date || prev.subscriptionEndDate,
+        subscriptionPaidAmount: getPurchasedSubscriptionAmount(data) ?? amountDue,
+        subscriptionOriginalAmount: firstPositiveNumber(
+          data?.subscriptionOriginalAmount,
+          data?.subscription_original_amount,
+          selectedPlan.originalPrice,
+          selectedPlan.discountPrice
+        ),
       } : prev);
       setSaveMsg(`SUCCESS::Plan changed to "${newPlanName}" successfully!`);
     } catch (err: any) {
-      setSaveMsg(`ERROR::${err?.message || "Network error. Please try again."}`);
+      const message = String(err?.message || "Network error. Please try again.");
+      if (message.toLowerCase().includes("cancel")) {
+        setSelectedPlanId(currentPlanId);
+        setProfile(prev => prev ? {
+          ...prev,
+          pendingSubscriptionPlanId: undefined,
+          pendingRazorpayOrderId: undefined,
+          paymentStatus: prev.paymentStatus === "PENDING" ? "" : prev.paymentStatus,
+        } : prev);
+        setSaveMsg("INFO::Payment cancelled. Your current plan remains active.");
+      } else {
+        setSaveMsg(`ERROR::${message}`);
+      }
     } finally {
       setPlanSaving(false);
       setTimeout(() => setSaveMsg(""), 5000);
@@ -1988,16 +2168,22 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   };
 
   const handleRetrySubscriptionPayment = async () => {
-    if (!profile?.id) return;
+    const userId = getOnboardingUserId(profile);
+    if (!profile || !userId) {
+      setSaveMsg("ERROR::User ID is missing. Please sign in again.");
+      setTimeout(() => setSaveMsg(""), 5000);
+      return;
+    }
     if (!phoneIsValid) {
       setSaveMsg("ERROR::Add a valid 10-digit phone number before retrying payment.");
       setTimeout(() => setSaveMsg(""), 5000);
       return;
     }
 
-    const plan = plans.find(p => p.id === (selectedPlanId ?? profile.subscriptionPlanId))
+    const pendingPlanId = profile.pendingSubscriptionPlanId || undefined;
+    const plan = plans.find(p => p.id === (pendingPlanId ?? selectedPlanId ?? profile.subscriptionPlanId))
       || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
-    if (!plan && !profile.subscriptionPlanId) {
+    if (!plan && !profile.subscriptionPlanId && !pendingPlanId) {
       setSaveMsg("ERROR::No paid subscription is pending for this account.");
       setTimeout(() => setSaveMsg(""), 5000);
       return;
@@ -2005,12 +2191,17 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
     setPlanSaving(true); setSaveMsg("");
     try {
-      let data = await retryOnboardingPayment(Number(profile.id));
+      let data = await retryOnboardingPayment(userId);
       const responsePlan = data?.subscriptionPlan || {};
       const retryPlan = plan || normalizeSubscriptionPlan(responsePlan);
-      const orderId = String(data?.razorpayOrderId ?? data?.razorpay_order_id ?? "").trim();
+      const orderId = getOnboardingOrderId(data);
       if (!orderId) throw new Error("Payment order was not created. Please try again.");
-      const amount = Number(responsePlan?.discountPrice ?? retryPlan?.discountPrice ?? 0);
+      const currentPlan = plans.find(p => p.id === profile.subscriptionPlanId)
+        || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
+      const retryPrice = Number(retryPlan?.discountPrice ?? responsePlan?.discountPrice ?? 0);
+      const amount = pendingPlanId
+        ? getSubscriptionPayableAmount(profile, currentPlan, retryPlan)
+        : retryPrice;
       if (!amount) throw new Error("Payment amount is missing for this subscription.");
 
       const checkoutResult = await openRazorpayOrder({
@@ -2019,10 +2210,15 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         amount,
         description: `${retryPlan.name || currentPlanName || "Subscription"} payment`,
         prefill: { name: profile.name, email: profile.email, contact: phoneDigitsForRequests },
-        notes: { userId: profile.id, subscriptionPlanId: retryPlan.id || profile.subscriptionPlanId, source: "profile-payment-retry" },
+        notes: { userId, subscriptionPlanId: retryPlan.id || pendingPlanId || profile.subscriptionPlanId, source: "profile-payment-retry" },
       });
 
-      data = await verifyOnboardingPayment(Number(profile.id), checkoutResult);
+      data = await verifyOnboardingPayment(userId, checkoutResult);
+      try {
+        data = await apiFetch(`${BASE_URL}/onboarding/${userId}`);
+      } catch {
+        // Keep the verification response if the refresh is unavailable.
+      }
       const verifiedPlan = data?.subscriptionPlan || responsePlan || {};
       const newPlanName = verifiedPlan?.name || retryPlan.name || "";
       const verifiedPlanId = Number(verifiedPlan?.id ?? retryPlan.id ?? profile.subscriptionPlanId ?? 0);
@@ -2035,8 +2231,18 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         subscriptionPlanName: newPlanName,
         subscribed: true,
         paymentStatus: data?.paymentStatus || data?.payment_status || "SUCCESS",
+        pendingSubscriptionPlanId: getPendingSubscriptionPlanId(data),
+        pendingRazorpayOrderId: data?.pendingRazorpayOrderId || data?.pending_razorpay_order_id || undefined,
+        razorpayOrderId: getOnboardingOrderId(data) || prev.razorpayOrderId,
         subscriptionStartDate: data?.subscriptionStartDate || data?.subscription_start_date || prev.subscriptionStartDate,
         subscriptionEndDate: data?.subscriptionEndDate || data?.subscription_end_date || prev.subscriptionEndDate,
+        subscriptionPaidAmount: getPurchasedSubscriptionAmount(data) ?? amount,
+        subscriptionOriginalAmount: firstPositiveNumber(
+          data?.subscriptionOriginalAmount,
+          data?.subscription_original_amount,
+          retryPlan.originalPrice,
+          retryPlan.discountPrice
+        ),
       } : prev);
       setSaveMsg(`SUCCESS::Payment verified for "${newPlanName}".`);
     } catch (err: any) {
@@ -2054,10 +2260,16 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
   if (!profile) return <div style={{ textAlign: "center", padding: 48, color: "#94A3B8" }}>Could not load profile.</div>;
 
+  const profileRole = (profile.role || "").toUpperCase().replace(/^ROLE_/, "");
+  const subscriptionPaymentPending =
+    String(profile.paymentStatus || "").toUpperCase() === "PENDING" ||
+    !!profile.pendingSubscriptionPlanId ||
+    !!profile.pendingRazorpayOrderId;
+
   // MEMBER = admin-created user with full access (booking, tickets, etc.) - treat as premium
-  const isPremium = profile.subscribed === true || ["SUBSCRIBER", "SUBSCRIBED", "PREMIUM", "MEMBER"].includes((profile.role || "").toUpperCase());
+  const isPremium = !subscriptionPaymentPending && (profile.subscribed === true || ["SUBSCRIBER", "SUBSCRIBED", "PREMIUM", "MEMBER"].includes(profileRole));
   // Admin-added MEMBER users get completely free access - no charges for bookings or tickets
-  const isAdminMember = (profile.role || "").toUpperCase() === "MEMBER";
+  const isAdminMember = profileRole === "MEMBER";
   const currentPlanName = profile.subscriptionPlanName || (isAdminMember ? "Premium (Free)" : isPremium ? "Premium" : "Guest");
   const initials = (profile.name || "U").split(" ").map((w: string) => w[0]).slice(0, 2).join("").toUpperCase();
   const totalIncome = (profile.incomes || []).reduce((s, i) => s + (Number(i.incomeAmount) || 0), 0);
@@ -2069,17 +2281,20 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const canSaveProfile = !saving && phoneIsValid && (form.name || "").trim().length >= 2 && (form.email || "").trim().length > 0;
 
   // Determine the "SUBSCRIBED" vs "GUEST" type badge
-  const isSubscribedType = selectedPlanId != null
+  const isSubscribedType = !subscriptionPaymentPending && (selectedPlanId != null
     ? plans.find(p => p.id === selectedPlanId)?.name?.toLowerCase() !== "guest"
-    : isPremium;
-  const subscriptionPaymentPending = String(profile.paymentStatus || "").toUpperCase() === "PENDING";
+    : isPremium);
   const profileCurrentPlan = plans.find(p => p.id === profile.subscriptionPlanId)
     || plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
-  const profileCurrentPrice = Number(profileCurrentPlan?.discountPrice ?? 0);
+  const profileSubscriptionActive = hasActiveSubscription(profile);
+  const profileCurrentPrice = profileSubscriptionActive
+    ? Number(profile.subscriptionPaidAmount ?? profileCurrentPlan?.discountPrice ?? 0)
+    : Number(profileCurrentPlan?.discountPrice ?? 0);
   const canSelectProfilePlan = (plan: Partial<SubscriptionPlanDetail>) => {
     if (planSaving || subscriptionPaymentPending) return false;
     const planPrice = Number(plan.discountPrice ?? 0);
     if (planPrice <= 0) return false;
+    if (!profileSubscriptionActive) return !isSameProfilePlan(plan);
     return planPrice > profileCurrentPrice;
   };
   const isSameProfilePlan = (plan?: Partial<SubscriptionPlanDetail> | null) =>
@@ -2087,6 +2302,11 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       Number(plan.id || 0) === Number(profile.subscriptionPlanId || 0) ||
       String(plan.name || "").toLowerCase() === String(currentPlanName || "").toLowerCase()
     );
+  const selectedProfilePlan = plans.find(p => p.id === selectedPlanId) || null;
+  const selectedProfileAmountDue = selectedProfilePlan
+    ? getSubscriptionPayableAmount(profile, profileCurrentPlan, selectedProfilePlan)
+    : 0;
+  const profilePaidAmountLabel = profileCurrentPrice > 0 ? `₹${profileCurrentPrice.toLocaleString("en-IN")}` : "-";
 
   const parsedSaveMsg = (() => {
     if (!saveMsg) return null;
@@ -2218,6 +2438,7 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               { label: "Phone", value: profile.phone || "-" },
               { label: "Plan", value: currentPlanName || "-" },
               ...(!isAdminMember ? [
+                { label: profileSubscriptionActive ? "You Paid" : "Plan Price", value: profilePaidAmountLabel },
                 { label: "Payment", value: profile.paymentStatus || "-" },
                 { label: "Valid Until", value: profile.subscriptionEndDate ? fmtDate(profile.subscriptionEndDate) : "-" },
               ] : []),
@@ -2236,166 +2457,215 @@ const AccountProfile: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       </div>
 
       {!isAdminMember && (
-      <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16 }}>
-        <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #F1F5F9" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-            <span style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>Subscription Plan</span>
+        <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16 }}>
+          <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #F1F5F9" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+              <span style={{ fontSize: 15, fontWeight: 700, color: "#0F172A" }}>Subscription Plan</span>
+            </div>
+            {/* SUBSCRIBED / GUEST toggle badges */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isSubscribedType ? "#EFF6FF" : "#F8FAFC", border: `1.5px solid ${isSubscribedType ? "#2563EB" : "#CBD5E1"}`, color: isSubscribedType ? "#2563EB" : "#94A3B8" }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                SUBSCRIBED - FULL ACCESS
+              </div>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !isSubscribedType ? "#FEF2F2" : "#F8FAFC", border: `1.5px solid ${!isSubscribedType ? "#EF4444" : "#CBD5E1"}`, color: !isSubscribedType ? "#EF4444" : "#94A3B8" }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                GUEST - LIMITED ACCESS
+              </div>
+            </div>
           </div>
-          {/* SUBSCRIBED / GUEST toggle badges */}
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: isSubscribedType ? "#EFF6FF" : "#F8FAFC", border: `1.5px solid ${isSubscribedType ? "#2563EB" : "#CBD5E1"}`, color: isSubscribedType ? "#2563EB" : "#94A3B8" }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-              SUBSCRIBED - FULL ACCESS
-            </div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: !isSubscribedType ? "#FEF2F2" : "#F8FAFC", border: `1.5px solid ${!isSubscribedType ? "#EF4444" : "#CBD5E1"}`, color: !isSubscribedType ? "#EF4444" : "#94A3B8" }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-              GUEST - LIMITED ACCESS
-            </div>
-          </div>
-        </div>
-        <div style={{ padding: "16px 20px" }}>
-          {plansLoading ? (
-            <div style={{ textAlign: "center", padding: "24px 0" }}>
-              <img src={logoImg} alt="" style={{ width: 48, height: "auto", display: "block", margin: "0 auto 12px", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
-            </div>
-          ) : plans.length === 0 ? (
-            // Fallback static plans if backend returns nothing
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {[
-                { id: -1, name: "Elite", discountPrice: 999 },
-                { id: -2, name: "Pro", discountPrice: 499 },
-                { id: -3, name: "Guest", discountPrice: 0 },
-              ].map(plan => {
-                const isFree = plan.discountPrice === 0;
-                const isSelected = selectedPlanId === plan.id;
-                const canSelect = canSelectProfilePlan(plan);
-                const disabledReason = isFree
-                  ? "Guest plan cannot be selected after account creation."
-                  : isSameProfilePlan(plan)
-                    ? "Current plan"
-                    : "Only higher subscription plans can be selected.";
-                return (
-                  <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
-                    {isFree && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#E2E8F0", color: "#64748B", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 20, letterSpacing: "0.06em" }}>Guest</div>}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
-                        {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+          <div style={{ padding: "16px 20px" }}>
+            {plansLoading ? (
+              <div style={{ textAlign: "center", padding: "24px 0" }}>
+                <img src={logoImg} alt="" style={{ width: 48, height: "auto", display: "block", margin: "0 auto 12px", animation: "mtmPulse 1.8s ease-in-out infinite" }} />
+              </div>
+            ) : plans.length === 0 ? (
+              // Fallback static plans if backend returns nothing
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { id: -1, name: "Elite", discountPrice: 999 },
+                  { id: -2, name: "Pro", discountPrice: 499 },
+                  { id: -3, name: "Guest", discountPrice: 0 },
+                ].map(plan => {
+                  const isFree = plan.discountPrice === 0;
+                  const isSelected = selectedPlanId === plan.id;
+                  const canSelect = canSelectProfilePlan(plan);
+                  const disabledReason = isFree
+                    ? "Guest plan cannot be selected after account creation."
+                    : isSameProfilePlan(plan)
+                      ? "Current plan"
+                      : profileSubscriptionActive
+                        ? "Your current subscription stays active until its validity ends. Select only a higher-priced upgrade."
+                        : "Select a paid subscription plan.";
+                  return (
+                    <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
+                      {isFree && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#E2E8F0", color: "#64748B", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 20, letterSpacing: "0.06em" }}>Guest</div>}
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
+                          {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
+                        </div>
+                        {getPlanValidityLabel(plan) && (
+                          <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
+                            {getPlanValidityLabel(plan)} validity
+                          </div>
+                        )}
+                        {isSameProfilePlan(plan) && profile.subscriptionEndDate && (
+                          <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 700 }}>
+                            Valid Until: {fmtDate(profile.subscriptionEndDate)}
+                          </div>
+                        )}
                       </div>
-                      {getPlanValidityLabel(plan) && (
-                        <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
-                          {getPlanValidityLabel(plan)} validity
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: isFree ? "#64748B" : "#0F172A" }}>
+                          {isFree ? "Guest" : `₹${plan.discountPrice}`}
                         </div>
-                      )}
-                      {isSameProfilePlan(plan) && profile.subscriptionEndDate && (
-                        <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 700 }}>
-                          Valid Until: {fmtDate(profile.subscriptionEndDate)}
+                        <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${isSelected ? "#2563EB" : "#CBD5E1"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          {isSelected && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#2563EB" }} />}
                         </div>
-                      )}
+                      </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: isFree ? "#64748B" : "#0F172A" }}>
-                        {isFree ? "Guest" : `₹${plan.discountPrice}`}
-                      </div>
-                      <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${isSelected ? "#2563EB" : "#CBD5E1"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        {isSelected && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#2563EB" }} />}
-                      </div>
+                  );
+                })}
+                {subscriptionPaymentPending ? (
+                  <button
+                    onClick={handleRetrySubscriptionPayment}
+                    disabled={planSaving || !phoneIsValid}
+                    style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1 }}>
+                    {planSaving ? "Opening..." : "Retry Payment"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { const plan = [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId); if (!plan || currentPlanName?.toLowerCase() === plan.name.toLowerCase()) return; setSaveMsg("INFO::Plan change requires backend subscription plan IDs. Please contact support."); setTimeout(() => setSaveMsg(""), 5000); }}
+                    disabled={planSaving || !selectedPlanId || !canSelectProfilePlan([{ id: -1, name: "Elite", discountPrice: 999 }, { id: -2, name: "Pro", discountPrice: 499 }, { id: -3, name: "Guest", discountPrice: 0 }].find(p => p.id === selectedPlanId) || {})}
+                    style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: planSaving ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1 }}>
+                    {planSaving ? "Updating..." : "Change Plan"}
+                  </button>
+                )}
+                {profileSubscriptionActive && profile.subscriptionEndDate && (
+                  <div style={{ fontSize: 11, color: "#64748B", textAlign: "center", lineHeight: 1.45 }}>
+                    Price changes do not move your existing plan. Your selected plan remains valid until {fmtDate(profile.subscriptionEndDate)}.
+                  </div>
+                )}
+              </div>
+            ) : (
+              // Dynamic plans from backend
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 0, border: "1px solid #E2E8F0", borderRadius: 12, overflow: "hidden", background: "#F8FAFC" }}>
+                  <div style={{ padding: "14px 16px", borderRight: "1px solid #E2E8F0" }}>
+                    <div style={{ fontSize: 11, color: "#64748B", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>Current plan</div>
+                    <div style={{ marginTop: 5, fontSize: 16, color: "#0F172A", fontWeight: 900 }}>{currentPlanName || "Guest"}</div>
+                    {profileSubscriptionActive && profile.subscriptionEndDate && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 800 }}>Valid until {fmtDate(profile.subscriptionEndDate)}</div>
+                    )}
+                  </div>
+                  <div style={{ padding: "14px 16px", borderRight: "1px solid #E2E8F0", background: "#fff" }}>
+                    <div style={{ fontSize: 11, color: "#64748B", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>You paid</div>
+                    <div style={{ marginTop: 5, fontSize: 20, color: "#0F172A", fontWeight: 900 }}>{profilePaidAmountLabel}</div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>Locked for current validity</div>
+                  </div>
+                  <div style={{ padding: "14px 16px", background: "#fff" }}>
+                    <div style={{ fontSize: 11, color: "#64748B", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>You pay now</div>
+                    <div style={{ marginTop: 5, fontSize: 20, color: selectedProfileAmountDue > 0 ? "#2563EB" : "#64748B", fontWeight: 900 }}>
+                      {selectedProfilePlan && canSelectProfilePlan(selectedProfilePlan) ? `₹${selectedProfileAmountDue.toLocaleString("en-IN")}` : "-"}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
+                      {selectedProfilePlan && canSelectProfilePlan(selectedProfilePlan) ? `${selectedProfilePlan.name} ${getPlanValidityLabel(selectedProfilePlan)}` : "Select an upgrade"}
                     </div>
                   </div>
-                );
-              })}
-              {subscriptionPaymentPending ? (
-                <button
-                  onClick={handleRetrySubscriptionPayment}
-                  disabled={planSaving || !phoneIsValid}
-                  style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1 }}>
-                  {planSaving ? "Opening..." : "Retry Payment"}
-                </button>
-              ) : (
-                <button
-                  onClick={() => { const plan = [{ id: -1, name: "Elite" }, { id: -2, name: "Pro" }, { id: -3, name: "Guest" }].find(p => p.id === selectedPlanId); if (!plan || currentPlanName?.toLowerCase() === plan.name.toLowerCase()) return; setSaveMsg("INFO::Plan change requires backend subscription plan IDs. Please contact support."); setTimeout(() => setSaveMsg(""), 5000); }}
-                  disabled={planSaving || !selectedPlanId || !canSelectProfilePlan([{ id: -1, name: "Elite", discountPrice: 999 }, { id: -2, name: "Pro", discountPrice: 499 }, { id: -3, name: "Guest", discountPrice: 0 }].find(p => p.id === selectedPlanId) || {})}
-                  style={{ width: "100%", marginTop: 6, padding: "12px", borderRadius: 12, border: "none", background: planSaving ? "#93C5FD" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: planSaving ? 0.7 : 1 }}>
-                  {planSaving ? "Updating..." : "Change Plan"}
-                </button>
-              )}
-            </div>
-          ) : (
-            // Dynamic plans from backend
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {plans.map(plan => {
-                const isFree = plan.discountPrice === 0;
-                const isSelected = selectedPlanId === plan.id;
-                const canSelect = canSelectProfilePlan(plan);
-                const disabledReason = isFree
-                  ? "Guest plan cannot be selected after account creation."
-                  : isSameProfilePlan(plan)
-                    ? "Current plan"
-                    : "Only higher subscription plans can be selected.";
-                return (
-                  <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
-                    {isFree && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#E2E8F0", color: "#64748B", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 20, letterSpacing: "0.06em" }}>GUEST</div>}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</span>
-                        {!isFree && <span style={{ fontSize: 10, fontWeight: 700, background: "#DCFCE7", color: "#16A34A", border: "1px solid #86EFAC", padding: "2px 8px", borderRadius: 10 }}>PREMIUM</span>}
-                      </div>
-                      {getPlanValidityLabel(plan) && (
-                        <div style={{ marginTop: 4, fontSize: 11, color: "#64748B", fontWeight: 700 }}>
-                          {getPlanValidityLabel(plan)} validity
-                        </div>
-                      )}
-                      {isSameProfilePlan(plan) && profile.subscriptionEndDate && (
-                        <div style={{ marginTop: 4, fontSize: 11, color: "#16A34A", fontWeight: 700 }}>
-                          Valid Until: {fmtDate(profile.subscriptionEndDate)}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: isFree ? "#64748B" : "#0F172A" }}>
-                        {isFree ? "Guest" : `₹${plan.discountPrice}`}
-                      </div>
-                      <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${isSelected ? "#2563EB" : "#CBD5E1"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        {isSelected && <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#2563EB" }} />}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {/* Show current plan indicator text */}
-              {currentPlanName && (
-                <div style={{ fontSize: 12, color: "#64748B", textAlign: "center", padding: "4px 0" }}>
-                  Current plan: <strong style={{ color: "#0F172A" }}>{currentPlanName}</strong>
-                  {selectedPlanId != null && plans.find(p => p.id === selectedPlanId)?.name !== currentPlanName && (
-                    <span style={{ color: "#2563EB", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <ArrowRight size={12} />
-                      <span>{plans.find(p => p.id === selectedPlanId)?.name}</span>
-                    </span>
-                  )}
                 </div>
-              )}
-              {subscriptionPaymentPending ? (
-                <button
-                  onClick={handleRetrySubscriptionPayment}
-                  disabled={planSaving || !phoneIsValid}
-                  style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
-                  {planSaving ? "Opening..." : "Retry Payment"}
-                </button>
-              ) : (
-                <button
-                  onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
-                  disabled={planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})}
-                  style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
-                  {planSaving ? "Updating..." : "Change Plan"}
-                </button>
-              )}
-            </div>
-          )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
+                {plans.map(plan => {
+                  const isFree = plan.discountPrice === 0;
+                  const isSelected = selectedPlanId === plan.id;
+                  const canSelect = canSelectProfilePlan(plan);
+                  const payableAmount = getSubscriptionPayableAmount(profile, profileCurrentPlan, plan);
+                  const features = String(plan.features || "")
+                    .split("+")
+                    .map(feature => feature.trim())
+                    .filter(Boolean)
+                    .slice(0, 3);
+                  const disabledReason = isFree
+                    ? "Guest plan cannot be selected after account creation."
+                    : isSameProfilePlan(plan)
+                      ? "Current plan"
+                      : profileSubscriptionActive
+                        ? "Your current subscription stays active until its validity ends. Select only a higher-priced upgrade."
+                        : "Select a paid subscription plan.";
+                  return (
+                    <div key={plan.id} title={!canSelect ? disabledReason : undefined} onClick={() => { if (canSelect) setSelectedPlanId(plan.id); }}
+                      style={{ minHeight: 136, display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "14px 16px", borderRadius: 12, border: `2px solid ${isSelected ? "#2563EB" : "#E2E8F0"}`, background: isSelected ? "#EFF6FF" : "#fff", cursor: canSelect ? "pointer" : "not-allowed", opacity: canSelect || isSelected ? 1 : 0.62, transition: "all 0.2s", position: "relative" }}>
+                      {isSelected && <div style={{ position: "absolute", top: -9, right: 14, width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#2563EB,#DB2777)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 14px rgba(37,99,235,0.28)" }}><CheckCircle size={16} /></div>}
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 900, color: isFree ? "#64748B" : "#0284C7", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                          {isSameProfilePlan(plan) ? "Current plan" : isFree ? "Guest access" : "Upgrade to"}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 17, fontWeight: 900, color: isSelected ? "#2563EB" : "#0F172A" }}>{plan.name}</div>
+                        <div style={{ marginTop: 8, display: "flex", alignItems: "baseline", gap: 5 }}>
+                          <span style={{ fontSize: 24, lineHeight: 1, fontWeight: 900, color: isFree ? "#64748B" : "#0F172A" }}>{isFree ? "Free" : `₹${Number(plan.discountPrice || 0).toLocaleString("en-IN")}`}</span>
+                          {!isFree && getPlanValidityLabel(plan) && <span style={{ fontSize: 11, color: "#475569", fontWeight: 800 }}>/{getPlanValidityLabel(plan)}</span>}
+                        </div>
+                        {!isFree && plan.originalPrice > plan.discountPrice && (
+                          <div style={{ marginTop: 5, fontSize: 12, color: "#64748B", fontWeight: 800 }}>
+                            <span style={{ textDecoration: "line-through" }}>₹{plan.originalPrice.toLocaleString("en-IN")}</span>
+                            <span style={{ color: "#0284C7", marginLeft: 6 }}>₹{(plan.originalPrice - plan.discountPrice).toLocaleString("en-IN")} off</span>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 12, borderTop: "1px solid #E2E8F0", paddingTop: 10 }}>
+                        {features.length > 0 ? features.map(feature => (
+                          <div key={feature} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475569", fontWeight: 700, marginTop: 4 }}>
+                            <CheckCircle size={12} color="#16A34A" /> <span>{feature}</span>
+                          </div>
+                        )) : (
+                          <div style={{ fontSize: 11, color: "#64748B", fontWeight: 700 }}>{getPlanValidityLabel(plan) || "Subscription access"}</div>
+                        )}
+                        {canSelect && profileSubscriptionActive && (
+                          <div style={{ marginTop: 8, fontSize: 11, color: "#2563EB", fontWeight: 900 }}>Pay now ₹{payableAmount.toLocaleString("en-IN")}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                </div>
+                {/* Show current plan indicator text */}
+                {currentPlanName && (
+                  <div style={{ fontSize: 12, color: "#64748B", textAlign: "center", padding: "4px 0" }}>
+                    Current plan: <strong style={{ color: "#0F172A" }}>{currentPlanName}</strong>
+                    {selectedPlanId != null && plans.find(p => p.id === selectedPlanId)?.name !== currentPlanName && (
+                      <span style={{ color: "#2563EB", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <ArrowRight size={12} />
+                        <span>{plans.find(p => p.id === selectedPlanId)?.name}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+                {subscriptionPaymentPending ? (
+                  <button
+                    onClick={handleRetrySubscriptionPayment}
+                    disabled={planSaving || !phoneIsValid}
+                    style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
+                    {planSaving ? "Opening..." : "Retry Payment"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { if (selectedPlanId != null) handleChangePlan(selectedPlanId); }}
+                    disabled={planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})}
+                    style={{ width: "100%", marginTop: 2, padding: "12px", borderRadius: 12, border: "none", background: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#E2E8F0" : "linear-gradient(135deg,#2563EB,#1D4ED8)", color: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "#94A3B8" : "#fff", fontSize: 14, fontWeight: 700, cursor: (planSaving || !phoneIsValid || selectedPlanId == null || !canSelectProfilePlan(plans.find(p => p.id === selectedPlanId) || {})) ? "not-allowed" : "pointer", opacity: planSaving ? 0.7 : 1, transition: "all 0.2s" }}>
+                    {planSaving ? "Updating..." : "Change Plan"}
+                  </button>
+                )}
+                {profileSubscriptionActive && profile.subscriptionEndDate && (
+                  <div style={{ fontSize: 11, color: "#64748B", textAlign: "center", lineHeight: 1.45 }}>
+                    Price changes do not move your existing plan. Your selected plan remains valid until {fmtDate(profile.subscriptionEndDate)}.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
       )}
 
       {(profile.incomes?.length || profile.expenses?.length) ? (
@@ -2569,7 +2839,7 @@ export default function UserPage() {
 
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [bookingFilter, setBookingFilter] = useState<"UPCOMING" | "HISTORY">("UPCOMING");
+  const [bookingFilter, setBookingFilter] = useState<"UPCOMING" | "HISTORY" | "CANCELLED">("UPCOMING");
   const [showCalendarPopup, setShowCalendarPopup] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() }; });
   const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
@@ -2588,6 +2858,7 @@ export default function UserPage() {
   const [userRecentTickets, setUserRecentTickets] = useState<any[]>([]);
 
   const [showModal, setShowModal] = useState(false);
+  const [showTodaySpecialBookingAlert, setShowTodaySpecialBookingAlert] = useState(false);
   const [selectedConsultant, setSelectedConsultant] = useState<Consultant | null>(null);
   const [dbTimeslots, setDbTimeslots] = useState<TimeSlotRecord[]>([]);
   const [bookedSlotSet, setBookedSlotSet] = useState<Set<string>>(new Set());
@@ -3219,6 +3490,13 @@ export default function UserPage() {
       const specialMeta = resolveSpecialBookingMeta(b);
       const hasAssignedSpecialSlot = specialBookingHasAssignedSlot(specialMeta);
       if (status === "COMPLETED" || status === "CANCELLED") return false;
+      if (status === "PENDING") {
+        const payStatus = String(b.paymentStatus || (b as any).payment_status || "").toUpperCase();
+        if ((payStatus === "FAILED" || payStatus === "CANCELLED") && Number(b.amount || 0) > 0) {
+          return false;
+        }
+      }
+      if (specialMeta && !hasAssignedSpecialSlot) return true;
       const chronology = getBookingChronologyTarget(b);
       const bookingForTime = chronology.date || chronology.time
         ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
@@ -3233,6 +3511,7 @@ export default function UserPage() {
       const specialMeta = resolveSpecialBookingMeta(b);
       const hasAssignedSpecialSlot = specialBookingHasAssignedSlot(specialMeta);
       if (status === "COMPLETED" || status === "CANCELLED") return true;
+      if (specialMeta && !hasAssignedSpecialSlot) return false;
       const chronology = getBookingChronologyTarget(b);
       const bookingForTime = chronology.date || chronology.time
         ? { ...b, slotDate: chronology.date, bookingDate: chronology.date, timeRange: chronology.time, slotTime: chronology.time }
@@ -3241,7 +3520,14 @@ export default function UserPage() {
     })
     .slice()
     .sort(compareBookingsChronologically);
-  const displayedBookings = bookingFilter === "UPCOMING" ? upcomingBookings : historyBookings;
+  const cancelledBookings = bookings
+    .filter(b => {
+      const status = getBookingLifecycleStatus(b);
+      return status === "CANCELLED";
+    })
+    .slice()
+    .sort(compareBookingsChronologically);
+  const displayedBookings = bookingFilter === "UPCOMING" ? upcomingBookings : bookingFilter === "CANCELLED" ? cancelledBookings : historyBookings;
 
   const ticketCounts = {
     ALL: tickets.length,
@@ -3467,6 +3753,7 @@ export default function UserPage() {
           amount: Number(b.amount ?? b.totalAmount ?? b.total_amount ?? 0),
           meetingMode: b.meetingMode || b.meeting_mode || b.mode || "",
           BookingStatus,
+          paymentStatus: String(b.paymentStatus || (b as any).payment_status || "").toUpperCase(),
         };
       });
 
@@ -3474,6 +3761,7 @@ export default function UserPage() {
         const slots = Math.max(1, Number(b.numberOfSlots || b.hours || 1));
         const rawStatus = String(b.status || b.specialBookingStatus || "REQUESTED").toUpperCase();
         const parsedMeta = parseSpecialBookingMeta(b.userNotes) || getDedicatedSpecialMeta(b);
+        const hasScheduledSpecialSlot = rawStatus === "SCHEDULED" || rawStatus === "CONFIRMED" || rawStatus === "COMPLETED";
         const preferredDate = parsedMeta?.preferredDate || b.preferredDate || b.preferred_date || "";
         const preferredTime = parsedMeta?.preferredTime || b.preferredTime || b.preferred_time || "";
         const preferredTimeRange = parsedMeta?.preferredTimeRange || b.preferredTimeRange || b.preferred_time_range || "";
@@ -3482,12 +3770,10 @@ export default function UserPage() {
           typeof scheduledTimeRaw === "object" && scheduledTimeRaw?.hour !== undefined
             ? `${String(scheduledTimeRaw.hour).padStart(2, "0")}:${String(scheduledTimeRaw.minute ?? 0).padStart(2, "0")}`
             : String(scheduledTimeRaw).substring(0, 5);
-        const scheduledDate = b.scheduledDate || b.scheduled_date || preferredDate || "";
+        const scheduledDate = hasScheduledSpecialSlot ? (b.scheduledDate || b.scheduled_date || parsedMeta?.scheduledDate || "") : "";
         const scheduledTimeRange =
           b.scheduledTimeRange ||
-          b.timeRange ||
-          preferredTimeRange ||
-          (scheduledTime ? formatSpecialTimeRange(scheduledTime, slots) : (preferredTime ? formatSpecialTimeRange(preferredTime, slots) : ""));
+          (scheduledTime ? (b.timeRange || formatSpecialTimeRange(scheduledTime, slots)) : "");
 
         const BookingStatus =
           (rawStatus === "SCHEDULED" || rawStatus === "CONFIRMED")
@@ -3512,15 +3798,16 @@ export default function UserPage() {
           isSpecialBooking: true,
           consultantName: consultantName || "Loading...",
           amount: Number(b.totalAmount ?? b.total_amount ?? 0),
-          slotDate: scheduledDate,
-          slotTime: scheduledTime || preferredTime,
-          timeRange: scheduledTimeRange,
+          slotDate: scheduledDate || preferredDate,
+          slotTime: hasScheduledSpecialSlot ? scheduledTime : preferredTime,
+          timeRange: hasScheduledSpecialSlot ? scheduledTimeRange : preferredTimeRange,
           meetingMode: b.meetingMode || b.meeting_mode || "ONLINE",
           BookingStatus,
           specialBookingStatus: rawStatus,
           numberOfSlots: slots,
           scheduledDate,
-          scheduledTime: scheduledTime || preferredTime,
+          scheduledTime: hasScheduledSpecialSlot ? scheduledTime : "",
+          paymentStatus: String(b.paymentStatus || (b as any).payment_status || "").toUpperCase(),
         };
       });
 
@@ -4362,9 +4649,17 @@ export default function UserPage() {
       setDayOffset(firstDayIndex >= 0 ? Math.min(firstDayIndex, Math.max(0, bookingCalendarDays.length - VISIBLE_DAYS)) : 0);
 
       if (firstSpecialDay) {
-        setBookingMode("SPECIAL");
-        setSelectedSlot(null);
-        setSpecialBookingHours(1);
+        const todayIso = toIsoDateLocal(new Date());
+        if (firstBookableDay.iso === todayIso) {
+          setShowTodaySpecialBookingAlert(true);
+          setBookingMode("STANDARD");
+          setSelectedSlot(null);
+          setSpecialBookingHours(1);
+        } else {
+          setBookingMode("SPECIAL");
+          setSelectedSlot(null);
+          setSpecialBookingHours(1);
+        }
       } else if (firstDaySlots[0]) {
         setBookingMode("STANDARD");
         // FIX: Do not auto-select the first slot. Set selectedSlot to null to force manual selection.
@@ -4459,26 +4754,28 @@ export default function UserPage() {
           setConfirming(false);
           return;
         }
+        if (hasFixedSpecialSlots && selectedFixedSpecialSlotBlocked) {
+          showToast("Please select an available special slot. Booked slots cannot be requested again.");
+          setConfirming(false);
+          return;
+        }
+        if (selectedNumberedSpecialSlotBlocked) {
+          showToast(`Slot ${effectiveSpecialBookingHours} is already booked. Please choose another available slot.`);
+          setConfirming(false);
+          return;
+        }
 
         const consultant = selectedConsultant;
         const selectedOffer = selectedOfferId ? consultantOffers.find(o => o.id === selectedOfferId) : null;
         const slotCount = Math.max(1, effectiveSpecialBookingHours);
         // Always charge 1 session fee regardless of how many slots are requested
         const combinedBaseAmount = isAdminMember ? 0 : consultant.fee; // 1 session only (free for admin members)
-        const preferredTimeRange = specialDurationLabel;
-        const preferredTime = specialStartTime || undefined;
-        const specialMeta: SpecialBookingMeta = {
-          kind: "SPECIAL_BOOKING",
-          version: 1,
-          hours: Math.max(1, Math.round(consultantSlotMinutes / 60)), // per-slot duration, not multiplied
-          slotNumber: slotCount,   // which slot number was selected (1, 2, 3...)
-          requestNotes: notes,
-          requestedMeetingMode: meetingMode,
-          status: "REQUESTED",
-          preferredDate: selectedDay.iso,
-          preferredTime,
-          preferredTimeRange,
-        };
+        const preferredTimeRange = hasFixedSpecialSlots && selectedSlot
+          ? (selectedSlot.label || specialDurationLabel)
+          : specialDurationLabel;
+        const preferredTime = hasFixedSpecialSlots && selectedSlot
+          ? selectedSlot.start24h
+          : (specialStartTime || undefined);
 
         const payableSessionAmount = isAdminMember
           ? 0
@@ -4488,8 +4785,8 @@ export default function UserPage() {
           durationInHours: slotCount,         // backend: SpecialBookingRequest.durationInHours
           sessionAmount: payableSessionAmount, // backend free path is required for fully-discounted offers
           meetingMode,
-          userNotes: notes || "Special booking request",
-          requestNotes: notes || "Special booking request",
+          userNotes: notes,
+          requestNotes: notes,
           preferredDate: selectedDay.iso,
           preferredTime,
           preferredTimeRange,
@@ -4657,7 +4954,7 @@ export default function UserPage() {
         baseAmount: payableBaseAmount,
         originalAmount: isAdminMember ? 0 : selectedConsultant!.fee,
         meetingMode,
-        userNotes: userNotes || "Booked via app",
+        userNotes: userNotes.trim(),
       };
       if (!isAdminMember && selectedOfferId != null) payload.offerId = selectedOfferId;
 
@@ -4714,7 +5011,7 @@ export default function UserPage() {
         timeSlotIds: resolvedSlots.map(s => s.timeSlotId),
         baseAmountPerSlot: payableBaseAmount,
         meetingMode,
-        userNotes: userNotes || "Booked via app",
+        userNotes: userNotes.trim(),
       };
       if (!isAdminMember && selectedOfferId != null) payload.offerId = selectedOfferId;
 
@@ -4970,6 +5267,27 @@ export default function UserPage() {
         })
     ]
   );
+  const selectedFixedSpecialSlot = hasFixedSpecialSlots && selectedSlot
+    ? selectedSpecialDaySlots.find(slot => slot.slotTime === selectedSlot.start24h)
+    : null;
+  const selectedFixedSpecialSlotKey = selectedFixedSpecialSlot && selectedSlot
+    ? `${selectedDay.iso}|${selectedSlot.start24h}`
+    : "";
+  const selectedFixedSpecialSlotStatus = String(selectedFixedSpecialSlot?.status || "").toUpperCase();
+  const selectedFixedSpecialSlotBlocked = hasFixedSpecialSlots && (
+    !selectedSlot ||
+    !selectedFixedSpecialSlot ||
+    selectedFixedSpecialSlotStatus === "BOOKED" ||
+    selectedFixedSpecialSlotStatus === "UNAVAILABLE" ||
+    (selectedFixedSpecialSlotStatus && selectedFixedSpecialSlotStatus !== "AVAILABLE") ||
+    (selectedFixedSpecialSlotKey ? bookedSlotSet.has(selectedFixedSpecialSlotKey) : false)
+  );
+  const selectedNumberedSpecialSlotBlocked = bookingMode === "SPECIAL" &&
+    !hasFixedSpecialSlots &&
+    !isFreeFlowingSpecialDay &&
+    bookedSpecialSlotCounts.has(effectiveSpecialBookingHours);
+  const specialBookingBlocked = bookingMode === "SPECIAL" &&
+    (selectedFixedSpecialSlotBlocked || selectedNumberedSpecialSlotBlocked);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -5335,9 +5653,9 @@ export default function UserPage() {
             </div>
             {/* Upcoming / History toggle */}
             <div style={{ display: "flex", gap: 8, marginBottom: 20, alignItems: "center" }}>
-              {(["UPCOMING", "HISTORY"] as const).map(f => (
-                <button key={f} onClick={() => setBookingFilter(f)} style={{ padding: "8px 20px", borderRadius: 20, border: "1.5px solid", borderColor: bookingFilter === f ? "#2563EB" : "#E2E8F0", background: bookingFilter === f ? "#2563EB" : "#fff", color: bookingFilter === f ? "#fff" : "#64748B", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                  {f === "UPCOMING" ? <><Calendar size={13} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />Upcoming ({upcomingBookings.length})</> : <><Clock size={13} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />History ({historyBookings.length})</>}
+              {(["UPCOMING", "HISTORY", "CANCELLED"] as const).map(f => (
+                <button key={f} onClick={() => setBookingFilter(f)} style={{ padding: "8px 20px", borderRadius: 20, border: "1.5px solid", borderColor: bookingFilter === f ? (f === "CANCELLED" ? "#DC2626" : "#2563EB") : "#E2E8F0", background: bookingFilter === f ? (f === "CANCELLED" ? "#DC2626" : "#2563EB") : "#fff", color: bookingFilter === f ? "#fff" : "#64748B", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  {f === "UPCOMING" ? <><Calendar size={13} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />Upcoming ({upcomingBookings.length})</> : f === "CANCELLED" ? <><XCircle size={13} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />Cancelled ({cancelledBookings.length})</> : <><Clock size={13} style={{ display: "inline", marginRight: 4, verticalAlign: "middle" }} />History ({historyBookings.length})</>}
                 </button>
               ))}
               {/* Calendar View Button */}
@@ -5494,8 +5812,8 @@ export default function UserPage() {
               </div>
             ) : displayedBookings.length === 0 ? (
               <div className="up-empty-state">
-                <div style={{ fontSize: 36, marginBottom: 12, display: "flex", justifyContent: "center" }}>{bookingFilter === "UPCOMING" ? <Calendar size={36} color="#CBD5E1" strokeWidth={1.5} /> : <Clock size={36} color="#CBD5E1" strokeWidth={1.5} />}</div>
-                <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>{bookingFilter === "UPCOMING" ? "No upcoming bookings." : "No past bookings yet."}</p>
+                <div style={{ fontSize: 36, marginBottom: 12, display: "flex", justifyContent: "center" }}>{bookingFilter === "UPCOMING" ? <Calendar size={36} color="#CBD5E1" strokeWidth={1.5} /> : bookingFilter === "CANCELLED" ? <XCircle size={36} color="#CBD5E1" strokeWidth={1.5} /> : <Clock size={36} color="#CBD5E1" strokeWidth={1.5} />}</div>
+                <p style={{ margin: 0, fontWeight: 600, color: "#64748B" }}>{bookingFilter === "UPCOMING" ? "No upcoming bookings." : bookingFilter === "CANCELLED" ? "No cancelled bookings." : "No past bookings yet."}</p>
                 {bookingFilter === "UPCOMING" && <p style={{ margin: "6px 0 0", fontSize: 13, color: "#94A3B8" }}>Pick a consultant from the Consultants tab and use the published availability.</p>}
               </div>
             ) : (
@@ -5563,17 +5881,11 @@ export default function UserPage() {
                             // Calculate how long until session starts
                             const dateStr = bookingForTime.slotDate || bookingForTime.bookingDate || "";
                             const timeStr = bookingForTime.timeRange || bookingForTime.slotTime || "";
-                            const startMatch = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+                            const window = getBookingTimeWindow(dateStr, timeStr, Number((bookingForTime as any)?.durationMinutes || 60));
                             let countdownLabel = "";
-                            if (startMatch && dateStr) {
+                            if (window) {
                               try {
-                                let sh = parseInt(startMatch[1]);
-                                const sm = parseInt(startMatch[2] || "0");
-                                const ap = (startMatch[3] || "").toUpperCase();
-                                if (ap === "PM" && sh !== 12) sh += 12;
-                                if (ap === "AM" && sh === 12) sh = 0;
-                                const sessionStart = new Date(`${dateStr}T${String(sh).padStart(2, "0")}:${String(sm).padStart(2, "0")}:00`);
-                                const minsUntil = Math.ceil((sessionStart.getTime() - now.getTime()) / 60000);
+                                const minsUntil = Math.ceil((window.start.getTime() - now.getTime()) / 60000);
                                 if (minsUntil > 60) {
                                   const h = Math.floor(minsUntil / 60), m = minsUntil % 60;
                                   countdownLabel = ` · starts in ${h}h ${m > 0 ? `${m}m` : ""}`.trim();
@@ -6159,50 +6471,6 @@ export default function UserPage() {
                   </div>
                 </div>
 
-                {/* Privacy toggles */}
-                <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-                  <div style={{ padding: "14px 20px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.05em" }}>Privacy</div>
-                  </div>
-                  {[
-                    {
-                      key: "profileVisible",
-                      icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16A34A" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>,
-                      bg: "#F0FDF4",
-                      label: "Public Profile",
-                      desc: "Allow consultants to see your profile details",
-                    },
-                    {
-                      key: "activityVisible",
-                      icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>,
-                      bg: "#EFF6FF",
-                      label: "Activity Visibility",
-                      desc: "Show your booking activity to your consultants",
-                    },
-                  ].map(({ key, icon, bg, label, desc }) => {
-                    const isOn = privacyPrefs[key as keyof typeof privacyPrefs] as boolean;
-                    return (
-                      <div key={key} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 20px", borderBottom: "1px solid #F1F5F9" }}>
-                        <div style={{ width: 38, height: 38, borderRadius: 10, background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>{label}</div>
-                          <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>{desc}</div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const updated = { ...privacyPrefs, [key]: !isOn };
-                            setPrivacyPrefs(updated);
-                            try { localStorage.setItem("fin_privacy_prefs", JSON.stringify(updated)); } catch { }
-                          }}
-                          style={{ position: "relative", width: 44, height: 24, borderRadius: 12, border: "none", background: isOn ? "#16A34A" : "#CBD5E1", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}
-                        >
-                          <span style={{ position: "absolute", top: 3, left: isOn ? 23 : 3, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.15)" }} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-
                 {/* Security section - Change Password only */}
                 <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #E2E8F0", overflow: "hidden", marginBottom: 16, boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
                   <div style={{ padding: "14px 20px", background: "#F8FAFC", borderBottom: "1px solid #E2E8F0" }}>
@@ -6443,8 +6711,6 @@ export default function UserPage() {
                 </div>
               ) : (
                 <>
-                  {/* About This Consultant section removed - info shown on consultant card */}
-
                   <div style={{ marginBottom: 20, padding: "16px 18px", borderRadius: 14, background: "#F8FAFC", border: "1px solid #E2E8F0" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
                       <div>
@@ -6508,7 +6774,7 @@ export default function UserPage() {
                             const status = String(slot.status || "AVAILABLE").toUpperCase();
                             return status === "AVAILABLE" && !bookedSlotSet.has(`${d.iso}|${start}`);
                           });
-                          const isUnavailableDay = !isSpecialDay && !firstSlot;
+                          const isUnavailableDay = !isSpecialDay && daySlots.length === 0;
                           return (
                             <button
                               key={d.iso}
@@ -6520,6 +6786,15 @@ export default function UserPage() {
                                   : "Available sessions"}
                               onClick={() => {
                                 if (isUnavailableDay) return;
+                                const todayIso = toIsoDateLocal(new Date());
+                                if (d.iso === todayIso && isSpecialDay) {
+                                  setShowTodaySpecialBookingAlert(true);
+                                  setSelectedDay(d);
+                                  setBookingMode("STANDARD");
+                                  setSelectedSlot(null);
+                                  setSpecialBookingHours(1);
+                                  return;
+                                }
                                 setSelectedDay(d);
                                 if (isSpecialDay) {
                                   setBookingMode("SPECIAL");
@@ -6836,7 +7111,7 @@ export default function UserPage() {
                                 No offer - Pay full price
                               </span>
                             </div>
-                            <span style={{ fontSize: 14, fontWeight: 800, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>₹{calcBookingQuote(selectedConsultant.fee, 1).total.toLocaleString()}</span>
+                            <span style={{ fontSize: 14, fontWeight: 800, color: selectedOfferId === null ? "#1E40AF" : "#374151" }}>₹{calcBookingQuote(selectedConsultant.fee, 1).total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </label>
 
                           {/* Available offers */}
@@ -6905,7 +7180,7 @@ export default function UserPage() {
                                         display: "inline-flex", alignItems: "center", gap: 4,
                                         background: "#DCFCE7", padding: "2px 8px", borderRadius: 20
                                       }}>
-                                        Save ₹{savings.toLocaleString()}
+                                        Save ₹{savings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                       </div>
                                     )}
                                     {isUsed && (
@@ -6915,8 +7190,8 @@ export default function UserPage() {
                                     )}
                                   </div>
                                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                                    {savings > 0 && <div style={{ fontSize: 11, color: "#94A3B8", textDecoration: "line-through" }}>₹{fullPrice.toLocaleString()}</div>}
-                                    <div style={{ fontSize: 15, fontWeight: 800, color: isUsed ? "#92400E" : isSelected ? "#16A34A" : "#0F172A" }}>₹{offerPrice.toLocaleString()}</div>
+                                    {savings > 0 && <div style={{ fontSize: 11, color: "#94A3B8", textDecoration: "line-through" }}>₹{fullPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>}
+                                    <div style={{ fontSize: 15, fontWeight: 800, color: isUsed ? "#92400E" : isSelected ? "#16A34A" : "#0F172A" }}>₹{offerPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                                   </div>
                                 </label>
                               );
@@ -6956,8 +7231,8 @@ export default function UserPage() {
                         grandTotal = standardQuote.total;
                       }
                       const sessionFeeDisplay = bookingMode === "SPECIAL"
-                        ? rawBase
-                        : standardFullQuote.baseAmount;
+                        ? (rawBase + (calcSpecialBookingQuote(rawBase, 1).additionalCharges))
+                        : (standardFullQuote.baseAmount + standardFullQuote.additionalCharges);
                       const displaySlots: { dayLabel: string; label: string }[] = [
                         {
                           dayLabel: `${selectedDay.date} ${selectedDay.month}`,
@@ -6999,7 +7274,7 @@ export default function UserPage() {
                                   ? <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6, fontWeight: 400 }}>(1 session)</span>
                                   : sessionsBooked > 1 ? ` × ${sessionsBooked}` : ""}
                               </span>
-                              <span style={{ fontWeight: 600 }}>₹{sessionFeeDisplay.toLocaleString()}</span>
+                              <span style={{ fontWeight: 600 }}>₹{sessionFeeDisplay.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </div>
 
                             {/* Offer Discount row */}
@@ -7009,7 +7284,7 @@ export default function UserPage() {
                                   <span style={{ background: "#DCFCE7", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>OFFER</span>
                                   {offer.title}
                                 </span>
-                                <span>-₹{discountAmt.toLocaleString()}</span>
+                                <span>-₹{discountAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                             )}
                           </div>
@@ -7018,14 +7293,14 @@ export default function UserPage() {
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "2px solid #CBD5E1" }}>
                             <span style={{ fontSize: 15, fontWeight: 800, color: "#0F172A" }}>Total{bookingMode === "SPECIAL" ? "" : sessionsBooked > 1 ? ` (${sessionsBooked} sessions)` : ""}</span>
                             <span style={{ fontSize: 20, fontWeight: 800, color: "#2563EB", display: "flex", alignItems: "baseline", gap: 2 }}>
-                              <span style={{ fontSize: 14 }}>₹</span>{grandTotal.toLocaleString()}
+                              <span style={{ fontSize: 14 }}>₹</span>{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
 
                           {/* Savings banner */}
                           {offer && discountAmt > 0 && (
                             <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "linear-gradient(135deg, #DCFCE7 0%, #BBF7D0 100%)", border: "1px solid #86EFAC", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#166534" }}>
-                              <Zap size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />You're saving ₹{discountAmt.toLocaleString()} with this offer!
+                              <Zap size={13} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} />You're saving ₹{discountAmt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} with this offer!
                             </div>
                           )}
                         </div>
@@ -7035,13 +7310,14 @@ export default function UserPage() {
 
                   {/* ── Confirm & Pay / Book button ── */}
                   <button
-                    disabled={confirming || (bookingMode !== "SPECIAL" && !selectedSlot) || (bookingMode === "SPECIAL" && !userNotes.trim())}
+                    disabled={confirming || (bookingMode !== "SPECIAL" && !selectedSlot) || (bookingMode === "SPECIAL" && (!userNotes.trim() || specialBookingBlocked))}
                     onClick={handleConfirm}
-                    className={`up-proceed-btn ${(bookingMode === "SPECIAL" || selectedSlot) && !confirming && (bookingMode !== "SPECIAL" || userNotes.trim()) ? "up-proceed-btn-active" : ""}`}
+                    className={`up-proceed-btn ${(bookingMode === "SPECIAL" || selectedSlot) && !confirming && (bookingMode !== "SPECIAL" || (userNotes.trim() && !specialBookingBlocked)) ? "up-proceed-btn-active" : ""}`}
                   >
                     {confirming ? (bookingMode === "SPECIAL" ? "Sending Request..." : isAdminMember ? "Booking..." : "Processing Payment...") : (() => {
                       if (bookingMode !== "SPECIAL" && !selectedSlot) return "Select an available slot";
                       if (bookingMode === "SPECIAL" && !userNotes.trim()) return "Enter requirement notes to continue";
+                      if (bookingMode === "SPECIAL" && specialBookingBlocked) return "Select an available special slot";
                       if (isAdminMember) {
                         return bookingMode === "SPECIAL"
                           ? "Send Special Booking Request (Free)"
@@ -7053,8 +7329,8 @@ export default function UserPage() {
                         ? calcSpecialBookingQuote(selectedConsultant.fee, count, offerSel).total
                         : calcBookingQuote(selectedConsultant.fee, count, offerSel).total;
                       return bookingMode === "SPECIAL"
-                        ? `Send Special Booking Request ₹${gTotal.toLocaleString()}`
-                        : `Confirm & Pay ₹${gTotal.toLocaleString()}`;
+                        ? `Send Special Booking Request ₹${gTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : `Confirm & Pay ₹${gTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
                     })()}
                   </button>
                 </>
@@ -7125,6 +7401,118 @@ export default function UserPage() {
                   : feedbackModal.existingFeedback ? "Update Feedback" : "Submit Feedback"}
               </button>
               {feedbackRating === 0 && <p style={{ textAlign: "center", fontSize: 12, color: "#94A3B8", margin: "10px 0 0" }}>Please select a star rating to continue</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* == TODAY SPECIAL BOOKING ALERT MODAL == */}
+      {showTodaySpecialBookingAlert && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15, 23, 42, 0.62)",
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+          backdropFilter: "blur(8px)"
+        }} onClick={() => setShowTodaySpecialBookingAlert(false)}>
+          <div style={{
+            background: "#fff",
+            borderRadius: 20,
+            width: "100%",
+            maxWidth: 460,
+            boxShadow: "0 28px 70px rgba(15, 23, 42, 0.28)",
+            overflow: "hidden",
+            border: "1px solid #D8E5F0"
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{
+              background: "linear-gradient(135deg, #0F766E 0%, #2563EB 100%)",
+              padding: "24px 24px 22px",
+              position: "relative",
+              color: "#fff"
+            }}>
+              <button
+                onClick={() => setShowTodaySpecialBookingAlert(false)}
+                aria-label="Close special booking notice"
+                style={{
+                  position: "absolute",
+                  top: 14,
+                  right: 14,
+                  width: 30,
+                  height: 30,
+                  borderRadius: "50%",
+                  border: "none",
+                  background: "rgba(255,255,255,0.16)",
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={17} />
+              </button>
+              <div style={{
+                width: 50,
+                height: 50,
+                borderRadius: 14,
+                background: "rgba(255, 255, 255, 0.18)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 14,
+                boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.22)"
+              }}>
+                <Calendar size={25} />
+              </div>
+              <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: "#BFDBFE" }}>Today only</p>
+              <h3 style={{ fontSize: 21, fontWeight: 800, margin: 0, lineHeight: 1.25 }}>Special booking is unavailable today</h3>
+            </div>
+            <div style={{ padding: 24 }}>
+              <div style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "flex-start",
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: "#EFF6FF",
+                border: "1px solid #BFDBFE",
+                marginBottom: 16,
+              }}>
+                <Info size={17} color="#2563EB" style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontSize: 12, lineHeight: 1.55, color: "#1E3A8A", fontWeight: 700 }}>
+                  We are not enabling special booking requests for today.
+                </div>
+              </div>
+              <p style={{
+                fontSize: 15,
+                lineHeight: 1.6,
+                color: "#475569",
+                margin: "0 0 18px",
+                fontWeight: 500
+              }}>
+                Because the consultant is unavailable on this working day, a special booking request cannot be created for today. Please choose another available date.
+              </p>
+              <button
+                onClick={() => setShowTodaySpecialBookingAlert(false)}
+                style={{
+                  width: "100%",
+                  padding: "12px 24px",
+                  background: "linear-gradient(135deg,#0F766E,#2563EB)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  fontSize: 15,
+                  cursor: "pointer",
+                  fontFamily: "inherit"
+                }}
+              >
+                Choose another date
+              </button>
             </div>
           </div>
         </div>
