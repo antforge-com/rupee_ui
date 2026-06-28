@@ -156,8 +156,10 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
   };
 
   const handleResetPassword = async () => {
-    if (!otp || otp.length !== 6) { setError("Please enter the 6-digit OTP."); return; }
-    if (!newPassword || newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (!otp || otp.length !== 6) { setError(otp ? "OTP must be exactly 6 digits." : "OTP is required. Please enter the 6-digit code."); return; }
+    if (!newPassword) { setError("New password is required."); return; }
+    if (newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (!confirmPass) { setError("Please confirm your new password."); return; }
     if (newPassword !== confirmPass) { setError("Passwords do not match."); return; }
     setLoading(true); setError("");
     try {
@@ -260,7 +262,7 @@ const ResetPasswordPage: React.FC<{ initialEmail?: string; onBackToLogin: () => 
             )}
             {error && <div className="error-banner" style={{ marginTop: 12 }}><AlertTriangle size={16} /> {error}</div>}
             <button onClick={handleResetPassword}
-              disabled={loading || otp.length !== 6 || !newPassword || newPassword.length < 8 || newPassword !== confirmPass}
+              disabled={loading}
               className="btn-primary" style={{ width: "100%", marginTop: 24 }}>
               {loading ? "Verifying..." : "Verify OTP & Reset Password"}
             </button>
@@ -305,6 +307,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState("");
   const [errorType, setErrorType] = useState<ErrorType>("");
+  const [fieldErrors, setFieldErrors] = useState<{ cred?: string; pass?: string }>({});
   const [slowAuthHint, setSlowAuthHint] = useState(false);
 
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -403,11 +406,16 @@ export default function LoginPage() {
   };
 
   const handleLogin = async () => {
-    if (!cred.trim() || !pass.trim()) {
-      setApiError("Please enter your email and password.");
+    const errs: { cred?: string; pass?: string } = {};
+    if (!cred.trim()) errs.cred = "Email or mobile number is required";
+    if (!pass.trim()) errs.pass = "Password is required";
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      setApiError("Please fill in all required fields.");
       setErrorType("auth");
       return;
     }
+    setFieldErrors({});
     if (!termsAccepted) { shakeTerms(); return; }
 
     setLoading(true);
@@ -532,24 +540,34 @@ export default function LoginPage() {
           <label className="label-base">EMAIL OR MOBILE</label>
           <input
             value={cred}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setCred(e.target.value); setApiError(""); setErrorType(""); }}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setCred(e.target.value); setApiError(""); setErrorType(""); setFieldErrors(f => ({ ...f, cred: "" })); }}
             onKeyDown={handleKeyDown}
             placeholder="Enter your email or mobile"
             type="text"
-            className={`input-base ${apiError && errorType === "auth" ? "input-error" : ""}`}
+            className={`input-base ${(fieldErrors.cred || (apiError && errorType === "auth")) ? "input-error" : ""}`}
             autoComplete="off"
           />
+          {fieldErrors.cred && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--color-danger)", fontWeight: 600 }}>
+              <AlertTriangle size={13} /> {fieldErrors.cred}
+            </div>
+          )}
         </div>
 
         <div className="auth-input-group">
           <label className="label-base">PASSWORD</label>
           <PasswordInput
             value={pass}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setPass(e.target.value); setApiError(""); setErrorType(""); }}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setPass(e.target.value); setApiError(""); setErrorType(""); setFieldErrors(f => ({ ...f, pass: "" })); }}
             onKeyDown={handleKeyDown}
             placeholder="********"
-            hasError={!!(apiError && errorType === "auth")}
+            hasError={!!(fieldErrors.pass || (apiError && errorType === "auth"))}
           />
+          {fieldErrors.pass && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--color-danger)", fontWeight: 600 }}>
+              <AlertTriangle size={13} /> {fieldErrors.pass}
+            </div>
+          )}
         </div>
 
         <div className="auth-form-row">
@@ -619,7 +637,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <button type="button" onClick={handleLogin} disabled={loading || !cred.trim() || !pass.trim() || !termsAccepted}
+        <button type="button" onClick={handleLogin} disabled={loading}
           className="btn-primary" style={{ width: "100%", padding: '14px', fontSize: '16px' }}>
           {loading
             ? <><span className="animate-spin" style={{

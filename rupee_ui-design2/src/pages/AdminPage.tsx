@@ -5358,23 +5358,32 @@ const QuestionsManagementPanel: React.FC = () => {
             <div style={{ background: "#F8FAFC", border: "1.5px solid #A5F3FC", borderRadius: 16, padding: 24, marginBottom: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A", marginBottom: 16 }}>{editingSkill ? "Edit Skill" : "Create New Skill"}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-                <div><label style={lbl}>Skill Name *</label><input value={skillForm.name} onChange={e => setSkillForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Tax Planning, Investment, Insurance" style={inp} /></div>
+                <div>
+                  <label style={lbl}>Skill Name *</label>
+                  <input value={skillForm.name} onChange={e => setSkillForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Tax Planning, Investment, Insurance" style={{ ...inp, borderColor: !skillForm.name.trim() && skillForm.name !== "" ? "#FCA5A5" : undefined }} />
+                  {!skillForm.name.trim() && skillForm.name !== "" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 5, fontSize: 11, color: "#DC2626", fontWeight: 600 }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                      Skill name is required
+                    </div>
+                  )}
+                </div>
                 <div><label style={lbl}>Description</label><input value={skillForm.description} onChange={e => setSkillForm(f => ({ ...f, description: e.target.value }))} placeholder="Brief description (optional)" style={inp} /></div>
               </div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                 <button onClick={() => setShowSkillForm(false)} style={{ padding: "9px 20px", borderRadius: 9, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
                 <button
                   onClick={handleSaveSkill}
-                  disabled={!canSaveSkillForm}
+                  disabled={savingSkill}
                   style={{
                     padding: "9px 22px",
                     borderRadius: 9,
                     border: "none",
-                    background: canSaveSkillForm ? (savingSkill ? "#99F6E4" : "#0F766E") : "#E2E8F0",
-                    color: canSaveSkillForm ? "#fff" : "#94A3B8",
+                    background: savingSkill ? "#E2E8F0" : "#0F766E",
+                    color: savingSkill ? "#94A3B8" : "#fff",
                     fontSize: 13,
                     fontWeight: 700,
-                    cursor: canSaveSkillForm ? "pointer" : "not-allowed",
+                    cursor: savingSkill ? "not-allowed" : "pointer",
                     fontFamily: "inherit",
                   }}
                 >
@@ -8885,7 +8894,7 @@ function AdminPageInner() {
     <div className="adm-page">
       <ToastContainer />
 
-      {showModal && <AddAdvisor onClose={() => setShowModal(false)} onSave={() => { fetchDashboardData(); setShowModal(false); }} />}
+      {showModal && <AddAdvisor onClose={() => setShowModal(false)} onSave={() => { fetchDashboardData(); setShowModal(false); addNotification({ type: "success", title: "Consultant Created", message: "New consultant profile registered successfully." }); }} />}
       {isMobileMenuOpen && <div className="adm-mobile-overlay" onClick={() => setIsMobileMenuOpen(false)} />}
 
       {/* Sidebar */}
@@ -9507,8 +9516,36 @@ function AdminPageInner() {
                   Add Consultant
                 </button>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 20 }}>
-                {advisors.length > 0 ? advisors.map(a => (
+              {/* Search bar for consultants */}
+              {advisors.length > 0 && (() => {
+                const [advisorSearch, setAdvisorSearch] = React.useState("");
+                const filteredAdvisors = advisorSearch.trim()
+                  ? advisors.filter(a =>
+                      a.name.toLowerCase().includes(advisorSearch.toLowerCase()) ||
+                      a.role?.toLowerCase().includes(advisorSearch.toLowerCase()) ||
+                      a.tags?.some((t: string) => t.toLowerCase().includes(advisorSearch.toLowerCase()))
+                    )
+                  : advisors;
+                return (
+                  <>
+                    <div style={{ position: "relative", marginBottom: 20 }}>
+                      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+                        <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+                      </svg>
+                      <input
+                        value={advisorSearch}
+                        onChange={e => setAdvisorSearch(e.target.value)}
+                        placeholder="Search by name, role or skill..."
+                        style={{ width: "100%", padding: "10px 14px 10px 40px", borderRadius: 10, border: "1.5px solid #E2E8F0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#F8FAFC", fontFamily: "inherit" }}
+                      />
+                    </div>
+                    {filteredAdvisors.length === 0 && (
+                      <div style={{ textAlign: "center", color: "#94A3B8", padding: "40px 20px", background: "#F8FAFC", borderRadius: 16, border: "1px dashed #CBD5E1" }}>
+                        No consultants match "{advisorSearch}".
+                      </div>
+                    )}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 20 }}>
+                      {filteredAdvisors.map(a => (
                   <div key={a.id} style={{ background: "#fff", borderRadius: 20, border: "1.5px solid #E2E8F0", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden", transition: "all 0.2s ease", display: "flex", flexDirection: "column" }}
                     onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 30px rgba(15,118,110,0.12)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#A5F3FC"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 2px 12px rgba(0,0,0,0.06)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#E2E8F0"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}>
@@ -9579,14 +9616,18 @@ function AdminPageInner() {
                       </button>
                     </div>
                   </div>
-                )) : (
-                  <div style={{ gridColumn: "1/-1", textAlign: "center", color: "#94A3B8", padding: "60px 20px", background: "#F8FAFC", borderRadius: 16, border: "1px dashed #CBD5E1" }}>
-                    <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" style={{ marginBottom: 12 }} strokeLinecap="round"><circle cx="9" cy="7" r="4" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" /></svg>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No consultants yet</div>
-                    <p style={{ margin: 0, fontSize: 13 }}>Click "Add Consultant" to register your first consultant.</p>
-                  </div>
-                )}
+                ))}
               </div>
+                  </>
+                );
+              })()}
+              {advisors.length === 0 && (
+                <div style={{ textAlign: "center", color: "#94A3B8", padding: "60px 20px", background: "#F8FAFC", borderRadius: 16, border: "1px dashed #CBD5E1" }}>
+                  <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="#CBD5E1" strokeWidth="1.2" style={{ marginBottom: 12 }} strokeLinecap="round"><circle cx="9" cy="7" r="4" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" /></svg>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "#64748B", marginBottom: 8 }}>No consultants yet</div>
+                  <p style={{ margin: 0, fontSize: 13 }}>Click "Add Consultant" to register your first consultant.</p>
+                </div>
+              )}
             </div>
           )}
 

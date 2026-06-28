@@ -318,13 +318,14 @@ export default function RegisterPage() {
     const cleanedLocation = location.trim().replace(/\s+/g, " ");
     if (!cleanedName) e.name = "Full name is required";
     else if (startsWithNumber(cleanedName)) e.name = "Full name cannot start with a number";
-    else if (cleanedName.length < MIN_TEXT_LENGTH) e.name = "Enter your full name";
+    else if (cleanedName.length < 2) e.name = "Name must be between 2 and 100 characters";
+    else if (cleanedName.length > 100) e.name = "Name cannot exceed 100 characters";
     const cleanMobile = cleanMobileNumber(mobileNumber);
     if (!cleanMobile) e.mobileNumber = "Mobile number is required";
     else if (!MOBILE_REGEX.test(cleanMobile)) e.mobileNumber = "Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9";
     const cleanedEmail = sanitizeEmail(email);
     if (!cleanedEmail) e.email = "Email is required";
-    else if (!EMAIL_REGEX.test(cleanedEmail)) e.email = "Enter a valid email address";
+    else if (!EMAIL_REGEX.test(cleanedEmail)) e.email = "Must be a valid email format";
     if (cleanedLocation && startsWithNumber(cleanedLocation)) e.location = "Location cannot start with a number";
     if (cleanedLocation && cleanedLocation.length < MIN_TEXT_LENGTH) e.location = "Enter a valid location";
     // FIX: emailVerified check removed here - handled separately in handleSubmit to avoid leaking error outside OTP box
@@ -333,13 +334,16 @@ export default function RegisterPage() {
   };
 
   const handleSubmit = async () => {
-    // FIX: Check OTP verification BEFORE validate() and show error inside OTP box only
+    // Always run field validation first so errors show for name/email/mobile/plan
+    const fieldsOk = validate();
+    // Check OTP verification after showing field errors
     if (!emailVerified) {
-      setOtpBoxVisible(true);
-      setInlineOtpError("Please enter the OTP before registering.");
+      if (!otpBoxVisible) setOtpBoxVisible(true);
+      setInlineOtpError("Please verify your email with OTP before registering.");
+      if (!fieldsOk) return;
       return;
     }
-    if (!validate()) return;
+    if (!fieldsOk) return;
     setSubmitting(true); setApiError("");
     try {
       const selected = selectedPlan!;
@@ -428,11 +432,7 @@ export default function RegisterPage() {
   const canRegister =
     !submitting &&
     plans.length > 0 &&
-    !!selectedPlan &&
-    emailVerified &&
-    emailIsValid &&
-    mobileIsValid &&
-    nameIsValid;
+    !!selectedPlan;
 
   const handleInlineResend = async (e: MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -595,7 +595,7 @@ export default function RegisterPage() {
 
               {inlineOtpError && <div className="error-banner"><AlertTriangle size={14} /> {inlineOtpError}</div>}
 
-              <button onClick={handleVerifyInlineOtp} disabled={inlineOtpVerifying || inlineOtp.join("").length < 6} className="btn-primary" style={{ width: '100%', marginBottom: 12 }}>
+              <button onClick={handleVerifyInlineOtp} disabled={inlineOtpVerifying} className="btn-primary" style={{ width: '100%', marginBottom: 12 }}>
                 {inlineOtpVerifying ? "Saving OTP..." : "Use OTP"}
               </button>
 
@@ -739,9 +739,11 @@ export default function RegisterPage() {
           disabled={!canRegister}
           style={{ width: '100%', padding: '18px', fontSize: '17px', borderRadius: 'var(--radius-lg)' }}
         >
-          {submitting ? <><span className="animate-spin" style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block' }} /> Creating Account...</>
-            : !emailVerified ? "Enter OTP to Continue"
-              : selectedPlan && !isFree(selectedPlan) ? `Subscribe & Register (₹${selectedPlan.discountPrice})` : "Create Guest Account"}
+          {submitting
+            ? <><span className="animate-spin" style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block' }} /> Creating Account...</>
+            : selectedPlan && !isFree(selectedPlan)
+              ? `Subscribe & Register (₹${selectedPlan.discountPrice})`
+              : "Create Account"}
         </button>
 
         <p className="auth-footer-text">

@@ -6057,6 +6057,7 @@ export default function UserPage() {
                   setTickets(p => [t, ...p]);
                   setShowCreateTicket(false);
                   setSelectedTicket(t);
+                  showToast(`Ticket #${(t as any).ticketNumber || t.id} created successfully!`);
                   // Fire ticket-created email - non-fatal
                   const userEmailTc = currentUser?.email || '';
                   const ticketNumTc = String((t as any).ticketNumber || t.id);
@@ -6562,11 +6563,12 @@ export default function UserPage() {
                               });
                               setPrivacyPwSuccess("Password updated successfully!");
                               setPrivacyPwForm({ current: "", newPass: "", confirm: "" });
-                              setChangingPassword(false);
                               if (currentUserId) {
                                 localStorage.setItem(`fin_pw_changed_${currentUserId}`, "true");
                                 localStorage.removeItem("fin_requires_pw_change");
                               }
+                              // Delay closing so the success message is visible
+                              setTimeout(() => setChangingPassword(false), 2500);
                             } catch (err: any) {
                               setPrivacyPwError(err?.message || "Failed to update password. Please try again.");
                             } finally { setPrivacyPwSaving(false); }
