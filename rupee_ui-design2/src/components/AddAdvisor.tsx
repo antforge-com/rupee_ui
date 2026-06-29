@@ -75,7 +75,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
   const [isCustomDesignation, setIsCustomDesignation] = useState(false);
 
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [skillSearch, setSkillSearch] = useState("");
   const [availableSkills, setAvailableSkills] = useState<string[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -127,6 +127,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
         ? f.skills.filter(s => s !== skill)
         : [...f.skills, skill],
     }));
+    clearErr("skills");
   };
 
   const filteredSkills = availableSkills.filter(s =>
@@ -138,7 +139,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
     const used = new Set<string>();
 
     Object.entries(SKILL_GROUPS).forEach(([cat, list]) => {
-      const match = filteredSkills.filter(s => 
+      const match = filteredSkills.filter(s =>
         list.some(keyword => s.toLowerCase().includes(keyword.toLowerCase()))
       );
       if (match.length > 0) {
@@ -153,23 +154,28 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
     return groups;
   }, [filteredSkills]);
 
-  const validate = (): string | null => {
-    if (!form.name.trim()) return "Full name is required.";
-    if (!/\S+@\S+\.\S+/.test(form.email.trim())) return "Valid email required.";
-    if (!form.designation) return "Designation is required.";
-    if (!form.charges || isNaN(Number(form.charges)) || Number(form.charges) <= 0)
-      return "Consultation fee must be greater than 0.";
-    if (startHour24 === null || endHour24 === null) return "Please select start and end availability times.";
-    if (!form.experience || isNaN(Number(form.experience)) || Number(form.experience) < 0)
-      return "Years of experience is required.";
-    if (form.skills.length === 0) return "Select at least one skill.";
-    return null;
+  const validate = (): Record<string, string> => {
+    const e: Record<string, string> = {};
+    if (!form.name.trim()) e.name = "Name is required";
+    if (!form.email.trim()) e.email = "Email is required";
+    else if (!/\S+@\S+\.\S+/.test(form.email.trim())) e.email = "Invalid email format";
+    if (!form.designation) e.designation = "Designation is required";
+    if (!form.charges) e.charges = "Consultation fee is required";
+    else if (isNaN(Number(form.charges)) || Number(form.charges) < 0) e.charges = "Charges cannot be negative";
+    else if (Number(form.charges) === 0) e.charges = "Consultation fee must be greater than 0";
+    if (startHour24 === null) e.shiftStart = "Shift start time is required";
+    if (endHour24 === null) e.shiftEnd = "Shift end time is required";
+    if (!form.experience && form.experience !== "0") e.experience = "Years of experience is required";
+    else if (isNaN(Number(form.experience)) || Number(form.experience) < 0) e.experience = "Experience cannot be negative";
+    if (form.skills.length === 0) e.skills = "At least one skill is required";
+    return e;
   };
 
   const handleSave = async () => {
-    const err = validate();
-    if (err) { setError(err); return; }
-    setSaving(true); setError(null);
+    const errs = validate();
+    if (Object.keys(errs).length > 0) { setFieldErrors(errs); return; }
+    setFieldErrors({});
+    setSaving(true);
     try {
       await createAdvisor({
         name: form.name.trim(),
@@ -184,13 +190,13 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
       } as any);
       onSave();
     } catch (e: any) {
-      setError(e?.response?.data?.message || e?.message || "Failed to add consultant.");
+      setFieldErrors({ _submit: e?.response?.data?.message || e?.message || "Failed to add consultant." });
     } finally {
       setSaving(false);
     }
   };
 
-  const canSubmit = !validate() && !saving;
+  const clearErr = (key: string) => setFieldErrors(prev => { const n = { ...prev }; delete n[key]; return n; });
 
   return (
     <>
@@ -229,14 +235,14 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
 
           {/* Body */}
           <div style={{ padding: "32px", overflowY: "auto", flex: 1, scrollbarWidth: "thin", display: "flex", flexDirection: "column", gap: 28 }}>
-            {error && (
+            {fieldErrors._submit && (
               <div style={{
                 background: "#FEF2F2", color: "#991B1B", padding: "14px 18px",
                 borderRadius: 16, fontSize: 14, fontWeight: 600,
                 border: "1px solid #FEE2E2", display: "flex", alignItems: "center", gap: 10,
                 animation: "shake 0.4s ease-in-out",
               }}>
-                <AlertTriangle size={18} /> {error}
+                <AlertTriangle size={18} /> {fieldErrors._submit}
               </div>
             )}
 
@@ -251,24 +257,30 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                     const val = e.target.value;
                     if (val.length === 1 && /[^a-zA-Z]/.test(val)) return;
                     setForm(f => ({ ...f, name: val }));
+                    clearErr("name");
                   }}
+                  onBlur={() => { if (!form.name.trim()) setFieldErrors(p => ({ ...p, name: "Name is required" })); }}
                   placeholder="e.g. Dr. Priya Sharma"
-                  style={inp}
+                  style={{ ...inp, borderColor: fieldErrors.name ? "#FCA5A5" : undefined }}
                   onFocus={e => e.currentTarget.style.borderColor = "#0F766E"}
-                  onBlur={e => e.currentTarget.style.borderColor = "#F1F5F9"}
                 />
+                {fieldErrors.name && <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.name}</div>}
               </div>
               <div>
                 <label style={lbl}>Email Address *</label>
                 <input
                   type="email"
                   value={form.email}
-                  onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                  onChange={e => { setForm(f => ({ ...f, email: e.target.value })); clearErr("email"); }}
+                  onBlur={() => {
+                    if (!form.email.trim()) setFieldErrors(p => ({ ...p, email: "Email is required" }));
+                    else if (!/\S+@\S+\.\S+/.test(form.email.trim())) setFieldErrors(p => ({ ...p, email: "Invalid email format" }));
+                  }}
                   placeholder="advisor@example.com"
-                  style={inp}
+                  style={{ ...inp, borderColor: fieldErrors.email ? "#FCA5A5" : undefined }}
                   onFocus={e => e.currentTarget.style.borderColor = "#0F766E"}
-                  onBlur={e => e.currentTarget.style.borderColor = "#F1F5F9"}
                 />
+                {fieldErrors.email && <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.email}</div>}
               </div>
             </div>
 
@@ -294,10 +306,8 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <select
                     value={form.designation}
-                    onChange={(e) => {
-                      setForm(prev => ({ ...prev, designation: e.target.value }));
-                    }}
-                    style={{ ...inp, color: form.designation ? "#0F172A" : "#94A3B8" }}
+                    onChange={(e) => { setForm(prev => ({ ...prev, designation: e.target.value })); clearErr("designation"); }}
+                    style={{ ...inp, color: form.designation ? "#0F172A" : "#94A3B8", borderColor: fieldErrors.designation ? "#FCA5A5" : undefined }}
                     onFocus={e => e.currentTarget.style.borderColor = "#0F766E"}
                     onBlur={e => e.currentTarget.style.borderColor = "#F1F5F9"}
                   >
@@ -309,6 +319,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                       <option value={form.designation}>{form.designation}</option>
                     )}
                   </select>
+                  {fieldErrors.designation && <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.designation}</div>}
                 </div>
               </div>
               <div>
@@ -319,14 +330,18 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                     name="charges"
                     placeholder="e.g. 1500"
                     value={form.charges}
-                    onChange={e => setForm(f => ({ ...f, charges: e.target.value }))}
-                    style={{ ...inp, paddingLeft: 40 }}
+                    onChange={e => { setForm(f => ({ ...f, charges: e.target.value })); clearErr("charges"); }}
+                    onBlur={() => {
+                      if (!form.charges) setFieldErrors(p => ({ ...p, charges: "Consultation fee is required" }));
+                      else if (Number(form.charges) < 0) setFieldErrors(p => ({ ...p, charges: "Charges cannot be negative" }));
+                    }}
+                    style={{ ...inp, paddingLeft: 40, borderColor: fieldErrors.charges ? "#FCA5A5" : undefined }}
                     onFocus={e => e.currentTarget.style.borderColor = "#0F766E"}
-                    onBlur={e => e.currentTarget.style.borderColor = "#F1F5F9"}
                   />
                   <span style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", fontSize: 16, fontWeight: 700, color: "#64748B" }}>₹</span>
                 </div>
-                {form.charges && Number(form.charges) > 0 && (
+                {fieldErrors.charges && <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.charges}</div>}
+                {!fieldErrors.charges && form.charges && Number(form.charges) > 0 && (
                   <div style={{ marginTop: 6, fontSize: 12, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>
                     ✓ Customer sees: ₹{(Number(form.charges) + 200).toLocaleString("en-IN")}
                   </div>
@@ -341,11 +356,15 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                 min="0"
                 placeholder="e.g. 8"
                 value={form.experience}
-                onChange={e => setForm(f => ({ ...f, experience: e.target.value }))}
-                style={inp}
+                onChange={e => { setForm(f => ({ ...f, experience: e.target.value })); clearErr("experience"); }}
+                onBlur={() => {
+                  if (!form.experience && form.experience !== "0") setFieldErrors(p => ({ ...p, experience: "Years of experience is required" }));
+                  else if (Number(form.experience) < 0) setFieldErrors(p => ({ ...p, experience: "Experience cannot be negative" }));
+                }}
+                style={{ ...inp, borderColor: fieldErrors.experience ? "#FCA5A5" : undefined }}
                 onFocus={e => e.currentTarget.style.borderColor = "#0F766E"}
-                onBlur={e => e.currentTarget.style.borderColor = "#F1F5F9"}
               />
+              {fieldErrors.experience && <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.experience}</div>}
             </div>
 
             {/* Availability Section */}
@@ -432,12 +451,18 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                   <CheckCircle size={16} /> Selected shift: {shiftTimingsLabel}
                 </div>
               )}
+              {(fieldErrors.shiftStart || fieldErrors.shiftEnd) && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 10, fontSize: 12, color: "#DC2626", fontWeight: 600 }}>
+                  <AlertTriangle size={12} />{fieldErrors.shiftStart || fieldErrors.shiftEnd}
+                </div>
+              )}
             </div>
 
             {/* Skills Section */}
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <label style={{ ...lbl, margin: 0 }}>Skills & Expertise ({form.skills.length})</label>
+                {fieldErrors.skills && <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#DC2626", fontWeight: 600 }}><AlertTriangle size={12} />{fieldErrors.skills}</div>}
                 <button
                   type="button"
                   onClick={() => setPopupType("SKILL")}
@@ -462,7 +487,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
                   style={{ ...inp, paddingLeft: 42 }}
                 />
               </div>
-              
+
               {form.skills.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
                   {form.skills.map(s => (
@@ -519,13 +544,13 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
             </button>
             <button
               onClick={handleSave}
-              disabled={!canSubmit}
+              disabled={saving}
               style={{
                 flex: 2, padding: "14px", borderRadius: 16, border: "none",
-                background: canSubmit ? "linear-gradient(135deg, #0F766E 0%, #0D9488 100%)" : "#E2E8F0",
-                color: "#fff", fontSize: 15, fontWeight: 800,
-                cursor: canSubmit ? "pointer" : "not-allowed",
-                boxShadow: canSubmit ? "0 10px 25px rgba(15,118,110,0.25)" : "none",
+                background: saving ? "#E2E8F0" : "linear-gradient(135deg, #0F766E 0%, #0D9488 100%)",
+                color: saving ? "#94A3B8" : "#fff", fontSize: 15, fontWeight: 800,
+                cursor: saving ? "not-allowed" : "pointer",
+                boxShadow: saving ? "none" : "0 10px 25px rgba(15,118,110,0.25)",
                 transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
               }}
             >
@@ -552,7 +577,7 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
       {/* Custom Popup for Designation or Skill */}
       {popupType && (
         <>
-          <div 
+          <div
             style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.4)", zIndex: 1300, backdropFilter: "blur(2px)" }}
             onClick={() => { setPopupType(null); setCustomValue(""); }}
           />
@@ -566,8 +591,8 @@ const AddAdvisor: React.FC<AddAdvisorProps> = ({ onClose, onSave }) => {
               {popupType === "DESIGNATION" ? "Add Designation" : "Add Custom Skill"}
             </h3>
             <p style={{ margin: "0 0 20px", fontSize: 14, color: "#64748B" }}>
-              {popupType === "DESIGNATION" 
-                ? "Manually enter a custom role for this consultant." 
+              {popupType === "DESIGNATION"
+                ? "Manually enter a custom role for this consultant."
                 : "Enter a new skill or area of expertise."}
             </p>
             <input

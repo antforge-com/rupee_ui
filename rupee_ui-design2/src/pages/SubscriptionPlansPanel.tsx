@@ -69,10 +69,6 @@ export const SubscriptionPlansPanel: React.FC = () => {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Delete confirmation state
-  const [deletingPlan, setDeletingPlan] = useState<Plan | null>(null);
-  const [deleteConfirming, setDeleteConfirming] = useState(false);
-
   const normalizePlan = (plan: any): Plan => ({
     id: Number(plan.id),
     name: plan.name || plan.planName || "",
@@ -186,20 +182,6 @@ export const SubscriptionPlansPanel: React.FC = () => {
     }
   };
 
-  const handleDeletePlan = async (plan: Plan) => {
-    setDeleteConfirming(true);
-    try {
-      await apiFetch(`/subscription-plans/${plan.id}`, { method: "DELETE" });
-      setDeletingPlan(null);
-      fetchPlans();
-      showToast(`Plan "${plan.name}" deleted.`);
-    } catch (err: any) {
-      showToast(err?.message || "Failed to delete plan.", false);
-    } finally {
-      setDeleteConfirming(false);
-    }
-  };
-
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBlockEnd: 28 }}>
@@ -300,26 +282,6 @@ export const SubscriptionPlansPanel: React.FC = () => {
                     </svg>
                     Edit
                   </button>
-                  <button
-                    onClick={() => setDeletingPlan(plan)}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      fontSize: 12, fontWeight: 700, color: "#DC2626",
-                      background: "#FEF2F2", border: "1.5px solid #FECACA",
-                      borderRadius: 8, padding: "5px 12px", cursor: "pointer",
-                      transition: "all 0.15s",
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "#FEE2E2")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "#FEF2F2")}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                      <path d="M10 11v6M14 11v6" />
-                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                    </svg>
-                    Delete
-                  </button>
                 </div>
               </div>
 
@@ -357,30 +319,6 @@ export const SubscriptionPlansPanel: React.FC = () => {
               )}
             </div>
           ))}
-        </div>
-      )}
-
-      {/* Delete confirmation modal */}
-      {deletingPlan && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}>
-          <div style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 420, width: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: "#0F172A", marginBottom: 10 }}>Delete Plan?</div>
-            <div style={{ fontSize: 14, color: "#475569", lineHeight: 1.6, marginBottom: 24 }}>
-              Are you sure you want to delete <strong>"{deletingPlan.name}"</strong>? This action cannot be undone. Existing subscribers will keep their plan until expiry.
-            </div>
-            <div style={{ display: "flex", gap: 12 }}>
-              <button onClick={() => setDeletingPlan(null)} disabled={deleteConfirming}
-                style={{ flex: 1, padding: "11px", borderRadius: 10, border: "1.5px solid #E2E8F0", background: "#fff", color: "#64748B", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                Cancel
-              </button>
-              <button onClick={() => handleDeletePlan(deletingPlan)} disabled={deleteConfirming}
-                style={{ flex: 1, padding: "11px", borderRadius: 10, border: "none", background: deleteConfirming ? "#FCA5A5" : "#DC2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: deleteConfirming ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                {deleteConfirming ? (
-                  <><div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> Deleting...</>
-                ) : "Delete Plan"}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

@@ -490,7 +490,14 @@ export default function RegisterPage() {
 
           <div className="auth-input-group">
             <label className="label-base">FULL NAME <span style={{ color: 'var(--color-danger)' }}>*</span></label>
-            <input value={name} onChange={e => { setName(formatNameLikeInput(e.target.value)); setErrors(x => ({ ...x, name: "" })); }}
+            <input value={name}
+              onChange={e => { setName(formatNameLikeInput(e.target.value)); setErrors(x => ({ ...x, name: "" })); }}
+              onBlur={() => {
+                const cleaned = name.trim().replace(/\s+/g, " ");
+                if (!cleaned) setErrors(x => ({ ...x, name: "Full name is required" }));
+                else if (cleaned.length < 2) setErrors(x => ({ ...x, name: "Name must be between 2 and 100 characters" }));
+                else if (cleaned.length > 100) setErrors(x => ({ ...x, name: "Name cannot exceed 100 characters" }));
+              }}
               placeholder="Enter your full name" className={`input-base ${errors.name ? "input-error" : ""}`} />
             {errors.name && <div className="error-banner" style={{ background: 'none', border: 'none', padding: 0, marginTop: 4, height: 'auto' }}><AlertTriangle size={14} /> {errors.name}</div>}
           </div>
@@ -536,12 +543,20 @@ export default function RegisterPage() {
             <div className="email-otp-row" style={{ display: "flex", gap: 10 }}>
               <input
                 value={email}
-                onChange={e => { setEmail(e.target.value); if (emailVerified || otpBoxVisible) resetEmailVerification(); }}
+                onChange={e => { setEmail(e.target.value); if (emailVerified || otpBoxVisible) resetEmailVerification(); setErrors(x => ({ ...x, email: "" })); }}
+                onBlur={() => {
+                  const cleaned = sanitizeEmail(email);
+                  if (!cleaned) {
+                    setErrors(x => ({ ...x, email: "Email is required" }));
+                  } else if (!EMAIL_REGEX.test(cleaned)) {
+                    setErrors(x => ({ ...x, email: "Must be a valid email format" }));
+                  }
+                }}
                 placeholder="you@example.com"
                 type="email"
                 disabled={emailVerified}
                 className={`input-base ${errors.email ? "input-error" : ""}`}
-                  style={{ flex: 1, minWidth: 0, ...(emailVerified ? { borderColor: 'var(--color-primary)', background: 'var(--color-primary-light)' } : {}) }}
+                style={{ flex: 1, minWidth: 0, ...(emailVerified ? { borderColor: 'var(--color-primary)', background: 'var(--color-primary-light)' } : {}) }}
               />
               {emailVerified ? (
                 <div className="badge badge-info" style={{ height: 42, paddingLeft: 16, paddingRight: 16 }}>

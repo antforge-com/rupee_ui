@@ -8226,6 +8226,7 @@ function AdminPageInner() {
   const [activeSection, setActiveSection] = useState<AdminSectionType>("dashboard");
   const [showModal, setShowModal] = useState(false);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
+  const [advisorSearch, setAdvisorSearch] = useState("");
   const [dashBookings, setDashBookings] = useState<any[]>([]);
   const [allBookings, setAllBookings] = useState<any[]>([]);
   const [totalBookingsCount, setTotalBookingsCount] = useState(0);
@@ -8826,13 +8827,13 @@ function AdminPageInner() {
     { id: "bookings", label: "Bookings", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "tickets", label: "Tickets", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "analytics", label: "Analytics", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M3 3v18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M7 16l4-4 4 4 4-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
-    { id: "summary", label: "Reports", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "summary", label: "Ticket Reports & Analytics", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" /><path d="M8 17v-4M12 17V9M16 17v-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "add-member", label: "Add Member", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" /><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="19" y1="8" x2="19" y2="14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="16" y1="11" x2="22" y2="11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "support-config", label: "Support Config", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "time-ranges", label: "Time Ranges", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" /><path d="M12 7v5l3 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "offers", label: "Offers", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><polyline points="20 12 20 22 4 22 4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><rect x="2" y="7" width="20" height="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="12" y1="22" x2="12" y2="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "offer-approval", label: "Offer Approvals", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
-    { id: "questions", label: "Questions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
+    { id: "questions", label: "Skills & Questions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "terms-conditions", label: "Terms & Conditions", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><polyline points="10 9 9 9 8 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg> },
     { id: "privacy-policy", label: "Privacy Policy", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24"><path d="M12 2l7 3v6c0 5-3.5 9.5-7 11-3.5-1.5-7-6-7-11V5l7-3z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M9.5 12.5l2 2 3.5-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg> },
     { id: "commission", label: "Commission", icon: <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="5" x2="5" y2="19" /><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="17.5" r="2.5" /></svg> },
@@ -9517,107 +9518,108 @@ function AdminPageInner() {
                 </button>
               </div>
               {/* Search bar for consultants */}
-              {advisors.length > 0 && (() => {
-                const [advisorSearch, setAdvisorSearch] = React.useState("");
+              {advisors.length > 0 && (
+                <div style={{ position: "relative", marginBottom: 20 }}>
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+                    <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+                  </svg>
+                  <input
+                    value={advisorSearch}
+                    onChange={e => setAdvisorSearch(e.target.value)}
+                    placeholder="Search by name, role or skill..."
+                    style={{ width: "100%", padding: "10px 14px 10px 40px", borderRadius: 10, border: "1.5px solid #E2E8F0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#F8FAFC", fontFamily: "inherit" }}
+                  />
+                </div>
+              )}
+              {(() => {
                 const filteredAdvisors = advisorSearch.trim()
                   ? advisors.filter(a =>
-                      a.name.toLowerCase().includes(advisorSearch.toLowerCase()) ||
-                      a.role?.toLowerCase().includes(advisorSearch.toLowerCase()) ||
-                      a.tags?.some((t: string) => t.toLowerCase().includes(advisorSearch.toLowerCase()))
-                    )
+                    a.name.toLowerCase().includes(advisorSearch.toLowerCase()) ||
+                    a.role?.toLowerCase().includes(advisorSearch.toLowerCase()) ||
+                    a.tags?.some((t: string) => t.toLowerCase().includes(advisorSearch.toLowerCase()))
+                  )
                   : advisors;
                 return (
                   <>
-                    <div style={{ position: "relative", marginBottom: 20 }}>
-                      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
-                        <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
-                      </svg>
-                      <input
-                        value={advisorSearch}
-                        onChange={e => setAdvisorSearch(e.target.value)}
-                        placeholder="Search by name, role or skill..."
-                        style={{ width: "100%", padding: "10px 14px 10px 40px", borderRadius: 10, border: "1.5px solid #E2E8F0", fontSize: 13, outline: "none", boxSizing: "border-box", background: "#F8FAFC", fontFamily: "inherit" }}
-                      />
-                    </div>
-                    {filteredAdvisors.length === 0 && (
-                      <div style={{ textAlign: "center", color: "#94A3B8", padding: "40px 20px", background: "#F8FAFC", borderRadius: 16, border: "1px dashed #CBD5E1" }}>
+                    {advisorSearch.trim() && filteredAdvisors.length === 0 && (
+                      <div style={{ textAlign: "center", color: "#94A3B8", padding: "40px 20px", background: "#F8FAFC", borderRadius: 16, border: "1px dashed #CBD5E1", marginBottom: 20 }}>
                         No consultants match "{advisorSearch}".
                       </div>
                     )}
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 20 }}>
                       {filteredAdvisors.map(a => (
-                  <div key={a.id} style={{ background: "#fff", borderRadius: 20, border: "1.5px solid #E2E8F0", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden", transition: "all 0.2s ease", display: "flex", flexDirection: "column" }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 30px rgba(15,118,110,0.12)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#A5F3FC"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 2px 12px rgba(0,0,0,0.06)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#E2E8F0"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}>
-                    {/* Card Header */}
-                    <div style={{ background: "linear-gradient(135deg, #F8FAFF 0%, #ECFEFF 100%)", padding: "22px 22px 18px", borderBottom: "1px solid #E2E8F0" }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-                        {/* Avatar - photo fills full box, initial letter shown as background fallback */}
-                        <div style={{ width: 68, height: 68, borderRadius: 16, overflow: "hidden", flexShrink: 0, border: "3px solid #fff", boxShadow: "0 4px 12px rgba(15,118,110,0.15)", background: "var(--portal-profile-gradient)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-                          <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{a.name.charAt(0)}</span>
-                          <img src={a.avatar} alt={a.name}
-                            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
-                            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
-                          />
-                        </div>
-                        {/* Info */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
-                          <div style={{ fontSize: 13, color: "#0F766E", fontWeight: 600, marginBottom: 8 }}>{a.role}</div>
-                          {(a.shiftStartTime || a.shiftEndTime) && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#64748B" }}>
-                              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                              Availability: {fmt24to12(a.shiftStartTime)} - {fmt24to12(a.shiftEndTime)}
+                        <div key={a.id} style={{ background: "#fff", borderRadius: 20, border: "1.5px solid #E2E8F0", boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden", transition: "all 0.2s ease", display: "flex", flexDirection: "column" }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 30px rgba(15,118,110,0.12)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#A5F3FC"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-2px)"; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 2px 12px rgba(0,0,0,0.06)"; (e.currentTarget as HTMLDivElement).style.borderColor = "#E2E8F0"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}>
+                          {/* Card Header */}
+                          <div style={{ background: "linear-gradient(135deg, #F8FAFF 0%, #ECFEFF 100%)", padding: "22px 22px 18px", borderBottom: "1px solid #E2E8F0" }}>
+                            <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
+                              {/* Avatar - photo fills full box, initial letter shown as background fallback */}
+                              <div style={{ width: 68, height: 68, borderRadius: 16, overflow: "hidden", flexShrink: 0, border: "3px solid #fff", boxShadow: "0 4px 12px rgba(15,118,110,0.15)", background: "var(--portal-profile-gradient)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                                <span style={{ color: "#fff", fontSize: 22, fontWeight: 800, position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>{a.name.charAt(0)}</span>
+                                <img src={a.avatar} alt={a.name}
+                                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: "center top" }}
+                                  onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                                />
+                              </div>
+                              {/* Info */}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 17, fontWeight: 800, color: "#0F172A", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                                <div style={{ fontSize: 13, color: "#0F766E", fontWeight: 600, marginBottom: 8 }}>{a.role}</div>
+                                {(a.shiftStartTime || a.shiftEndTime) && (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#64748B" }}>
+                                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                                    Availability: {fmt24to12(a.shiftStartTime)} - {fmt24to12(a.shiftEndTime)}
+                                  </div>
+                                )}
+                              </div>
+                              {/* Fee badge */}
+                              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                                <div style={{ fontSize: 18, fontWeight: 900, color: "#0D9488" }}>{formatIndianCurrency(a.fee)}</div>
+                                <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>/session</div>
+                              </div>
                             </div>
-                          )}
-                        </div>
-                        {/* Fee badge */}
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div style={{ fontSize: 18, fontWeight: 900, color: "#0D9488" }}>{formatIndianCurrency(a.fee)}</div>
-                          <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 600 }}>/session</div>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Card Body */}
-                    <div style={{ padding: "16px 22px", flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
-                      {/* Tags */}
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {a.tags.slice(0, 4).map(t => (
-                          <span key={t} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC", fontWeight: 600 }}>{t}</span>
-                        ))}
-                        {a.tags.length > 4 && <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: "#F1F5F9", color: "#64748B", fontWeight: 600 }}>+{a.tags.length - 4} more</span>}
-                      </div>
-                      {/* Stats row */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#475569" }}>
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" strokeWidth="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
-                          <span style={{ fontWeight: 700, color: "#0F172A" }}>{a.rating > 0 ? a.rating.toFixed(1) : "New"}</span>
-                          <span style={{ color: "#94A3B8" }}>({a.reviews} reviews)</span>
-                        </div>
-                        {(a as any).exp > 0 && (
-                          <div style={{ fontSize: 12, color: "#64748B", display: "flex", alignItems: "center", gap: 4 }}>
-                            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /></svg>
-                            {Math.floor((a as any).exp)}+ yrs exp
                           </div>
-                        )}
-                      </div>
+                          {/* Card Body */}
+                          <div style={{ padding: "16px 22px", flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+                            {/* Tags */}
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                              {a.tags.slice(0, 4).map(t => (
+                                <span key={t} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC", fontWeight: 600 }}>{t}</span>
+                              ))}
+                              {a.tags.length > 4 && <span style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, background: "#F1F5F9", color: "#64748B", fontWeight: 600 }}>+{a.tags.length - 4} more</span>}
+                            </div>
+                            {/* Stats row */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, color: "#475569" }}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" strokeWidth="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+                                <span style={{ fontWeight: 700, color: "#0F172A" }}>{a.rating > 0 ? a.rating.toFixed(1) : "New"}</span>
+                                <span style={{ color: "#94A3B8" }}>({a.reviews} reviews)</span>
+                              </div>
+                              {(a as any).exp > 0 && (
+                                <div style={{ fontSize: 12, color: "#64748B", display: "flex", alignItems: "center", gap: 4 }}>
+                                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /></svg>
+                                  {Math.floor((a as any).exp)}+ yrs exp
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {/* Delete */}
+                          <div style={{ padding: "12px 22px", borderTop: "1px solid #F1F5F9" }}>
+                            <button onClick={() => handleDeleteAdvisor(a)} disabled={deletingId === a.id}
+                              style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1.5px solid #FECACA", background: deletingId === a.id ? "#FEF2F2" : "#fff", color: "#EF4444", fontWeight: 700, fontSize: 13, cursor: deletingId === a.id ? "default" : "pointer", fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                              onMouseEnter={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#FEF2F2"; }}
+                              onMouseLeave={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#fff"; }}>
+                              {deletingId === a.id ? (
+                                <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#EF4444", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting...</>
+                              ) : (
+                                <><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Delete Consultant</>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {/* Delete */}
-                    <div style={{ padding: "12px 22px", borderTop: "1px solid #F1F5F9" }}>
-                      <button onClick={() => handleDeleteAdvisor(a)} disabled={deletingId === a.id}
-                        style={{ width: "100%", padding: "10px", borderRadius: 10, border: "1.5px solid #FECACA", background: deletingId === a.id ? "#FEF2F2" : "#fff", color: "#EF4444", fontWeight: 700, fontSize: 13, cursor: deletingId === a.id ? "default" : "pointer", fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-                        onMouseEnter={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#FEF2F2"; }}
-                        onMouseLeave={e => { if (deletingId !== a.id) (e.currentTarget as HTMLButtonElement).style.background = "#fff"; }}>
-                        {deletingId === a.id ? (
-                          <><div style={{ width: 14, height: 14, border: "2px solid #FECACA", borderTopColor: "#EF4444", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> Deleting...</>
-                        ) : (
-                          <><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg> Delete Consultant</>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
                   </>
                 );
               })()}
